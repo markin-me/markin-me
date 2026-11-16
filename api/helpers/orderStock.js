@@ -69,8 +69,30 @@ async function loadVariantGroupUnits(db, tenantId, groupIds) {
   return new Map(rows.map((row) => [Number(row.id), Number(row.unit_id || 0)]));
 }
 
-async function loadIngredientUnits(db, tenantId, parentProductIds, ingredientIds) {
+async function loadIngredientUnits(db, tenantId, parentProductIds, ingredientIds, context = null) {
   if (!parentProductIds.length || !ingredientIds.length) return new Map();
+  if (context) {
+    const byParent = await context.load('ingredientUnits', parentProductIds, async (ids) => {
+      const [rows] = await db.query(
+        `SELECT product_id, ingredient_id, unit_id FROM prod_product_ingredients
+         WHERE tenant_id=? AND product_id IN (${ids.map(() => '?').join(',')})`,
+        [tenantId, ...ids]
+      );
+      const grouped = new Map();
+      rows.forEach(row => {
+        const id = Number(row.product_id);
+        if (!grouped.has(id)) grouped.set(id, []);
+        grouped.get(id).push(row);
+      });
+      return grouped;
+    });
+    const wanted = new Set(ingredientIds.map(Number));
+    const units = new Map();
+    byParent.forEach(rows => rows.forEach(row => {
+      if (wanted.has(Number(row.ingredient_id))) units.set(`${Number(row.product_id)}_${Number(row.ingredient_id)}`, Number(row.unit_id || 0));
+    }));
+    return units;
+  }
   const parentPlaceholders = parentProductIds.map(() => '?').join(',');
   const ingredientPlaceholders = ingredientIds.map(() => '?').join(',');
   const [rows] = await db.query(
@@ -220,7 +242,28 @@ function createUnitFactorResolver(db, tenantId) {
   };
 }
 
-async function buildDeductions({ db, tenantId, items }) {
+// A preview may try many configurations. Reuse reads only within that preview;
+// final order writes deliberately do not supply this context.
+function createStockAvailabilityContext({ db, tenantId, storeId }) {
+  const records = new Map();
+  return {
+    db, tenantId: Number(tenantId), storeId: Number(storeId),
+    resolveUnitFactor: createUnitFactorResolver(db, tenantId),
+    async load(name, ids, loader) {
+      if (!records.has(name)) records.set(name, new Map());
+      const cache = records.get(name);
+      const requested = [...new Set(ids.map(Number))];
+      const missing = requested.filter(id => !cache.has(id));
+      if (missing.length) {
+        const loaded = await loader(missing);
+        missing.forEach(id => cache.set(id, loaded.has(id) ? loaded.get(id) : null));
+      }
+      return new Map(requested.filter(id => cache.get(id) != null).map(id => [id, cache.get(id)]));
+    },
+  };
+}
+
+async function buildDeductions({ db, tenantId, items, context = null }) {
   const productIdsSet = new Set();
   const variantGroupIdsSet = new Set();
   const parentProductIdsForIngredientSet = new Set();
@@ -321,7 +364,7 @@ async function buildDeductions({ db, tenantId, items }) {
   }
 
   const optionItemIds = [...optionItemIdsSet];
-  const optionTargetProductsByItemId = await loadOptionTargetProducts(db, tenantId, optionItemIds);
+  const optionTargetProductsByItemId = await (context ? context.load('options', optionItemIds, ids => loadOptionTargetProducts(db, tenantId, ids)) : loadOptionTargetProducts(db, tenantId, optionItemIds));
   for (const targetProductId of optionTargetProductsByItemId.values()) {
     if (targetProductId > 0) productIdsSet.add(Number(targetProductId));
   }
@@ -333,7 +376,7 @@ async function buildDeductions({ db, tenantId, items }) {
   while (true) {
     const productIdsToLoad = [...productIdsSet].filter((id) => !productsById.has(Number(id)));
     if (productIdsToLoad.length) {
-      const loadedProducts = await loadProductData(db, tenantId, productIdsToLoad);
+      const loadedProducts = await (context ? context.load('products', productIdsToLoad, ids => loadProductData(db, tenantId, ids)) : loadProductData(db, tenantId, productIdsToLoad));
       loadedProducts.forEach((row, id) => productsById.set(Number(id), row));
     }
 
@@ -349,7 +392,7 @@ async function buildDeductions({ db, tenantId, items }) {
     if (!parentIdsToLoad.length) break;
     parentIdsToLoad.forEach((id) => loadedDefaultIngredientsForParentIds.add(Number(id)));
 
-    const loadedIngredients = await loadDefaultIngredientsByParentProducts(db, tenantId, parentIdsToLoad);
+    const loadedIngredients = await (context ? context.load('ingredients', parentIdsToLoad, ids => loadDefaultIngredientsByParentProducts(db, tenantId, ids)) : loadDefaultIngredientsByParentProducts(db, tenantId, parentIdsToLoad));
     loadedIngredients.forEach((ingredientsList, parentProductId) => {
       const pid = Number(parentProductId || 0);
       if (pid <= 0) return;
@@ -370,11 +413,11 @@ async function buildDeductions({ db, tenantId, items }) {
   const ingredientIds = [...ingredientIdsSet];
 
   const [variantGroupUnits, ingredientUnits] = await Promise.all([
-    loadVariantGroupUnits(db, tenantId, variantGroupIds),
-    loadIngredientUnits(db, tenantId, parentProductIdsForIngredient, ingredientIds),
+    context ? context.load('variants', variantGroupIds, ids => loadVariantGroupUnits(db, tenantId, ids)) : loadVariantGroupUnits(db, tenantId, variantGroupIds),
+    loadIngredientUnits(db, tenantId, parentProductIdsForIngredient, ingredientIds, context),
   ]);
 
-  const resolveUnitFactor = createUnitFactorResolver(db, tenantId);
+  const resolveUnitFactor = context?.resolveUnitFactor || createUnitFactorResolver(db, tenantId);
   const deductions = new Map();
 
   function addDeduction(productId, qty) {
@@ -617,11 +660,16 @@ async function checkStockAvailabilityForOrderItems({
   tenantId,
   storeId,
   items,
+  context = null,
 }) {
+  if (context && (context.db !== db || context.tenantId !== Number(tenantId) || context.storeId !== Number(storeId))) {
+    throw new Error('STOCK_CONTEXT_SCOPE_MISMATCH');
+  }
   const { normalizedDeductions, productsById } = await buildDeductions({
     db,
     tenantId,
     items,
+    context,
   });
 
   if (!normalizedDeductions.length) {
@@ -635,14 +683,17 @@ async function checkStockAvailabilityForOrderItems({
   }
 
   const productIds = normalizedDeductions.map((item) => Number(item.productId)).filter((id) => id > 0);
-  const placeholders = productIds.map(() => '?').join(',');
-  const [rows] = await db.query(
-    `SELECT product_id, qty
-     FROM prod_product_stocks
-     WHERE tenant_id=? AND store_id=? AND product_id IN (${placeholders})`,
-    [tenantId, storeId, ...productIds]
-  );
-  const stockByProductId = new Map(rows.map((row) => [Number(row.product_id), row]));
+  const loadStocks = async (ids) => {
+    const [rows] = await db.query(
+      `SELECT product_id, qty FROM prod_product_stocks
+       WHERE tenant_id=? AND store_id=? AND product_id IN (${ids.map(() => '?').join(',')})`,
+      [tenantId, storeId, ...ids]
+    );
+    return new Map(rows.map(row => [Number(row.product_id), row]));
+  };
+  const stockByProductId = context
+    ? await context.load('stocks', productIds, loadStocks)
+    : await loadStocks(productIds);
 
   const stockLevels = normalizedDeductions.map((deduction) => {
     const productId = Number(deduction.productId);
@@ -927,6 +978,7 @@ async function applyStockDeductionForOrderItems({
 }
 
 module.exports = {
+  createStockAvailabilityContext,
   applyStockDeductionForOrderItems,
   buildStockAvailabilityForOrderItems,
   checkStockAvailabilityForOrderItems,

@@ -20660,6 +20660,7 @@
 
 
     function setActiveRightTab(tabId) {
+      window.__adminMobilePages?.rememberRightView('settings:' + tabId, () => setActiveRightTab(tabId));
       const paymentPanel = document.getElementById("settingsPaymentPanel");
       if (paymentPanel) paymentPanel.classList.toggle("hidden", !paymentSettings.drafts.has(tabId));
       if (paymentSettings.drafts.has(tabId)) renderPaymentDraft(tabId);
@@ -56014,6 +56015,7 @@
 
 
     function setActiveDeliveryTab(key) {
+      window.__adminMobilePages?.rememberRightView('delivery:' + key, () => setActiveDeliveryTab(key));
 
 
 

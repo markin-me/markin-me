@@ -40,18 +40,6 @@
       </div>
     `;
     document.body.appendChild(wrap);
-    let swipeStart = null;
-    wrap.addEventListener("touchstart", (event) => {
-      const touch = event.touches.length === 1 ? event.touches[0] : null;
-      swipeStart = touch && touch.clientX <= 28 ? { x: touch.clientX, y: touch.clientY } : null;
-    }, { passive: true });
-    wrap.addEventListener("touchcancel", () => { swipeStart = null; }, { passive: true });
-    wrap.addEventListener("touchend", (event) => {
-      const touch = event.changedTouches[0];
-      if (swipeStart && touch && touch.clientX - swipeStart.x > 80 && Math.abs(touch.clientY - swipeStart.y) < 60 && wrap.dataset.mobilePage === "1") window.__adminMobilePages?.back();
-      swipeStart = null;
-    }, { passive: true });
-
     wrap.addEventListener("click", (event) => {
       if (event.target !== wrap) return;
       if (typeof state.handlers.onClose === "function") {
@@ -137,6 +125,8 @@
     if (config.clearBody !== false) body.innerHTML = "";
     if (document.body.matches('.page-new-order, .new-order-editor-active') && window.matchMedia("(max-width: 768px)").matches) {
       const opened = window.__adminMobilePages?.openSubview(title.textContent, () => state.handlers.onClose?.(), {
+        key: 'benefits',
+        element: backdrop,
         beforeBack: () => {
           if (config.showBack !== true || !state.handlers.onBack) return true;
           state.handlers.onBack();
@@ -154,8 +144,8 @@
     const { backdrop, body } = getElements();
     if (backdrop?.dataset.mobilePage === "1") {
       delete backdrop.dataset.mobilePage;
-      document.body.classList.remove("new-order-mobile-subpage");
       window.__adminMobilePages?.closeSubview();
+      if (!document.querySelector('[data-mobile-page="1"]')) document.body.classList.remove("new-order-mobile-subpage");
     }
     if (backdrop) backdrop.classList.add("hidden");
     if (body && options.clearBody !== false) body.innerHTML = "";

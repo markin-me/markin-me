@@ -35,6 +35,8 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
 
   container.innerHTML = "";
 
+  if (!['order', 'preorder'].includes(product.sale_mode)) product = await runtime.ensureProduct(product.id);
+  if (!product || !['order', 'preorder'].includes(product.sale_mode)) throw new Error('PREORDER_SETTINGS_INVALID');
   const productDetailsConfig = await runtime.resolveProductDetailsConfig(product.id);
   if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
   let optionGroups = runtime.normalizeProductOptionGroups(productDetailsConfig?.optionGroups);
@@ -46,14 +48,31 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   const optionTargetProductIds = optionGroups
     .flatMap((group) => Array.isArray(group?.items) ? group.items : [])
     .map((item) => Number(item?.target_product_id || item?.product_id || 0))
-    .filter((id) => id > 0 && !runtime.state.productCache.has(id));
+    .filter((id) => id > 0 && !['order', 'preorder'].includes(runtime.state.productCache.get(id)?.sale_mode));
   if (ingredientProductIds.length > 0) {
     await Promise.all(ingredientProductIds.map((ingredientPid) => runtime.ensureProduct(ingredientPid).catch(() => null)));
   }
   if (optionTargetProductIds.length > 0) {
-    await Promise.all(optionTargetProductIds.map((optionPid) => runtime.ensureProduct(optionPid).catch(() => null)));
+    await Promise.all(optionTargetProductIds.map((optionPid) => runtime.ensureProduct(optionPid)));
     optionGroups = runtime.normalizeProductOptionGroups(optionGroups);
   }
+  if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
+  optionGroups = optionGroups.map(group => ({
+    ...group,
+    items: group.items.filter(item => {
+      const mode = item.product_sale_mode ?? runtime.state.productCache.get(Number(item.target_product_id || item.product_id))?.sale_mode;
+      if (!['order', 'preorder'].includes(mode)) throw new Error('PREORDER_SETTINGS_INVALID');
+      return product.sale_mode === 'preorder' || mode === 'order';
+    }),
+  }));
+  const unavailableRequiredOption = optionGroups.some(group => {
+    if (!group.is_required && !(Number(group.min_select) > 0)) return false;
+    const capacity = runtime.getOptionGroupUiType(group) === 'multiple_item'
+      ? group.items.reduce((sum, item) => sum + Number(item.qty_max ?? 1), 0)
+      : group.items.length;
+    return capacity < Math.max(1, Number(group.min_select) || 1);
+  });
+  optionGroups = optionGroups.filter(group => group.items.length || group.is_required || Number(group.min_select) > 0);
   const selectionState = new Map();
   const ingredientState = new Map();
   const variantState = {
@@ -113,6 +132,18 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
       : (prefillItem && typeof prefillItem === "object"
         ? prefillItem
         : (effectiveDefaultConfig && typeof effectiveDefaultConfig === "object" ? effectiveDefaultConfig : null));
+  if (!isReadOnlyView && (editingItem || prefillItem)) {
+    const availableOptionIds = new Set(optionGroups.flatMap(group => group.items.map(item => Number(item.id))));
+    const selectedOptionIds = new Set([
+      ...(seedItem?.option_item_ids || []).map(Number),
+      ...(seedItem?.option_items || seedItem?.options || []).filter(item => Number(item.qty ?? item.quantity ?? 1) > 0).map(item => Number(item.id)),
+    ]);
+    if ([...selectedOptionIds].some(id => id > 0 && !availableOptionIds.has(id))) {
+      runtime.showToast('\u0421\u043e\u0441\u0442\u0430\u0432 \u043e\u043f\u0446\u0438\u0439 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f. \u0423\u0434\u0430\u043b\u0438\u0442\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u044e \u0438 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043e\u043f\u0446\u0438\u0438 \u0437\u0430\u043d\u043e\u0432\u043e.');
+      onBack?.();
+      return;
+    }
+  }
   const editMode = !isReadOnlyView && (!!editingItem || (isAdminOrderMode && !!prefillItem));
   const stockAvailable = runtime.isProductAvailable(product);
   const remainingStockForProduct =
@@ -132,7 +163,8 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     typeof runtime.isProductBlockedByIngredientRequirements === "function"
       ? runtime.isProductBlockedByIngredientRequirements(productId)
       : false;
-  const available = stockAvailable && !blockedByProductStockLimit && !blockedByIngredientRequirements;
+  const available = stockAvailable && !unavailableRequiredOption && !blockedByProductStockLimit && !blockedByIngredientRequirements
+    && runtime.getProductPreorderInfo(product)?.isOpen !== false;
 
   const editVariantGroupIdRaw = seedItem?.variant_group_id ?? seedItem?.variant?.variant_group_id;
   const editVariantValueIndexRaw = seedItem?.variant_value_index ?? seedItem?.variant?.variant_value_index;

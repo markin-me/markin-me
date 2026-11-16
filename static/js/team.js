@@ -820,6 +820,18 @@
 
   function renderEditor(options = {}) {
     const tab = activeTab();
+    if (tab && !options.documentsOnly) {
+      const key = tab.key;
+      window.__adminMobilePages?.rememberRightView('team:' + key, () => {
+        readActiveDraft();
+        readDocumentDraft();
+        if (!state.tabs.some((item) => item.key === key)) return;
+        if (state.permissionMode.active && state.permissionMode.roleKey !== key) exitPermissionMode({ render: false });
+        state.activeKey = key;
+        renderTabs();
+        renderEditor();
+      });
+    }
     if (!tab) {
       dom.editor.innerHTML = '<div class="info-card team-empty-state"><div class="info-title">Выберите сотрудника или роль</div><div class="info-text">Открытые карточки появятся здесь отдельными рабочими вкладками.</div></div>';
       return;
@@ -1524,6 +1536,7 @@
     const wasActive = state.activeKey === key;
     clearEmployeePhoto(state.tabs[index]);
     const closedUserId = state.tabs[index].type === 'user' ? state.tabs[index].id : null;
+    window.__adminMobilePages?.forgetRightView('team:' + key);
     state.tabs.splice(index, 1);
     if (closedUserId) syncUserListPhoto(closedUserId);
     if (wasActive) {

@@ -421,6 +421,7 @@
       :code==='on_date'?(date?'На '+date[3]+'.'+date[2]+(time?' к '+time[1]:''):'На дату')
       :code==='asap' || code==='urgent'?'Быстрее':String(order.time_option_title || 'Быстрее');
     var timingIcon=code==='on_date'?'fa-calendar-day':code==='at_time'?'fa-clock':'fa-bolt';
+    if (order.sale_mode === 'preorder') timing = 'Предзаказ · ' + timing;
     var methods={delivery:['fa-truck','Доставка'],pickup:['fa-store','Самовывоз'],takeaway:['fa-bag-shopping','С собой'],dine_in:['fa-utensils','В зале']};
     var method=methods[order.method_code] || ['fa-location-dot',String(order.method_title || 'Не указан')];
     function line(icon,text) {
@@ -1271,6 +1272,7 @@
       setHiddenAll(infoEls.deliveryZoneRow, !zoneVisible);
 
       var intervalText = formatScheduleText(order, { includeTitle: false }) || String(order.time_option_title || "").trim();
+      if (order.sale_mode === 'preorder') intervalText = 'Предзаказ · ' + intervalText;
       setTextAll(infoEls.deliveryInterval, intervalText || "—");
       setHiddenAll(infoEls.deliveryIntervalRow, !intervalText);
 

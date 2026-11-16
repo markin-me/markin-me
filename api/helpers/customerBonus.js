@@ -8,14 +8,15 @@ async function defaultLevel(db,tenantId){
   return Number(level?.id)||null;
 }
 async function phoneContext(db,tenantId,phone){
-  const [rows]=await db.query(`SELECT c.id customer_id,c.is_active,a.id account_id,a.level_id,a.balance,a.status
+  const [rows]=await db.query(`SELECT c.id customer_id,c.is_active,a.id account_id,a.level_id,a.balance,a.status,a.joined_at
     FROM cust_customers c LEFT JOIN mkt_customer_bonus_accounts a ON a.tenant_id=c.tenant_id AND a.customer_id=c.id
     WHERE c.tenant_id=? AND c.phone=? LIMIT 2`,[tenantId,phone]);
   if(rows.length>1)throw new MessengerAuthError('CUSTOMER_PHONE_CONFLICT',409);
   const row=rows[0];
   if(row&&Number(row.is_active)!==1)throw new MessengerAuthError('ACCOUNT_NOT_AVAILABLE',403);
   return {customerId:Number(row?.customer_id)||null,accountId:Number(row?.account_id)||null,
-    levelId:Number(row?.level_id)||await defaultLevel(db,tenantId),balance:Number(row?.balance)||0,status:row?.status||'active'};
+    levelId:Number(row?.level_id)||await defaultLevel(db,tenantId),balance:Number(row?.balance)||0,status:row?.status||'active',
+    joined:Boolean(row?.account_id && row?.joined_at)};
 }
 // Called only in the transaction creating an order. This does not grant order ownership.
 async function ensureRecipient(conn,tenantId,storeId,phone){

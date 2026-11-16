@@ -617,7 +617,14 @@ body.page-kso .app-modal .textarea{
 @media (min-width: 769px){
   .sp-card{
     aspect-ratio: 2 / 3;
-  }}
+  }
+  body.page-shop .sp-card{
+    min-height:min-content;
+  }
+  body.page-shop .sp-media{
+    flex-shrink:0;
+  }
+}
 
 .sp-card:hover{
   transform: translateY(-1px);
@@ -769,6 +776,23 @@ body.page-kso .sp-card:hover{
   white-space: nowrap;
   box-shadow: 0 8px 18px rgba(20, 29, 48, 0.14);
   pointer-events: none;
+}
+
+.sp-media-pill.is-preorder{
+  background:linear-gradient(135deg,var(--shop-buy),#ffb15a);
+  color:var(--shop-buy-text);
+}
+
+.sp-media-pill.has-preorder-weekdays{
+  font-weight:400;
+  box-sizing:border-box;
+  white-space:normal;
+  text-align:center;
+  overflow-wrap:anywhere;
+}
+
+.sp-media-pill.has-preorder-weekdays strong{
+  font-weight:800;
 }
 
 .sp-media-pill__chevron{
@@ -1849,6 +1873,19 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
   font-size: 12px;
   line-height: 1.25;
   color: var(--color-text-muted);
+}
+
+.shop-pd-preorder{
+  display:grid;
+  gap:4px;
+  margin-top:10px;
+  padding:10px 12px;
+  border:1px solid var(--color-border);
+  border-radius:14px;
+  font-size:13px;
+  line-height:1.4;
+  color:var(--color-text);
+  overflow-wrap:anywhere;
 }
 
 .shop-pd-nutrition-card,

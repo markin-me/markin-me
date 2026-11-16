@@ -44,6 +44,7 @@ const {
   applyStockDeductionForOrderItems,
   buildStockAvailabilityForOrderItems,
   checkStockAvailabilityForOrderItems,
+  createStockAvailabilityContext,
 } = require('../helpers/orderStock');
 const {
   registerCheckoutBenefitsPreviewProvider,
@@ -510,6 +511,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const key=String(req.headers['idempotency-key'] || '');
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key)) throw paymentError('PAYMENT_INPUT_INVALID',400);
       let order=await authorizeOnlineOrder(req);
+      const availability=await onlineAvailability(order.tenant_id,order.store_id);
+      if(!availability.available)throw paymentError(availability.code || 'ONLINE_PAYMENT_NOT_AVAILABLE',409);
       if(!Number(order.online_payment_required) || order.payment_code!=='online') {
         const conn=await db.getConnection();
         try {
@@ -3884,7 +3887,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if(guest){
         // Expose only the balance and public card level, never the customer's identity or ledger.
         const context=await customerBonus.phoneContext(db,tenantId,guest.phone);
-        account={balance:context.balance,level_id:context.levelId,is_guest:true,can_redeem:false,
+        account={balance:context.balance,level_id:context.levelId,is_guest:true,is_joined:context.joined,can_redeem:false,
           notice:'Только начисление'};
       }
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows, promotedAccount);
@@ -4281,6 +4284,15 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }
   });
 
+  function publishCustomerBenefitsAfterResponse(res, tenantId, customerId) {
+    if (!(Number(customerId) > 0)) return;
+    res.once('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        ordersEvents?.publish(tenantId, 0, 'reference.changed', { names: ['client-benefits'], customer_id: Number(customerId) });
+      }
+    });
+  }
+
   router.post('/bonus/join', async (req, res) => {
     let conn = null;
     try {
@@ -4289,6 +4301,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const customerId = Number(customer.id || 0);
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const incomingReferralCode = getIncomingReferralCode(req);
       if (incomingReferralCode) {
@@ -4550,6 +4563,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0);
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       if (!(customerId > 0)) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const levelId = Number(req.body?.level_id || req.body?.levelId || 0);
       if (!(levelId > 0)) return res.status(400).json({ ok: false, error: 'INVALID_LEVEL' });
@@ -4755,6 +4769,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
             WHERE oi.tenant_id=oa.tenant_id AND oi.group_id=oa.group_id
               AND oi.target_type='product'
               AND oi.is_active=1
+              AND (${productAlias}.sale_mode='preorder' OR op.sale_mode='order')
               AND op.is_active=1
               AND op.site_visibility=1
               AND (ops.qty IS NULL OR ops.qty > 0)
@@ -4812,7 +4827,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (idsToLoad.length) {
         const ph = idsToLoad.map(() => '?').join(',');
         const [productRows] = await db.query(
-          `SELECT p.id, p.fulfillment_mode, p.is_active, s.qty AS stock_qty
+          `SELECT p.id, p.fulfillment_mode, p.sale_mode, p.is_active, s.qty AS stock_qty
            FROM prod_products p
            LEFT JOIN prod_product_stocks s
              ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
@@ -4906,7 +4921,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         const groups = optionGroupsByProductId.get(id);
         if (groups && groups.size) {
           for (const targetIds of groups.values()) {
-            if (!targetIds.some((targetId) => isAvailable(targetId, stack))) {
+            if (!targetIds.some((targetId) => (product.sale_mode === 'preorder' || productsById.get(targetId)?.sale_mode !== 'preorder') && isAvailable(targetId, stack))) {
               available = false;
               break;
             }
@@ -5329,6 +5344,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
            p.base_qty AS product_base_qty,
            p.unit_id AS product_unit_id,
            p.name AS product_name,
+           p.sale_mode AS product_sale_mode,
+           p.preorder_settings_json AS product_preorder_settings_json,
            pu.short_title AS product_unit_short_title,
            i.qty_min
          FROM prod_option_items i
@@ -5421,6 +5438,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         optionItemsByGroupId.get(gid).push({
           id: Number(optionItemRow.id),
           target_product_id: targetProductId,
+          product_sale_mode: optionItemRow.product_sale_mode,
+          product_preorder_settings_json: optionItemRow.product_preorder_settings_json,
           title: str(optionItemRow.product_name || ''),
           name: str(optionItemRow.product_name || ''),
           price: String(optionItemRow.price_mode || '').trim() === 'fixed'
@@ -5503,7 +5522,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         const groupMeta = details.group || {};
         const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, pid, groupId);
         const items = (Array.isArray(details.items) ? details.items : [])
-          .filter((item) => !excludedItemIds.has(Number(item?.id || 0)))
+          .filter((item) => !excludedItemIds.has(Number(item?.id || 0))
+            && (row.sale_mode === 'preorder' || item.product_sale_mode === 'order'))
           .map((item) => {
             const setting = optionItemSettingsByScope.get(`${pid}:${groupId}:${item.id}`);
             return {
@@ -6066,7 +6086,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         o.discount_amount,
         o.discounts_json,
         ${hasBenefitsMetaColumn ? 'o.benefits_meta_json' : 'NULL AS benefits_meta_json'},
-        o.items,
+        o.items, o.sale_mode,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
         o.payment_id,
@@ -6145,6 +6165,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     const customerProgress = await getCustomerOrderProgress(tenantId, storeId, r.status_id);
     const snapshot = {
       id: r.id,
+      sale_mode: r.sale_mode,
       public_id: r.public_id || null,
       created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
       customer_id: r.customer_id,
@@ -13874,7 +13895,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         PUBLIC_CACHE_TTL_MS.comboById,
         async () => {
           const [[combo]] = await db.query(
-            `SELECT id, title, description, discount_percent, image_url
+            `SELECT id, title, description, discount_percent, image_url, sale_mode, preorder_settings_json
              FROM prod_combos WHERE tenant_id=? AND id=? AND is_active=1 LIMIT 1`,
             [tenantId, id]
           );
@@ -13896,7 +13917,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           for (const sb of setBlocks) {
             const [productsRaw] = await db.query(
               `SELECT bp.product_id, bp.sort_order, bp.is_default, p.name AS product_name, p.description_short AS product_description_short,
-                      p.price, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json AS product_photos_json
+                      p.price, p.base_qty, p.base_unit_id, p.unit_id, p.sale_mode, p.preorder_settings_json, p.photos_json AS product_photos_json
                FROM prod_combo_block_products bp
                JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
                LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
@@ -13905,7 +13926,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               [storeId, tenantId, sb.block_id]
             );
             await applyPublicProductAvailability(productsRaw, tenantId, storeId);
-            const availableProductsRaw = productsRaw.filter((r) => r.is_available === true);
+            const availableProductsRaw = productsRaw.filter((r) => r.is_available === true && (combo.sale_mode === 'preorder' || r.sale_mode !== 'preorder'));
             const minSelect = Math.max(1, Number(sb.min_select) || 1);
             if (availableProductsRaw.length < minSelect) {
               const err = new Error('OUT_OF_STOCK');
@@ -13917,6 +13938,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               return {
                 product_id: r.product_id,
                 product_name: r.product_name,
+                sale_mode: r.sale_mode,
+                preorder_settings_json: r.preorder_settings_json,
                 product_description_short: r.product_description_short || null,
                 price: Number(r.price) || 0,
                 base_qty: Number(r.base_qty || 1) || 1,
@@ -14191,6 +14214,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             data: {
               id: combo.id,
               title: combo.title || '',
+        sale_mode: combo.sale_mode,
+        preorder_settings_json: combo.preorder_settings_json,
               description: combo.description || '',
               discount_percent: Number(combo.discount_percent) || 0,
               image_url: combo.image_url || null,
@@ -14250,7 +14275,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     if (categoryCode === 'all') return [];
 
     const [combos] = await db.query(
-      `SELECT id, title, description, discount_percent, image_url, sort_order
+      `SELECT id, title, description, discount_percent, image_url, sale_mode, preorder_settings_json, sort_order
        FROM prod_combos
        WHERE tenant_id=? AND is_active=1 AND (category_code = ? OR (category_code IS NULL AND ? = ''))
        ORDER BY sort_order ASC, id ASC`,
@@ -14283,7 +14308,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!blockIds.length) continue;
 
       const [allBlockProductsRaw] = await db.query(
-        `SELECT bp.block_id, p.id, p.price, p.photos_json, p.base_unit_id, p.base_qty, p.unit_id,
+        `SELECT bp.block_id, p.id, p.price, p.photos_json, p.base_unit_id, p.base_qty, p.unit_id, p.sale_mode,
                 CASE WHEN ${productIsAvailableSql} THEN 1 ELSE 0 END AS is_available
          FROM prod_combo_block_products bp
          JOIN prod_products p ON p.id = bp.product_id AND p.tenant_id = bp.tenant_id
@@ -14297,6 +14322,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const blockProductsById = new Map();
       for (const row of allBlockProductsRaw) {
+        if (combo.sale_mode !== 'preorder' && row.sale_mode === 'preorder') continue;
         const bid = Number(row.block_id);
         if (!blockProductsById.has(bid)) blockProductsById.set(bid, []);
         blockProductsById.get(bid).push(row);
@@ -14412,6 +14438,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         id: combo.id,
         category_id: Number(categoryId || 0) || null,
         title: combo.title || '',
+        sale_mode: combo.sale_mode,
+        preorder_settings_json: combo.preorder_settings_json,
         description: combo.description || '',
         discount_percent: discountPercent,
         is_available: comboIsAvailable ? 1 : 0,
@@ -15252,7 +15280,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
 
     const [productRows] = await db.query(
-      `SELECT id, name, price, base_unit_id, base_qty, unit_id
+      `SELECT id, name, price, base_unit_id, base_qty, unit_id, sale_mode
        FROM prod_products
        WHERE tenant_id=? AND id IN (${placeholders})`,
       [tenantId, ...ids]
@@ -15493,6 +15521,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            i.default_variant_group_id,
            i.default_variant_value_index,
            p.name AS product_name,
+           p.sale_mode AS product_sale_mode,
+           p.preorder_settings_json AS product_preorder_settings_json,
            p.price AS product_price,
            p.base_unit_id AS product_base_unit_id,
            p.base_qty AS product_base_qty,
@@ -15598,6 +15628,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         itemsByGroupId.get(gid).push({
           id: Number(item.id),
           target_product_id: productId,
+          product_sale_mode: item.product_sale_mode,
+          product_preorder_settings_json: item.product_preorder_settings_json,
           name: str(item.product_name || ""),
           product_name: str(item.product_name || ""),
           title: str(item.product_name || ""),
@@ -15709,8 +15741,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               has_explicit_default: Boolean(item.default_selected) || own?.default_selected != null,
             };
           });
-        const activeItems = configuredItems.filter((item) => !excludedItemIds.has(Number(item.id)));
-        if (!details || !activeItems.length) return;
+        const activeItems = configuredItems.filter((item) => !excludedItemIds.has(Number(item.id))
+          && (product?.sale_mode === 'preorder' || item.product_sale_mode === 'order'));
+        if (!details) return;
+        if (!activeItems.length && !details.group?.is_required && !(Number(details.group?.min_select) > 0)) return;
         groups.push({
           id: groupId,
           title: str(assignment.title || details.group?.title || ""),
@@ -16446,7 +16480,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       'id', 'name', 'description_short', 'description', 'price', 'old_price',
       'display_price',
       'promo_enabled', 'promo_title', 'promo_discount_percent',
-      'unit_id', 'base_unit_id', 'base_qty', 'fulfillment_mode',
+      'unit_id', 'base_unit_id', 'base_qty', 'fulfillment_mode', 'sale_mode', 'preorder_settings_json',
       'photos_json', 'photos', 'photo', 'photo_thumb',
       'nutrition_protein_100g', 'nutrition_fat_100g', 'nutrition_carbs_100g',
       'nutrition_per_100g', 'nutrition_per_portion', 'nutrition_portion_grams', 'nutrition_incomplete',
@@ -17399,6 +17433,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                  i.is_active,
                  i.sort_order,
                  p.name AS product_name,
+                 p.sale_mode AS product_sale_mode,
+                 p.preorder_settings_json AS product_preorder_settings_json,
                  p.price AS product_price,
                  p.base_unit_id AS product_base_unit_id,
                  p.base_qty AS product_base_qty,
@@ -17501,6 +17537,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               itemsByGroupId.get(gid).push({
                 id: Number(item.id),
                 target_product_id: productId,
+                product_sale_mode: item.product_sale_mode,
+                product_preorder_settings_json: item.product_preorder_settings_json,
                 name: str(item.product_name || ""),
                 product_name: str(item.product_name || ""),
                 product_price: Number(item.product_price || 0),
@@ -17564,6 +17602,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         : [];
       if (!ids.length) return res.json({ ok: true, data: {} });
       if (ids.length > 100) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
+
+      const stockContext = createStockAvailabilityContext({ db, tenantId, storeId });
 
       const toNum = (v, fallback = 0) => {
         const n = Number(v);
@@ -17822,6 +17862,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
              i.default_variant_group_id,
              i.default_variant_value_index,
              p.name AS product_name,
+             p.sale_mode AS product_sale_mode,
+             p.preorder_settings_json AS product_preorder_settings_json,
              p.price AS product_price,
              p.base_qty AS product_base_qty,
              p.photos_json AS product_photos_json
@@ -17919,6 +17961,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           groupItems.get(gid).push({
             id: Number(item.id),
             target_product_id: targetProductId,
+            product_sale_mode: item.product_sale_mode,
+            product_preorder_settings_json: item.product_preorder_settings_json,
             title: str(item.product_name || ''),
             name: str(item.product_name || ''),
             product_price: Number(item.product_price || 0),
@@ -18200,6 +18244,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             let check = null;
             while (true) {
               check = await checkStockAvailabilityForOrderItems({
+                context: stockContext,
                 db, tenantId, storeId,
                 items: [{ product_id: Number(item.target_product_id), qty: Number(item.qty || 1), variants: variant, ingredients: candidateIngredients }],
               });
@@ -18324,6 +18369,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
         const isFulfillable = async (candidate, ingredientIndexes) => {
           const check = await checkStockAvailabilityForOrderItems({
+            context: stockContext,
             db, tenantId, storeId,
             items: [{
               product_id: Number(pid), qty: 1,
@@ -18626,6 +18672,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            i.is_active,
            i.sort_order,
            p.name AS product_name,
+           p.sale_mode AS product_sale_mode,
+           p.preorder_settings_json AS product_preorder_settings_json,
            p.price AS product_price,
            p.base_unit_id AS product_base_unit_id,
            p.base_qty AS product_base_qty,
@@ -18778,6 +18826,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         itemsByGroupId.get(gid).push({
           id: Number(item.id),
           target_product_id: productId,
+          product_sale_mode: item.product_sale_mode,
+          product_preorder_settings_json: item.product_preorder_settings_json,
           name: str(item.product_name || ""),
           product_name: str(item.product_name || ""),
           product_price: Number(item.product_price || 0),
@@ -18890,6 +18940,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            i.is_active,
            i.sort_order,
            p.name AS product_name,
+           p.sale_mode AS product_sale_mode,
+           p.preorder_settings_json AS product_preorder_settings_json,
            p.price AS product_price,
            p.base_unit_id AS product_base_unit_id,
            p.base_qty AS product_base_qty,
@@ -19058,6 +19110,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return {
           id: Number(item.id),
           target_product_id: productId,
+          product_sale_mode: item.product_sale_mode,
+          product_preorder_settings_json: item.product_preorder_settings_json,
           name: str(item.product_name || ""),
           product_name: str(item.product_name || ""),
           product_price: Number(item.product_price || 0),
@@ -19213,6 +19267,220 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
     return Math.max(0, Math.min(24 * 60, h * 60 + m));
   }
+
+  async function validateCheckoutPreorders(conn, { tenantId, storeId, items, timeOptionCode, scheduledAt, methodCode, timezone, existingOrder = null, preview = false }) {
+    let saved = existingOrder?.preorder_snapshot_json;
+    if (typeof saved === 'string') saved = JSON.parse(saved);
+    let previousItems = existingOrder?.items || [];
+    if (typeof previousItems === 'string') previousItems = JSON.parse(previousItems);
+    const optionIds = new Set();
+    const collectOptionIds = item => {
+      for (const id of item.option_item_ids || []) optionIds.add(Number(id));
+      for (const option of item.option_items || item.options || []) optionIds.add(Number(option.id ?? option.option_item_id));
+    };
+    for (const item of [...items, ...previousItems]) {
+      collectOptionIds(item);
+      for (const selection of item.selections || []) collectOptionIds(selection);
+    }
+    const validOptionIds = [...optionIds].filter(id => Number.isInteger(id) && id > 0);
+    const optionTargets = new Map();
+    if (validOptionIds.length) {
+      const [options] = await conn.query(`SELECT id, target_product_id FROM prod_option_items WHERE tenant_id=? AND target_type='product' AND id IN (${validOptionIds.map(() => '?').join(',')})`, [tenantId, ...validOptionIds]);
+      for (const option of options) optionTargets.set(Number(option.id), Number(option.target_product_id));
+    }
+    const flatten = (list, historical = false) => {
+      const result = [];
+      const append = (item, qty, parentKey = null, scope = `product:${Number(item.product_id)}`) => {
+        const id = Number(item.product_id);
+        if (!(id > 0 && qty > 0)) return;
+        result.push({key:id, qty, parentKey, scope, parentScope:parentKey});
+        const selectedOptions = item.option_items || item.options || [];
+        const quantities = new Map(selectedOptions.map(option => [Number(option.id ?? option.option_item_id), Number(option.qty ?? option.quantity ?? 1)]));
+        const ids = new Set([...(item.option_item_ids || []).map(Number), ...quantities.keys()]);
+        for (const optionId of ids) {
+          const storedOption = historical ? selectedOptions.find(option => Number(option.id ?? option.option_item_id) === optionId) : null;
+          const target = Number(storedOption?.target_product_id || storedOption?.product_id || optionTargets.get(optionId)), amount = quantities.get(optionId) ?? 1;
+          if (target > 0 && amount > 0) result.push({key:target, qty:qty*amount, parentKey:id, parentScope:scope, scope:`${scope}/option:${optionId}/product:${target}`});
+        }
+      };
+      for (const item of list) {
+        const qty = Number(item.qty ?? item.quantity ?? 0);
+        if (!(qty > 0)) continue;
+        if (item.type === 'combo') {
+          const key = `combo:${Number(item.combo_id)}`;
+          result.push({key, qty, parentKey:null, scope:key});
+          for (const [index, selection] of (item.selections || []).entries()) append(selection, qty*Number(selection.qty ?? selection.quantity ?? 1), key, `${key}/block:${index}/product:${Number(selection.product_id)}`);
+        } else append(item, qty);
+      }
+      return result;
+    };
+    const nextEntries = flatten(items);
+    const productIds = [...new Set(nextEntries.map(item => item.key).filter(id => typeof id === 'number' && id > 0))].sort((a,b) => a-b);
+    const comboIds = [...new Set(nextEntries.map(item => item.key).filter(id => typeof id === 'string').map(key => Number(key.slice(6))))].filter(id => id > 0).sort((a,b) => a-b);
+    const rows = [];
+    if (productIds.length) {
+      const [products] = await conn.query(`SELECT id, name, sale_mode, preorder_settings_json FROM prod_products WHERE tenant_id=? AND id IN (${productIds.map(() => '?').join(',')}) ${preview ? '' : 'FOR UPDATE'}`, [tenantId, ...productIds]);
+      rows.push(...products.map(product => ({...product, id:Number(product.id)})));
+    }
+    if (comboIds.length) {
+      const [combos] = await conn.query(`SELECT id, title AS name, sale_mode, preorder_settings_json FROM prod_combos WHERE tenant_id=? AND id IN (${comboIds.map(() => '?').join(',')}) ${preview ? '' : 'FOR UPDATE'}`, [tenantId, ...comboIds]);
+      rows.push(...combos.map(combo => ({...combo, id:`combo:${combo.id}`, combo_id:Number(combo.id)})));
+    }
+    if (!rows.length) return null;
+    const previousScopes = new Map();
+    for (const item of flatten(previousItems, true)) previousScopes.set(item.scope, (previousScopes.get(item.scope) || 0) + item.qty);
+    const nextScopes = new Map();
+    for (const item of nextEntries) nextScopes.set(item.scope, (nextScopes.get(item.scope) || 0) + item.qty);
+    const ruleKey = item => item.combo_id != null ? `combo:${Number(item.combo_id)}` : Number(item.product_id);
+    const savedRules = [...(saved?.products || []), ...(saved?.combos || [])];
+    const byKey = new Map(rows.map(row => [row.id, row]));
+    for (const item of nextEntries) {
+      if (item.parentKey == null || byKey.get(item.key)?.sale_mode !== 'preorder') continue;
+      const acceptedParent = savedRules.some(rule => ruleKey(rule) === item.parentKey
+        && (rule.scope === item.parentScope || (rule.scope == null && previousScopes.has(item.parentScope))));
+      if (byKey.get(item.parentKey)?.sale_mode === 'preorder' || acceptedParent) continue;
+      if (existingOrder && (nextScopes.get(item.scope) || 0) <= (previousScopes.get(item.scope) || 0)) continue;
+      const error = new Error('PREORDER_PARENT_REQUIRED'); error.code = error.message; throw error;
+    }
+    const preorders = [];
+    for (const [scope, quantity] of nextScopes) {
+      const item = nextEntries.find(entry => entry.scope === scope);
+      const row = byKey.get(item.key);
+      if (!row) continue;
+      const previousQuantity = previousScopes.get(scope) || 0;
+      let retainedQuantity = Math.min(quantity, previousQuantity);
+      const acceptedRules = savedRules.filter(rule => ruleKey(rule) === item.key && (rule.scope == null || rule.scope === scope));
+      for (const accepted of acceptedRules) {
+        const amount = Math.min(retainedQuantity, accepted.scope == null ? previousQuantity : Number(accepted.quantity || 0));
+        if (amount > 0) preorders.push({row, accepted, scope, quantity:amount});
+        retainedQuantity -= amount;
+        if (!(retainedQuantity > 0)) break;
+      }
+      const addedQuantity = Math.max(0, quantity - previousQuantity);
+      if (row.sale_mode === 'preorder' && addedQuantity > 0) preorders.push({row, accepted:null, scope, quantity:addedQuantity});
+    }
+    if (!preorders.length) return null;
+    const fail = (code) => { const error = new Error(code); error.code = code; throw error; };
+    const offset = Number(timezone || 0) * 3600000;
+    const now = Date.now();
+    const today = new Date(now + offset).toISOString().slice(0,10);
+    const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0,10) === value;
+    const validPeriod = rule => validDate(rule.start) && validDate(rule.end) && rule.start <= rule.end;
+    const products = [];
+    for (const {row, accepted, scope, quantity} of preorders) {
+      let settings = accepted?.settings || row.preorder_settings_json;
+      try { if (typeof settings === 'string') settings = JSON.parse(settings); }
+      catch (_) { fail('PREORDER_SETTINGS_INVALID'); }
+      const acceptance = settings?.acceptance, receipt = settings?.receipt;
+      if (settings?.version !== 1 || !Number.isSafeInteger(settings?.lead_hours) || settings.lead_hours <= 0
+        || !['any','period'].includes(acceptance?.mode) || (acceptance.mode === 'period' && !validPeriod(acceptance))
+        || !['any','period','dates'].includes(receipt?.mode) || (receipt.mode === 'period' && !validPeriod(receipt))
+        || !Array.isArray(receipt?.weekdays) || receipt.weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6)
+        || !Array.isArray(receipt?.dates) || receipt.dates.some(day => !validDate(day))
+        || (receipt.mode === 'dates' && !receipt.dates.length)) fail('PREORDER_SETTINGS_INVALID');
+      const acceptedAt = accepted ? (accepted.accepted_at || existingOrder.created_at) : new Date(now).toISOString();
+      const reference = acceptedAt instanceof Date ? acceptedAt.getTime() : Date.parse(String(acceptedAt).replace(' ', 'T').replace(/Z?$/, 'Z'));
+      if (!Number.isFinite(reference) || !Number.isFinite(new Date(reference + settings.lead_hours*3600000).getTime())) fail('PREORDER_SETTINGS_INVALID');
+      const acceptanceDay = new Date(reference + offset).toISOString().slice(0,10);
+      if (acceptance.mode === 'period' && (acceptanceDay < acceptance.start || acceptanceDay > acceptance.end)) fail('PREORDER_ACCEPTANCE_CLOSED');
+      products.push({ ...(row.combo_id != null ? {combo_id:row.combo_id} : {product_id:row.id}), settings, accepted_at: new Date(reference).toISOString(), scope, quantity });
+    }
+    const snapshotRules = {products:products.filter(item => item.product_id != null), combos:products.filter(item => item.combo_id != null)};
+    const originalSchedule = String(existingOrder?.scheduled_at || '');
+    const preserveSchedule = existingOrder?.method_code === methodCode && preorders.every(rule => rule.accepted != null);
+    if (!preview && preserveSchedule && originalSchedule === scheduledAt && timeOptionCode === 'on_date') {
+      return {...saved, ...snapshotRules};
+    }
+    const [options] = await conn.query("SELECT id, code, starts_at, ends_at, step_minutes, lead_minutes FROM order_time_options WHERE tenant_id=? AND store_id=? AND code='on_date' AND is_active=1 ORDER BY sort, id LIMIT 1", [tenantId, storeId]);
+    const option = options[0];
+    if (!option || option.code !== 'on_date') {
+      const original = originalSchedule.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}):00$/);
+      if (preview && preserveSchedule && original) return {...saved,...snapshotRules,dates:[{date:original[1],slots:[original[2]]}]};
+      fail('PREORDER_RECEIPT_UNAVAILABLE');
+    }
+    const minutes = value => { const parts = String(value || '').match(/^(\d{1,2}):(\d{2})/); return parts ? Number(parts[1])*60+Number(parts[2]) : null; };
+    const start = minutes(option.starts_at) ?? 0;
+    let end = minutes(option.ends_at) ?? 1440;
+    if (end <= start) end += 1440;
+    const step = Math.max(1, Number(option.step_minutes) || 30);
+    const [hours] = await conn.query('SELECT day_of_week, opens_at, closes_at, is_closed FROM ten_store_hours WHERE tenant_id=? AND store_id=?', [tenantId, storeId]);
+    const sets = [hours];
+    if (methodCode === 'delivery') {
+      const [stores] = await conn.query('SELECT use_delivery_hours FROM ten_stores WHERE tenant_id=? AND id=?', [tenantId, storeId]);
+      if (Number(stores[0]?.use_delivery_hours ?? 1) === 1) {
+        const [deliveryHours] = await conn.query('SELECT day_of_week, opens_at, closes_at, is_closed FROM ten_store_delivery_hours WHERE tenant_id=? AND store_id=?', [tenantId,storeId]);
+        sets.push(deliveryHours);
+      }
+    }
+    const allows = (date, minute) => {
+      const time = `${String(Math.floor(minute/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}:00`;
+      if (preserveSchedule && `${date} ${time}` === originalSchedule) return true;
+      if (date <= today) return false;
+      if (!validDate(date) || minute < start || minute > Math.min(end,1439) || (minute-start)%step !== 0) return false;
+      const midnight = Date.parse(`${date}T00:00:00Z`);
+      const timestamp = midnight + minute*60000 - offset;
+      const weekday = (new Date(midnight).getUTCDay()+6)%7;
+      for (const product of products) {
+        const reference = Date.parse(product.accepted_at);
+        const referenceDay = new Date(reference + offset).toISOString().slice(0,10);
+        const receipt = product.settings.receipt;
+        if (date <= referenceDay || timestamp < reference + product.settings.lead_hours*3600000
+          || (receipt.mode === 'period' && (date < receipt.start || date > receipt.end))
+          || (receipt.mode === 'dates' && !receipt.dates.includes(date))
+          || (receipt.weekdays.length && !receipt.weekdays.includes(weekday))) return false;
+      }
+      const day = new Date(midnight).getUTCDay();
+      return sets.every(entries => [-1,0].some(shift => entries.some(entry => {
+        if (Number(entry.day_of_week) !== (day+shift+7)%7 || Number(entry.is_closed) === 1) return false;
+        const opens = minutes(entry.opens_at), closes = minutes(entry.closes_at);
+        return opens != null && closes != null && minute >= opens+shift*1440 && minute < (closes<=opens?closes+1440:closes)+shift*1440;
+      })));
+    };
+    const snapshot = { version: 1, timezone, time_option_id: Number(option.id), ...snapshotRules };
+    if (preview) {
+      let first = new Date(now + offset + 86400000).toISOString().slice(0,10), last = '9999-12-31', explicit = null;
+      for (const {settings, accepted_at} of products) {
+        const leadDay = new Date(Date.parse(accepted_at)+settings.lead_hours*3600000+offset).toISOString().slice(0,10);
+        if (leadDay > first) first = leadDay;
+        if (settings.receipt.mode === 'period') {
+          if (settings.receipt.start > first) first = settings.receipt.start;
+          if (settings.receipt.end < last) last = settings.receipt.end;
+        }
+        if (settings.receipt.mode === 'dates') explicit = explicit === null ? settings.receipt.dates : explicit.filter(date => settings.receipt.dates.includes(date));
+      }
+      const dates = [];
+      const append = date => {
+        const slots = [];
+        for (let minute = start; minute <= Math.min(end,1439); minute += step) if (allows(date,minute)) slots.push(`${String(Math.floor(minute/60)).padStart(2,'0')}:${String(minute%60).padStart(2,'0')}`);
+        if (slots.length) dates.push({date, slots});
+      };
+      if (explicit !== null) {
+        for (const date of [...new Set(explicit)].sort()) { if (date >= first && date <= last) append(date); if (dates.length >= 30) break; }
+      } else {
+        let cursor = Date.parse(`${first}T00:00:00Z`);
+        for (let i=0; i<217 && dates.length<30; i++,cursor+=86400000) {
+          const date = new Date(cursor).toISOString().slice(0,10);
+          if (date > last) break;
+          append(date);
+        }
+      }
+      const original = String(existingOrder?.scheduled_at || '');
+      const originalMatch = original.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}):00$/);
+      if (originalMatch && allows(originalMatch[1], minutes(originalMatch[2]))) {
+        const entry = dates.find(item => item.date === originalMatch[1]);
+        if (entry && !entry.slots.includes(originalMatch[2])) entry.slots.push(originalMatch[2]);
+        else if (!entry) dates.unshift({date:originalMatch[1], slots:[originalMatch[2]]});
+      }
+      return {...snapshot, dates};
+    }
+    const match = String(scheduledAt || '').match(/^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):00$/);
+    if (timeOptionCode !== 'on_date' || !match || Number(match[2]) > 23 || Number(match[3]) > 59) fail('PREORDER_DATE_REQUIRED');
+    if (!allows(match[1], Number(match[2])*60+Number(match[3]))) fail('PREORDER_RECEIPT_UNAVAILABLE');
+    return snapshot;
+  }
+
+  router.validateCheckoutPreorders = validateCheckoutPreorders;
 
   function getStoreLocalTimestamp(offsetValue) {
     const offsetHours = Number.isNaN(Number(offsetValue)) ? 0 : Number(offsetValue);
@@ -21176,8 +21444,35 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       .filter(Boolean);
   }
 
+  function getCheckoutBenefitsNextChangeAt(discounts, rewards, startedAt) {
+    const now = new Date(startedAt);
+    const midnight = new Date(now);
+    midnight.setHours(24, 0, 0, 0);
+    let next = midnight.getTime();
+    const include = value => {
+      const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+      if (Number.isFinite(time) && time > startedAt) next = Math.min(next, time);
+    };
+    for (const discount of discounts || []) {
+      if (discount.starts_at) include(discount.starts_at);
+      if (discount.ends_at) include(new Date(new Date(discount.ends_at).getTime() + 1));
+      for (const [field, inclusive] of [['schedule_time_start', false], ['schedule_time_end', true]]) {
+        const match = String(discount[field] || '').match(/^(\d{1,2}):(\d{2})/);
+        if (!match) continue;
+        const boundary = new Date(now);
+        boundary.setHours(Number(match[1]), Number(match[2]) + (inclusive ? 1 : 0), 0, 0);
+        include(boundary);
+      }
+    }
+    for (const reward of rewards || []) {
+      if (reward.expires_at) include(new Date(new Date(reward.expires_at).getTime() + 1));
+    }
+    return new Date(next).toISOString();
+  }
+
   function buildCheckoutBenefitsClientCalculationMatrix({
     scopeKey = '',
+    validUntil = null,
     subtotalBeforeDiscount,
     itemsBaseTotal,
     methodCode,
@@ -21332,6 +21627,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
     return {
       version: 2,
+      valid_until: validUntil,
       scope_key: publicDiscountText(scopeKey),
       discount_rules: discountRules,
       promo_rules: promoRules,
@@ -21404,6 +21700,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     draft,
     mode = 'customer',
   }) {
+    const calculationStartedAt = Date.now();
     const customerId = Number(customer?.id || 0) || null;
     const normalizedDraft = draft && typeof draft === 'object' ? draft : {};
     const excludeOrderId = Number(normalizedDraft?.exclude_order_id || 0) || null;
@@ -22369,6 +22666,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     });
     const clientCalculation = buildCheckoutBenefitsClientCalculationMatrix({
       scopeKey: clientCalculationScopeKey,
+      validUntil: getCheckoutBenefitsNextChangeAt(benefitDiscountRows, rewardRows, calculationStartedAt),
       subtotalBeforeDiscount,
       itemsBaseTotal,
       methodCode,
@@ -22883,6 +23181,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const rewardId = Number(req.body?.reward_id || 0);
       if (!(rewardId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
@@ -22982,6 +23281,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const rewardId = Number(req.body?.reward_id || 0);
       if (!(rewardId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'REWARD_INVALID' });
@@ -23070,6 +23370,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const promoCodeId = Number(req.body?.promo_code_id || 0);
       if (!(promoCodeId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
@@ -23225,6 +23526,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const discountId = Number(req.body?.discount_id || 0);
       if (!(discountId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'PROMO_INVALID' });
@@ -23360,6 +23662,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
       const customerId = Number(customer?.id || 0) || null;
+      publishCustomerBenefitsAfterResponse(res, tenantId, customerId);
       const discountId = Number(req.body?.discount_id || 0);
       if (!(discountId > 0) || !(customerId > 0)) {
         return res.status(409).json({ ok: false, error: 'DISCOUNT_INVALID' });
@@ -23699,6 +24002,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           });
         }
       }
+      if (typeof req.validateCheckout === 'function' && !await req.validateCheckout(res)) return;
       await ensureOrderDeliveryTypeColumns();
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
@@ -24252,6 +24556,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             i.price_value,
             p.id AS product_id,
             p.name AS product_name,
+            p.sale_mode AS product_sale_mode,
+            p.preorder_settings_json AS product_preorder_settings_json,
             p.price AS product_price,
             CASE
               WHEN p.id IS NULL THEN 0
@@ -24373,6 +24679,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             photos,
             selections: selections.map((s) => ({
               product_id: s.product_id,
+              option_items: s.option_items || s.options || [],
+              option_item_ids: s.option_item_ids || [],
               product_name: s.product_name,
               product_photo: s.product_photo,
               variant_group_id: s.variant_group_id != null ? Number(s.variant_group_id) : undefined,
@@ -25817,6 +26125,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         await conn.beginTransaction();
 
         if(authGuest && !await customerAuth.getGuest(conn,tenantId,token,true,storeId))throw new MessengerAuthError('UNAUTHORIZED',401);
+        const preorderSnapshot = await validateCheckoutPreorders(conn, { tenantId, storeId: orderStoreId, items: normItems, timeOptionCode, scheduledAt, methodCode, timezone: storeTimezone });
         if (stockDeductMode === 'on_create' && (!isOnline || total===0)) {
           const deductionResult = await applyStockDeductionForOrderItems({
             db: conn,
@@ -25906,6 +26215,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
         orderInsertColumns.push('auth_status_at_creation');
         orderInsertParams.push(authCustomer?.auth_strength==='strong'?'verified':'unverified');
+        orderInsertColumns.push('sale_mode', 'preorder_snapshot_json');
+        orderInsertParams.push(preorderSnapshot ? 'preorder' : 'order', preorderSnapshot ? JSON.stringify(preorderSnapshot) : null);
         if (isOnline) {
           orderInsertColumns.push('online_payment_required','online_payment_status','online_payment_total');
           orderInsertParams.push(1,total===0 ? 'not_required' : 'pending',total.toFixed(2));
@@ -25935,7 +26246,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         orderInsertParams.push(
           deliveryTypeId,
           paymentId,
-          timeOptionId,
+          preorderSnapshot?.time_option_id || timeOptionId,
           statusId,
           0,
           scheduledAt,
@@ -26018,6 +26329,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             ...(await onlinePayments.result(tenantId,existingSubmission.public_id,submissionId)),
             idempotent_replay: true,
           });
+        }
+        if (String(txErr?.code || '').startsWith('PREORDER_')) {
+          return res.status(409).json({ ok: false, error: txErr.code });
         }
         if (txErr && txErr.code === 'OUT_OF_STOCK') {
           return res.status(409).json({

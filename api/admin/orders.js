@@ -37,8 +37,27 @@ const {
 const makePrintApiRouter = require("../print");
 const chatTempRuntime = require("../chatTemp");
 
-module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can }) {
+module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can, validateCheckoutPreorders }) {
   const router = express.Router();
+  router.post(['/preorder-availability','/:id/preorder-availability'], async (req, res) => {
+    const tenantId = helpers.getTenantId(req), storeId = helpers.getStoreId(req);
+    try {
+      let existingOrder = null;
+      if (Number(req.params.id) > 0) {
+        const [rows] = await db.query("SELECT items, DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s') AS created_at, preorder_snapshot_json, (SELECT code FROM order_delivery_types WHERE tenant_id=order_orders.tenant_id AND id=order_orders.delivery_type_id) AS method_code, DATE_FORMAT(scheduled_at,'%Y-%m-%d %H:%i:%s') AS scheduled_at FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1", [tenantId,storeId,Number(req.params.id)]);
+        if (!rows.length) return res.status(404).json({ok:false,error:'NOT_FOUND'});
+        existingOrder = rows[0];
+      }
+      const [stores] = await db.query('SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=?',[tenantId,storeId]);
+      if (!stores.length) return res.status(400).json({ok:false,error:'BAD_STORE'});
+      const data = await validateCheckoutPreorders(db,{tenantId,storeId,items:Array.isArray(req.body?.items)?req.body.items:[],methodCode:req.body?.method_code,timezone:stores[0].timezone,existingOrder,preview:true});
+      res.json({ok:true,data});
+    } catch (error) {
+      if (String(error.code || '').startsWith('PREORDER_')) return res.status(409).json({ok:false,error:error.code});
+      console.error(error);
+      res.status(500).json({ok:false,error:'DB_ERROR'});
+    }
+  });
   const orderPrintTemplateBuilder = typeof makePrintApiRouter.createOrderPrintTemplateBuilder === "function"
     ? makePrintApiRouter.createOrderPrintTemplateBuilder({ db, helpers })
     : null;
@@ -1767,7 +1786,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         o.discount_amount,
         o.discounts_json,
         ${hasBenefitsMetaColumn ? "o.benefits_meta_json" : "NULL AS benefits_meta_json"},
-        o.items,
+        o.items, o.sale_mode, o.preorder_snapshot_json,
         DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
         o.delivery_type_id,
         o.payment_id,
@@ -1899,6 +1918,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
 
     const basePayload = {
       id: r.id,
+      sale_mode: r.sale_mode,
+      preorder_snapshot_json: r.preorder_snapshot_json,
       store_id: r.store_id,
       public_id: r.public_id || null,
       created_at: helpers.utcToStoreDateTime(r.created_at, storeTimezone),
@@ -2281,7 +2302,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           SELECT
             o.id,
             o.store_id,
-            o.public_id,
+            o.public_id, o.sale_mode,
             DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
              o.customer_id,
              (SELECT owner.phone FROM cust_customers owner WHERE owner.tenant_id=o.tenant_id AND owner.id=o.customer_id) owner_phone,
@@ -2386,7 +2407,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           o.discount_amount,
           o.discounts_json,
           ${hasBenefitsMetaColumn ? "o.benefits_meta_json" : "NULL AS benefits_meta_json"},
-          o.items,
+          o.items, o.sale_mode, o.preorder_snapshot_json,
           DATE_FORMAT(o.scheduled_at, '%Y-%m-%d %H:%i:%s') AS scheduled_at,
           o.delivery_type_id,
           o.payment_id,
@@ -2555,6 +2576,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (req.rbacContext === "courier" || accessRule === "assigned" || accessRule === "own") {
         return res.json({
           ok: true,
+          epoch: ordersEvents.getEpoch(),
           data: [],
           cursor,
           reset_required: cursorState.resetRequired || cursor > Math.max(0, since),
@@ -2564,6 +2586,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (cursorState.resetRequired) {
         return res.json({
           ok: true,
+          epoch: ordersEvents.getEpoch(),
           data: [],
           cursor,
           reset_required: true,
@@ -2573,6 +2596,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const data = ordersEvents.getChanges(tenantId, storeId, since);
       res.json({
         ok: true,
+          epoch: ordersEvents.getEpoch(),
         data,
         cursor,
         reset_required: false,
@@ -2952,6 +2976,12 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
 
       const existing = existingRows[0] || {};
+      if (isPaidRaw === 1 && Object.prototype.hasOwnProperty.call(req.body || {}, "expected_total")) {
+        const expectedTotal = Number(req.body.expected_total);
+        if (!Number.isFinite(expectedTotal) || Math.abs(expectedTotal - Number(existing.total_price)) > 0.01) {
+          throw Object.assign(new Error("ORDER_PRICING_CHANGED"), { code: "ORDER_PRICING_CHANGED" });
+        }
+      }
       if (req.rbacContext === "courier" && (Number(existing.assigned_user_id || 0) !== Number(req.user?.userId || 0) || Number(existing.is_paid) === 1)) {
         await conn.rollback(); transactionStarted = false; conn.release(); conn = null;
         return res.status(Number(existing.is_paid) === 1 ? 409 : 403).json({ ok: false, error: Number(existing.is_paid) === 1 ? "ORDER_ALREADY_PAID" : "RESOURCE_FORBIDDEN" });
@@ -3069,6 +3099,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
       if (conn) conn.release();
       console.error(e);
+      if (e?.code === "ORDER_PRICING_CHANGED") return res.status(409).json({ ok: false, error: e.code });
       if (e?.code === "IDEMPOTENCY_KEY_INVALID") {
         return res.status(400).json({ ok: false, error: e.code });
       }
@@ -3962,6 +3993,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ ok: false, error: "BAD_ID" });
       }
+      if (typeof req.validateCheckout === 'function' && !await req.validateCheckout(res)) return;
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [existingRows] = await db.query(
@@ -4979,11 +5011,17 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       await editConnection.beginTransaction();
       await editConnection.query('INSERT INTO payment_order_guards (tenant_id,store_id,order_id) VALUES (?,?,?) ON DUPLICATE KEY UPDATE order_id=VALUES(order_id)',[tenantId,storeId,id]);
       await editConnection.query('SELECT order_id FROM payment_order_guards WHERE tenant_id=? AND store_id=? AND order_id=? FOR UPDATE',[tenantId,storeId,id]);
-      const [lockedOrders]=await editConnection.query('SELECT is_paid FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 FOR UPDATE',[tenantId,storeId,id]);
+      const [lockedOrders]=await editConnection.query("SELECT is_paid, items, DATE_FORMAT(created_at,'%Y-%m-%d %H:%i:%s') AS created_at, preorder_snapshot_json, (SELECT code FROM order_delivery_types WHERE tenant_id=order_orders.tenant_id AND id=order_orders.delivery_type_id) AS method_code, DATE_FORMAT(scheduled_at,'%Y-%m-%d %H:%i:%s') AS scheduled_at FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1 FOR UPDATE",[tenantId,storeId,id]);
       const [lockedPayments]=await editConnection.query("SELECT id FROM payment_payments WHERE tenant_id=? AND store_id=? AND order_id=? AND (status IN ('created','pending','waiting_for_confirmation') OR captured_amount>0 OR reconciliation_state='manual_review') LIMIT 1 FOR UPDATE",[tenantId,storeId,id]);
       if(!lockedOrders.length || Number(lockedOrders[0].is_paid) || lockedPayments.length) {
         const error=new Error('ORDER_PAYMENT_EDIT_LOCKED');error.code='ORDER_PAYMENT_EDIT_LOCKED';throw error;
       }
+      const [preorderStores] = await editConnection.query('SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=?',[tenantId,storeId]);
+      if (!preorderStores.length) throw new Error('ORDER_STORE_NOT_FOUND');
+      const preorderSnapshot = await validateCheckoutPreorders(editConnection,{tenantId,storeId,items,timeOptionCode,scheduledAt,methodCode,timezone:preorderStores[0].timezone,existingOrder:lockedOrders[0]});
+      if (preorderSnapshot?.time_option_id) updateParams[updateParams.length-5] = preorderSnapshot.time_option_id;
+      updateFields.push('sale_mode=?','preorder_snapshot_json=?');
+      updateParams.splice(updateParams.length-3,0,preorderSnapshot?'preorder':'order',preorderSnapshot?JSON.stringify(preorderSnapshot):null);
       await editConnection.query(
         `UPDATE order_orders
          SET ${updateFields.join(",\n             ")}
@@ -5064,6 +5102,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         data: {
           id,
           public_id: payload?.public_id || existing?.public_id || null,
+          order: payload,
         },
       });
     } catch (e) {
@@ -5071,7 +5110,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (e && (e.code === "BONUS_ACCOUNT_NOT_FOUND" || e.code === "BONUS_BALANCE_NOT_ENOUGH")) {
         return res.status(409).json({ ok: false, error: e.code });
       }
-      if(e?.code==='ORDER_PAYMENT_EDIT_LOCKED')return res.status(409).json({ok:false,error:e.code});
+      if(e?.code==='ORDER_PAYMENT_EDIT_LOCKED' || String(e?.code || '').startsWith('PREORDER_'))return res.status(409).json({ok:false,error:e.code});
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });

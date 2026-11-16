@@ -50,6 +50,26 @@ const {
 
 module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can }) {
   const router = express.Router();
+  router.use((req, res, next) => {
+    const path = String(req.path || '');
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+    const names = /^\/production-zones(?:\/|$)/.test(path) ? ['print-options', 'production-zones']
+      : /^\/print-templates(?:\/|$)/.test(path) ? ['print-options']
+      : /^\/order-payments(?:\/|$)/.test(path) ? ['payment-methods']
+      : /^\/order-delivery-types(?:\/|$)/.test(path) ? ['order-delivery-types', 'order-references']
+      : /^\/order-time-options(?:\/|$)/.test(path) ? ['order-time-options', 'order-references']
+      : /^\/order-statuses(?:\/|$)/.test(path) ? ['order-statuses', 'order-references']
+      : /^\/delivery-settings(?:\/|$)/.test(path) ? ['delivery-settings', 'checkout-address-mode']
+      : /^\/stores(?:\/|$)/.test(path) ? ['stores', 'store-time', 'delivery-settings', 'checkout-address-mode']
+      : /^\/map-provider-config(?:\/|$)/.test(path) ? ['checkout-address-mode']
+      : path === '/' ? ['delivery-settings', 'checkout-address-mode', 'stores', 'store-time', 'payment-methods', 'order-references', 'order-delivery-types', 'order-time-options', 'order-statuses'] : [];
+    if (names.length) res.once('finish', () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        ordersEvents.publish(helpers.getTenantId(req), 0, 'reference.changed', { names });
+      }
+    });
+    next();
+  });
   router.get('/customer-auth',async(req,res,next)=>{
     try{
       if(!await requireTenantPermissions(req,res,['settings.site.read']))return;

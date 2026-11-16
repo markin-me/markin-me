@@ -32,7 +32,7 @@
 
   async function fetchPassports(productIds) {
     const ids = normalizeIds(productIds);
-    const missing = ids.filter(id => !getPassport(id) && !passportRequests.has(id));
+    const missing = ids.filter(id => (!getPassport(id) || !['order', 'preorder'].includes(getPassport(id)?.product?.sale_mode)) && !passportRequests.has(id));
     if (missing.length) {
       const task = (async () => {
         for (let offset = 0; offset < missing.length; offset += 100) {
@@ -54,7 +54,7 @@
     if (scriptLoads.has(name)) return scriptLoads.get(name);
     const task = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = `/static/js/shared-product-${name}.js?v=components-v2`;
+      script.src = `/static/js/shared-product-${name}.js?v=components-v4-preorder`;
       script.onload = resolve;
       script.onerror = () => { scriptLoads.delete(name); script.remove(); reject(new Error(`PRODUCT_COMPONENT_UNAVAILABLE:${name}`)); };
       document.head.appendChild(script);
@@ -106,11 +106,18 @@
       comboGridImageReadyCache: imageReady, COMBO_GRID_IMAGE_READY_LIMIT: 300,
       preloadedImages: preloaded,
       moneyFmt: new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }),
+      get showPreorderMediaLabel() { return source.showPreorderMediaLabel === true; },
+      getPreorderToday: () => source.getPreorderToday?.(),
       get priceRoundingRuntime() { return source.getRounding?.() || { mode: "none", precision: 2 }; },
       get openProductCtx() { return productContext; },
       set openProductCtx(value) { productContext = value; },
       getProductPassport: getPassport,
-      ensureProduct: async id => { if (!getProduct(id)) await fetchPassports([id]); return getProduct(id); },
+      ensureProduct: async id => {
+        if (!getProduct(id) || !['order', 'preorder'].includes(getProduct(id)?.sale_mode)) await fetchPassports([id]);
+        const product = getPassport(id)?.product || getProduct(id);
+        if (product && !['order', 'preorder'].includes(product.sale_mode)) throw new Error('PREORDER_SETTINGS_INVALID');
+        return product;
+      },
       resolveProductDetailsConfig: async id => {
         await fetchPassports([id]);
         const passport = getPassport(id);
@@ -253,6 +260,9 @@
     mount, prepare, ensureDetails, preload: ensureDetails,
     prefetch: fetchPassports, getSummaries,
     getPassport: async id => { await fetchPassports([id]); return getPassport(id); },
+    getPreorderDescription: product => getRuntime().getProductPreorderDescription(product),
+    getPreorderInfo: product => getRuntime().getProductPreorderInfo(product),
+    getPreorderWeekdaysHtml: weekdays => getRuntime().getPreorderWeekdaysHtml(weekdays),
     createCatalogSurface: host => createSurface(host, "shared-product-catalog"),
     createCard: (product, context) => getRuntime().createCatalogProductCard(product, context),
     createComboCard: (combo, context) => getRuntime().createCatalogComboCard(combo, context),

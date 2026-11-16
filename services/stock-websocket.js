@@ -25,7 +25,7 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
     if (rooms.has(key)) return rooms.get(key);
     const revision = await catalogSync.getManifest({ db, tenantId, storeId });
     if (rooms.has(key)) return rooms.get(key);
-    const room = { tenantId, storeId, sockets: new Set(), revision, unsubscribe: null, polling: false };
+    const room = { tenantId, storeId, sockets: new Set(), revision, unsubscribe: null };
     room.unsubscribe = ordersEvents?.subscribe?.(tenantId, storeId, (event) => {
       if (event?.event === "stock.changed") {
         broadcast(room, { type: "stock.changed", cursor: event.id, ...(event.data || {}) });
@@ -37,8 +37,14 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
         });
       }
     }) || null;
-    room.unsubscribeSettings = catalogSync.subscribe(tenantId,storeId,change=>{
-      if(change.entity_type==='checkout_settings') broadcast(room,{type:'checkout.settings.changed',revision:change.revision});
+    room.unsubscribeSettings = catalogSync.subscribe(tenantId, storeId, change => {
+      if (BigInt(change.revision || 0) > BigInt(room.revision || 0)) room.revision = change.revision;
+      if (change.entity_type === 'checkout_settings') {
+        broadcast(room, { type: 'checkout.settings.changed', revision: change.revision });
+      }
+      room.sockets.forEach(client => {
+        if (client.catalogSubscribed) send(client, { type: 'catalog.changed', revision: change.revision });
+      });
     });
     rooms.set(key, room);
     return room;
@@ -195,43 +201,6 @@ function createStockWebSocketHub({ server, db, ordersEvents, authenticateCustome
   }, 30000);
   heartbeat.unref?.();
 
-  const catchup = setInterval(() => {
-    rooms.forEach(async (room) => {
-      if (room.polling) return;
-      room.polling = true;
-      try {
-        const page = await catalogSync.getChanges({
-          db, tenantId: room.tenantId, storeId: room.storeId, since: room.revision, limit: 500,
-        });
-        if (page.reset_required) {
-          room.revision = await catalogSync.getManifest({ db, tenantId: room.tenantId, storeId: room.storeId });
-          broadcast(room, { type: "stock.resync", revision: room.revision });
-          room.sockets.forEach(client => {
-            if (client.catalogSubscribed) send(client, { type: "catalog.changed", revision: room.revision });
-          });
-          broadcast(room,{type:'checkout.settings.changed',revision:'resync'});
-          return;
-        }
-        const ids = [...new Set((page.changes || [])
-          .filter((change) => String(change.operation || "") === "stock")
-          .map((change) => positiveId(change.entity_id)).filter(Boolean))];
-        const settingsChanges=(page.changes || []).filter(change=>change.entity_type==='checkout_settings');
-        if(settingsChanges.length)broadcast(room,{type:'checkout.settings.changed',revision:settingsChanges[settingsChanges.length-1].revision});
-        room.revision = page.next_revision || room.revision;
-        if (page.changes?.length) room.sockets.forEach(client => {
-          if (client.catalogSubscribed) send(client, { type: "catalog.changed", revision: room.revision });
-        });
-        if (ids.length) broadcast(room, {
-          type: "stock.changed", revision: room.revision,
-          changed_product_ids: ids, affected_product_ids: ids, product_ids: ids,
-        });
-      } catch (_) {
-        broadcast(room, { type: "stock.resync", revision: room.revision });
-      } finally { room.polling = false; }
-    });
-  }, 1000);
-  catchup.unref?.();
-
   return { wss };
 }
 
@@ -352,14 +321,72 @@ function createAdminOrderCommandsHub({ server, dispatch, ordersEvents }) {
   wss.on('connection', socket => {
     socket.isAlive = true;
     let running = false,printUnsubscribe=null,printAuthorizing=false;
+    const dataSubscriptions = new Map();
+    const dataRequests = new Map();
+    socket.on('close', () => { dataSubscriptions.forEach(unsubscribe => unsubscribe()); dataSubscriptions.clear(); });
     socket.on('close',()=>printUnsubscribe?.());
     const send = value => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
     socket.on('error', () => socket.terminate());
     socket.on('pong', () => { socket.isAlive = true; });
-    send({ type: 'ready' });
+    send({ type: 'ready', checkout_commands: true, data_events: true });
     socket.on('message', async raw => {
       let message;
       try { message = JSON.parse(String(raw)); } catch (_) { socket.close(1008, 'Invalid command'); return; }
+      if (['orders.unsubscribe', 'clients.unsubscribe', 'references.unsubscribe', 'print.unsubscribe'].includes(message?.type)) {
+        const topic = message.type.split('.')[0];
+        if (topic === 'print') { printUnsubscribe?.(); printUnsubscribe = null; }
+        else { dataRequests.delete(topic); dataSubscriptions.get(topic)?.(); dataSubscriptions.delete(topic); }
+        return;
+      }
+      if (['orders.subscribe', 'clients.subscribe', 'references.subscribe'].includes(message?.type)) {
+        const topic = message.type.split('.')[0];
+        if (typeof message.token !== 'string' || message.token.length > 8192 || !positiveId(message.store_id)) {
+          socket.close(1008, 'Invalid subscription'); return;
+        }
+        const subscriptionRequest = {};
+        dataRequests.set(topic, subscriptionRequest);
+        const response = new EventEmitter();
+        response.statusCode = 200; response.headersSent = false;
+        response.status = code => { response.statusCode = code; return response; };
+        response.setHeader = () => {}; response.getHeader = () => undefined;
+        response.json = payload => {
+          if (response.headersSent) return response;
+          response.headersSent = true;
+          const tenantId = positiveId(payload?.data?.tenant_id), storeId = positiveId(payload?.data?.store_id);
+          if (response.statusCode >= 400 || !payload?.ok || !tenantId || !storeId) {
+            send({ type: `${topic}.error`, error: payload?.error || 'SUBSCRIPTION_FORBIDDEN' });
+            response.emit('finish'); return response;
+          }
+          if (socket.readyState === WebSocket.OPEN && dataRequests.get(topic) === subscriptionRequest) {
+            dataSubscriptions.get(topic)?.();
+            const channelStore = topic === 'references' ? 0 : storeId;
+            const restricted = payload.data.restricted === true;
+            const accepts = event => topic === 'orders' ? /^order\./.test(event.event)
+              : topic === 'clients' ? event.event === 'client.changed' : event.event === 'reference.changed';
+            dataSubscriptions.set(topic, ordersEvents.subscribe(tenantId, channelStore, event => {
+              if (!accepts(event)) return;
+              send(restricted ? { type: `${topic}.invalidate`, cursor: event.id }
+                : { type: `${topic}.event`, event });
+            }));
+            const state = ordersEvents.inspectCursor(tenantId, channelStore, message.since);
+            const epoch = ordersEvents.getEpoch();
+            const reset = state.resetRequired || (message.epoch && message.epoch !== epoch);
+            const changes = reset || restricted ? [] : ordersEvents.getChanges(tenantId, channelStore, message.since).filter(accepts);
+            send({ type: `${topic}.ready`, epoch, cursor: state.currentCursor, changes,
+              reset_required: reset || (restricted && state.currentCursor > Number(message.since || 0)) });
+            const expiry = Number(JSON.parse(Buffer.from(message.token.split('.')[1], 'base64url').toString()).exp || 0);
+            if (expiry) {
+              const timer = setTimeout(() => socket.close(1008, 'Session expired'), Math.max(0, Math.min(2147483647, expiry * 1000 - Date.now())));
+              timer.unref?.(); socket.once('close', () => clearTimeout(timer));
+            }
+          }
+          response.emit('finish'); return response;
+        };
+        response.end = () => response.json({ ok: false, error: 'SUBSCRIPTION_EMPTY' });
+        try { await dispatch(message, response); }
+        catch (error) { console.error('Admin subscription failed:', error); send({ type: `${topic}.error`, error: 'SUBSCRIPTION_FAILED' }); }
+        return;
+      }
       if(message?.type==='print.subscribe'){
         if(printAuthorizing||printUnsubscribe)return;
         if(typeof message.token!=='string'||message.token.length>8192){socket.close(1008,'Invalid authentication');return;}

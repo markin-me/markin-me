@@ -511,6 +511,13 @@ function buildProductDetailsContent(
   });
   img.style.objectFit = "cover";
   media.appendChild(img);
+  const preorderInfo = runtime.getProductPreorderInfo(product);
+  if (preorderInfo) {
+    const preorderBadge = document.createElement("span");
+    preorderBadge.className = "sp-media-pill is-preorder";
+    preorderBadge.textContent = preorderInfo.label;
+    media.appendChild(preorderBadge);
+  }
   const bogoBadge = typeof runtime.createCatalogBuyXGetYBadge === "function"
     ? runtime.createCatalogBuyXGetYBadge(product)
     : null;
@@ -766,6 +773,17 @@ function buildProductDetailsContent(
 
   meta.appendChild(title);
   if (shortDescText) meta.appendChild(shortDesc);
+  const preorderLines = runtime.getProductPreorderDescription(product);
+  if (preorderLines.length) {
+    const conditions = document.createElement('div');
+    conditions.className = 'shop-pd-preorder';
+    for (const text of preorderLines) {
+      const line = document.createElement('div');
+      line.textContent = text;
+      conditions.appendChild(line);
+    }
+    meta.appendChild(conditions);
+  }
 
   scroll.appendChild(meta);
 

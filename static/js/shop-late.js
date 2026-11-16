@@ -20,7 +20,7 @@
 
   async function ensureProduct(pid) {
     const id = Number(pid);
-    if (state.productCache.has(id)) {
+    if (state.productCache.has(id) && ['order', 'preorder'].includes(state.productCache.get(id)?.sale_mode)) {
       const cached = state.productCache.get(id);
       if (typeof mergeProductPassport === "function") {
         mergeProductPassport(id, { product: cached });
@@ -29,7 +29,7 @@
     }
     if (typeof preloadProductPassportsBatch === "function") {
       await preloadProductPassportsBatch([id], { details: false }).catch(() => {});
-      if (state.productCache.has(id)) return state.productCache.get(id);
+      if (['order', 'preorder'].includes(state.productCache.get(id)?.sale_mode)) return state.productCache.get(id);
     }
 
     const json = await apiJson('/api/public/products/batch/by-ids', {
@@ -390,7 +390,7 @@ function applyProductPassportPayload(productId, payload) {
             items: Array.isArray(group?.items) ? group.items : [],
           };
       state.optionGroupCache.set(`${groupId}:${pid}`, details);
-      state.optionGroupCache.set(`${groupId}:0`, details);
+
     });
   }
   if (
@@ -601,6 +601,8 @@ function seedComboPreviewCachesFromComboData(comboData) {
         const cachedProduct = {
           id: productId,
           name: str(prod.product_name || ""),
+          sale_mode: prod.sale_mode,
+          preorder_settings_json: prod.preorder_settings_json,
           title: str(prod.product_name || ""),
           description_short: str(prod.product_description_short || ""),
           price: Number(prod.price || 0),
@@ -674,13 +676,13 @@ function clonePlainComboPreviewValue(value) {
   return value;
 }
 
-async function resolveComboDetails(comboId) {
+async function resolveComboDetails(comboId, { force = false } = {}) {
   const safeComboId = Number(comboId || 0);
   if (!Number.isFinite(safeComboId) || safeComboId <= 0) return null;
 
   const now = Date.now();
   const cached = comboDetailsCache.get(safeComboId);
-  if (cached && cached.promise && Number(cached.expiresAt || 0) > now) {
+  if (!force && cached && cached.promise && Number(cached.expiresAt || 0) > now) {
     return cached.promise;
   }
 
@@ -688,6 +690,8 @@ async function resolveComboDetails(comboId) {
     const json = await apiJson("/api/public/combos/" + encodeURIComponent(safeComboId));
     const data = json?.data || null;
     seedComboPreviewCachesFromComboData(data);
+    const cachedEntry = comboDetailsCache.get(safeComboId);
+    if (cachedEntry) cachedEntry.data = data;
     if (data && typeof window.queueProductStockAvailabilityRefresh === "function") {
       window.queueProductStockAvailabilityRefresh(collectComboProductIds(data), {
         reason: "combo_details",
@@ -2124,6 +2128,13 @@ async function mountProductDetails(options = {}) {
       );
     const isEditFromCart = !!(editingComboItem && String(editingComboItem?.type || "") === "combo");
 
+    if (seedComboItem && (seedComboItem.selections || []).some((selection, index) =>
+      !blocks[index]?.products?.some(product => Number(product.product_id) === Number(selection.product_id)))) {
+      showToast('\u0421\u043e\u0441\u0442\u0430\u0432 \u043a\u043e\u043c\u0431\u043e \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0441\u044f. \u0423\u0434\u0430\u043b\u0438\u0442\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u044e \u0438 \u0441\u043e\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u043e\u043c\u0431\u043e \u0437\u0430\u043d\u043e\u0432\u043e.');
+      onBack?.();
+      return;
+    }
+
     if (seedComboItem) {
       comboQty = Math.max(1, Number(seedComboItem.qty || seedComboItem.quantity || 1));
       const selList = Array.isArray(seedComboItem.selections) ? seedComboItem.selections : [];
@@ -3340,6 +3351,18 @@ async function mountProductDetails(options = {}) {
         captionEl.className = "shop-combo-detail-caption";
         captionEl.textContent = caption;
         wrap.appendChild(captionEl);
+      }
+
+      const preorderLines = getSharedShopProductRuntime().getProductPreorderDescription(combo);
+      if (preorderLines.length) {
+        const conditions = document.createElement('div');
+        conditions.className = 'shop-pd-preorder';
+        for (const text of preorderLines) {
+          const line = document.createElement('div');
+          line.textContent = text;
+          conditions.appendChild(line);
+        }
+        wrap.appendChild(conditions);
       }
 
       const list = document.createElement("div");
@@ -4950,6 +4973,19 @@ async function mountProductDetails(options = {}) {
   }
 
   function closeShopSheetIfOpen(options = {}) {
+    if (options.checkoutCompleted === true) {
+      openCartSheetCtx?.showSheetCart?.();
+      setDesktopCheckoutOverlayActive(false);
+      document.getElementById("shopCartPage")?.classList.add("hidden");
+      document.body.classList.remove("shop-cart-page-active", "shop-checkout-overlay-open", "shop-address-page-active", "shop-address-form-page-active", "shop-address-sheet-active");
+      cleanupCheckoutViewSubscriptions();
+      clearCheckoutRouteHistoryState();
+      sheetNavigationState.type = null;
+      sheetNavigationState.screen = null;
+      sheetNavigationState.data = null;
+      openCartSheetCtx = null;
+      setActiveNav("menu");
+    }
     if (document.body?.classList.contains('page-kso') && options.resetSession === true) {
       if (document.body.classList.contains('shop-details-page-active')) finishStandaloneDetailsClose({ restore: false });
       if (document.body.classList.contains('shop-categories-page-active') && categoriesPageClose) categoriesPageClose({ immediate: true });
@@ -20244,6 +20280,16 @@ function applySheetAddressTitle(backMode = "cart") {
     }
     if(document.body.classList.contains('page-kso')){footer.querySelector('.shop-kso-bonus-phone-button')?.classList.add('hidden');footer.querySelector('[data-kso-bonus-summary]')?.classList.add('hidden');checkoutOverlayTitle.textContent='Способ оплаты';}
     document.body.classList.remove("shop-address-page-active", "shop-address-form-page-active");
+    setAddressSheetBodyState(false);
+    addressFormView.classList.add("hidden");
+    addressFormPageTitle.classList.add("hidden");
+    if (useCartPage && (window.history.state?.shopAddressPage || window.history.state?.shopAddressFormPage)) {
+      const checkoutState = { ...window.history.state, shopCartCheckout: true };
+      delete checkoutState.shopAddressPage;
+      delete checkoutState.shopAddressFormPage;
+      delete checkoutState.shopAddressSource;
+      window.history.replaceState(checkoutState, "", window.location.href);
+    }
     const isKsoCheckout = Boolean(document.body?.classList?.contains("page-kso"));
     invalidateAddressSheetUiState();
     clearBenefitsInnerOverlayHost();
@@ -21293,10 +21339,9 @@ function applySheetAddressTitle(backMode = "cart") {
       setShopModalHeaderShellMode(true);
       if (!useCartPage) showHeaderToggle();
       if (returnToProfile && typeof setProfileModalSubpageHeader === "function") {
-        hideHeaderToggle();
-        showInlineAddressToggle(true);
         window.AppModal?.setTitle?.("Адреса");
         setProfileModalSubpageHeader();
+        showHeaderToggle();
       }
     }
     setCartSheetScreenMode("address");
@@ -22671,6 +22716,7 @@ function renderSheetAddressList() {
     }
     saveBtn.disabled = true;
     saveBtn.textContent = "Сохраняем…";
+    let addressSaved = false;
 
     try {
       const me = await fetchMeSafe();
@@ -22689,20 +22735,18 @@ function renderSheetAddressList() {
         setSelectedAddress({ ...payload, _local: true });
       }
 
+      addressSaved = true;
       syncSelectedAddressToCheckoutDraft();
       updateAddressChip();
       const backMode = openCartSheetCtx?.addressBackMode || "cart";
-      if (useCartPage && document.body.classList.contains("shop-address-form-page-active")) {
-        if (backMode === "checkout" && openCartSheetCtx) {
-          openCartSheetCtx.addressFormReturnScreen = "checkout";
-        }
+      if (backMode === "checkout") {
+        await showSheetCheckout();
+      } else if (useCartPage && document.body.classList.contains("shop-address-form-page-active")) {
         requestMobileAddressPageBack();
       } else if (backMode === "profile") {
         returnToProfileFromSheet();
       } else if (backMode === "desktop-panel") {
         closeAddressDesktopPanelModal();
-      } else if (backMode === "checkout") {
-        showSheetCheckout();
       } else if (backMode === "header") {
         showSheetAddressList("header");
       } else {
@@ -22710,7 +22754,7 @@ function renderSheetAddressList() {
       }
     } catch (e) {
       console.error(e);
-      alert("Не удалось сохранить адрес");
+      alert(addressSaved ? "Адрес сохранён, но не удалось вернуться к оформлению. Попробуйте открыть оформление снова." : "Не удалось сохранить адрес");
     } finally {
       saveBtn.disabled = false;
       saveBtn.textContent = "Сохранить";
@@ -23393,12 +23437,49 @@ function renderSheetAddressList() {
     return html;
   }
 
+  let shopOrderOnlineAvailable = false;
+  let shopOrderAvailabilitySequence = 0;
+  async function refreshShopOrderPaymentAvailability(root) {
+    root = root.matches('[data-order-details-id]') ? root : root.querySelector('[data-order-details-id]');
+    if (!root) return;
+    const sequence = ++shopOrderAvailabilitySequence;
+    const scope = shopOrderRequestScopeKey();
+    shopOrderOnlineAvailable = false;
+    root.querySelectorAll('[data-shop-order-payment]').forEach(button => button.remove());
+    const initialOrder = shopOrderSnapshots.get(Number(root.dataset.orderDetailsId));
+    if (initialOrder) updateShopOrderPaymentFooter(initialOrder);
+    try {
+      const response = await apiJson(`/api/public/checkout/payment-availability?store_id=${encodeURIComponent(getActiveStoreId())}`);
+      if (sequence !== shopOrderAvailabilitySequence || scope !== shopOrderRequestScopeKey()) return;
+      shopOrderOnlineAvailable = response.data?.available === true;
+    } catch (error) {
+      if (sequence !== shopOrderAvailabilitySequence || scope !== shopOrderRequestScopeKey()) return;
+      console.warn('Order payment availability failed:', error);
+    }
+    if (!root.isConnected || root.closest('.hidden')) return;
+    const order = shopOrderSnapshots.get(Number(root.dataset.orderDetailsId));
+    if (!order) return;
+    const content = root.querySelector('[data-order-payment]');
+    if (content) {
+      const template = document.createElement('template');
+      template.innerHTML = renderShopOrderPayment(deriveCustomerOrderView(order));
+      const actions = template.content.querySelector('.shop-order-payment-actions');
+      const previous = content.querySelector('.shop-order-payment-actions');
+      if (previous) {
+        if (actions) previous.replaceWith(actions);
+        else previous.remove();
+      } else if (actions) content.prepend(actions);
+      bindShopOrderPaymentActions(content);
+    }
+    updateShopOrderPaymentFooter(order);
+  }
+
   function renderShopOrderPayment(view) {
     const payment=view.paymentSummary;
     const refunds=(payment?.refunds || []).map(refund=>`<p role="status">${escapeHtml(refund.attentionRequired?'Возврат требует проверки':({created:'Возврат ожидает отправки',pending:'Возврат обрабатывается',succeeded:'Деньги возвращены',failed:'Возврат не выполнен',cancelled:'Возврат отменён'})[refund.state] || 'Статус возврата уточняется')}: ${money(refund.amount)}${refund.receiptRegistration==='pending'?' · Чек формируется':refund.receiptRegistration==='succeeded'?' · Чек зарегистрирован':refund.receiptRegistration==='canceled'?' · Требуется проверка чека':''}</p>`).join('');
     const status=view.paymentPresentation;
     const actions=payment && !payment.paymentSatisfied && !view.isCancelled
-      ? '<div class="shop-order-payment-actions"><button type="button" class="control shop-payment-button shop-payment-button--primary" data-shop-order-payment="'+escapeHtml(view.publicId)+'">'+(payment.canPay || !payment.required?(payment.required?'Повторить онлайн-оплату':'Оплатить онлайн'):'Проверить оплату')+'</button>'+(!payment.paidAmount && payment.canChangeMethod!==false?'<button type="button" class="control shop-payment-button shop-payment-button--secondary" data-shop-order-change-payment="'+escapeHtml(view.publicId)+'">Сменить оплату</button>':'')+'</div>':'';
+      ? '<div class="shop-order-payment-actions">'+(shopOrderOnlineAvailable?'<button type="button" class="control shop-payment-button shop-payment-button--primary" data-shop-order-payment="'+escapeHtml(view.publicId)+'">'+(payment.canPay || !payment.required?(payment.required?'Повторить онлайн-оплату':'Оплатить онлайн'):'Проверить оплату')+'</button>':'')+(!payment.paidAmount && payment.canChangeMethod!==false?'<button type="button" class="control shop-payment-button shop-payment-button--secondary" data-shop-order-change-payment="'+escapeHtml(view.publicId)+'">Сменить оплату</button>':'')+'</div>':'';
     const badges='<div class="shop-order-info-row shop-order-payment-badges"><span>Способ оплаты</span><strong class="shop-order-payment-method">'+escapeHtml(status.method)+'</strong></div>';
     return actions+badges+(payment?.paidAmount?renderShopOrderPairs([['Оплачено',money(payment.paidAmount/100)]]):'')+(payment?.refundedAmount?renderShopOrderPairs([['Возвращено',money(payment.refundedAmount/100)],['Осталось после возврата',money(Math.max(0,payment.paidAmount-payment.refundedAmount)/100)]]):'')+(view.isCancelled && payment?.paidAmount>payment?.refundedAmount?'<p>Возврат оплаты не завершён</p>':'')+refunds+view.paymentRows.filter(row=>row[0]!=='Способ оплаты').map(row=>row[0]==='Скидка' && view.summary.discountAmount>0?renderOrderDiscountDetails(view.summary,'shop-order-info-row','shop-order-info-label','shop-order-info-value'):renderShopOrderPairs([row])).join('')+'<div class="shop-order-payment__total"><strong>ИТОГО</strong><strong data-order-total>'+money(view.summary.orderTotal)+'</strong></div>';
   }
@@ -23422,6 +23503,7 @@ function renderSheetAddressList() {
 
   function bindShopOrderAccordions(root) {
     bindShopOrderPaymentActions(root);
+    void refreshShopOrderPaymentAvailability(root);
     bindOrderSummaryDiscountToggles(root);
     root.closest(".app-modal")?.classList.add("shop-order-modal");
     root.querySelectorAll(".shop-order-accordion__button").forEach((button) => {
@@ -23446,14 +23528,30 @@ function renderSheetAddressList() {
     const view=deriveCustomerOrderView(order),payment=view.paymentSummary;
     const refund=payment?.state==='refunded'?'Возврат':payment?.state==='partially_refunded'?'Частичный возврат':null;
     const paid=Boolean(payment?.paymentSatisfied && payment.state==='paid');
-    const canPayOnline=Boolean(payment && !payment.paymentSatisfied && !view.isCancelled && (payment.canPay || !payment.required));
+    const canPayOnline=Boolean(shopOrderOnlineAvailable && payment && !payment.paymentSatisfied && !view.isCancelled && (payment.canPay || !payment.required));
     [elMobileOrderTotalBtn,elOrderDetailsTotalBtn].forEach(button=>{
       if(!button)return;
       button.classList.toggle('is-order-paid',paid);
       const value=button.querySelector('span');
-      if(value)value.textContent=`${refund?refund+' · ':paid?'✓ Оплачено · ':canPayOnline?'Оплатить онлайн · ':''}${money(view.summary.orderTotal)}`;
-      button.onclick=payment && !paid && !refund && !view.isCancelled?()=>showShopPaymentReturn(view.publicId,true):null;
-      button.disabled=Boolean(paid || refund || !payment || view.isCancelled);
+      const method = payment?.method || String(order.payment_code || '');
+      const offline = !paid && !refund && ['cash','card'].includes(method);
+      if(value) {
+        const label = `${refund?refund+' · ':paid?'✓ Оплачено · ':offline?(method==='cash'?'Наличными':'Картой/QR')+' · ':canPayOnline?'Оплатить онлайн · ':''}${money(view.summary.orderTotal)}`;
+        value.replaceChildren();
+        if (offline) {
+          const caption = document.createElement('small');
+          caption.textContent = 'при получении';
+          value.append(caption);
+        }
+        value.append(document.createTextNode(label));
+        if (offline && canPayOnline) {
+          const hint = document.createElement('small');
+          hint.textContent = 'Нажмите, чтобы оплатить онлайн';
+          value.append(hint);
+        }
+      }
+      button.onclick=canPayOnline?()=>showShopPaymentReturn(view.publicId,true):null;
+      button.disabled=Boolean(!canPayOnline);
     });
   }
 
@@ -24038,6 +24136,7 @@ function renderSheetAddressList() {
       const next = footer.__shopOriginalNextSibling;
       footer.__shopOriginalParent.insertBefore(footer, next?.parentNode === footer.__shopOriginalParent ? next : null);
     }
+    footer?.classList.add("hidden");
     footer?.classList.remove("shop-order-modal-footer");
     document.querySelector(".app-modal.shop-order-modal")?.classList.remove("shop-order-modal");
     hideMobileOrderDetailsActions();
@@ -28679,8 +28778,8 @@ function renderSheetAddressList() {
           void showOrderDetails(orderId);
           return;
         }
-        if (typeof setActiveNav === "function") setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "profile");
-        const reopenedCtx = openProfileModal(me, { initialTab: "orders", ordersOnly, sourceScreen });
+        if (typeof setActiveNav === "function") setActiveNav(ordersOnly && !returnToProfile && sourceScreen !== "profile" ? "orders" : "profile");
+        const reopenedCtx = openProfileModal(me, { initialTab: "orders", ordersOnly, sourceScreen, returnToProfile });
         setTimeout(() => {
           const ctx =
             reopenedCtx && typeof reopenedCtx.showOrderDetails === "function"
@@ -29841,6 +29940,7 @@ function renderSheetAddressList() {
   }
 
   async function openProfileSheet({ initialTab, onLoginSuccess, ordersOnly = false, sourceScreen = "", returnToProfile = false, forceModal = false } = {}) {
+    const navigationGeneration = shopNavigationGeneration;
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (!isMobile || forceModal) {
       const me = await fetchMeSafe();
@@ -29869,6 +29969,7 @@ function renderSheetAddressList() {
     if (!window.AppModal) return;
 
     const me = await fetchMeSafe();
+    if (ordersOnly && navigationGeneration !== shopNavigationGeneration) return;
     if (!me) {
       openLoginSheet({
         onSuccess: (me2) => {
@@ -29881,7 +29982,6 @@ function renderSheetAddressList() {
       });
       return;
     }
-    setActiveNav(ordersOnly && sourceScreen === "home" ? "home" : "profile");
     openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile });
   }
 
@@ -29947,11 +30047,14 @@ function renderSheetAddressList() {
 
     page.classList.toggle("shop-orders-from-profile",returnToProfile||sourceScreen==="profile");
     const closePage = ({ restoreNavigation = true } = {}) => {
+      const exitToHome = page._shopOrderDetailsExitToHome === true;
       document.body.classList.remove("shop-orders-page-active");
       document.body.classList.remove("shop-orders-details-active");
       resetOrderDetailsTransientUi();
       page._shopOrderDetailsExitToHome = false;
       page.classList.add("hidden");
+      window._isViewingOrderDetails = false;
+      window._showOrdersListCallback = null;
       const currentHistoryState = window.history.state;
       if (currentHistoryState && typeof currentHistoryState === "object") {
         const nextHistoryState = { ...currentHistoryState };
@@ -29968,6 +30071,11 @@ function renderSheetAddressList() {
         if (typeof showProfileView === "function") showProfileView();
         if (typeof setActiveNav === "function") setActiveNav("profile");
       } else if (restoreNavigation && typeof setActiveNav === "function") {
+        if (exitToHome) {
+          document.getElementById("shopCartPage")?.classList.add("hidden");
+          document.body.classList.remove("shop-cart-page-active", "shop-checkout-overlay-open");
+          clearCheckoutRouteHistoryState();
+        }
         setActiveNav("menu");
       }
       sheetNavigationState.type = null;
@@ -30006,6 +30114,7 @@ function renderSheetAddressList() {
     sheetNavigationState.data = { sourceScreen, returnToProfile };
     document.body.classList.add("shop-orders-page-active");
     page.classList.remove("hidden");
+    setActiveNav(returnToProfile || sourceScreen === "profile" ? "profile" : "orders");
     content.scrollTop = 0;
 
     if (window.history.state?.shopOrdersPage !== true) {
@@ -30328,7 +30437,9 @@ function renderSheetAddressList() {
   // -----------------------------
   // Bottom nav (mobile) helpers
   // -----------------------------
+let shopNavigationGeneration = 0;
 function setActiveNav(key) {
+  shopNavigationGeneration += 1;
   const activeKeyRaw = String(key || "").trim().toLowerCase();
   const activeKey = activeKeyRaw === "categories" ? "menu" : activeKeyRaw;
   document.body.classList.toggle("shop-catalog-tab-active", activeKey === "menu");
@@ -32741,10 +32852,26 @@ function setBottomNavActive(tab) {
     const limit = Math.min(end, 24 * 60 - 1);
     while (slot <= limit) {
       const localDay=new Date(`${targetKey}T00:00:00Z`);
-      if(!schedule || window.ShopCheckoutSchedule.allows(schedule,localDay,slot))slots.push(formatMinutesToTime(slot));
+      if((!schedule || window.ShopCheckoutSchedule.allows(schedule,localDay,slot))
+        && (!schedule?.preorder || checkoutPreorderAllows(schedule.preorder,targetKey,slot,schedule.timezone)))slots.push(formatMinutesToTime(slot));
       slot += stepMinutes;
     }
     return slots;
+  }
+
+  function checkoutPreorderAllows(preorder, date, minutes, timezone) {
+    if (preorder.error) return false;
+    if (!preorder.products.length) return true;
+    if (date <= getTodayDateString(timezone)) return false;
+    const weekday = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
+    const timestamp = Date.parse(`${date}T00:00:00Z`) + minutes * 60000 - Number(timezone || 0) * 3600000;
+    return preorder.products.every(({ settings }) => {
+      const receipt = settings.receipt;
+      return timestamp >= Date.now() + settings.lead_hours * 3600000
+        && (receipt.mode !== 'period' || (date >= receipt.start && date <= receipt.end))
+        && (receipt.mode !== 'dates' || receipt.dates.includes(date))
+        && (!receipt.weekdays.length || receipt.weekdays.includes(weekday));
+    });
   }
 
   let shopPaymentWidgetSession=null;
@@ -32830,15 +32957,19 @@ function setBottomNavActive(tab) {
       }
       if(widget) { widget.destroy();widget=null; }
       host.remove();root.classList.remove('shop-payment-widget-active');
+      queueMobileUiStateSync('payment-widget-close');
       if(footer && !footerHidden)footer.classList.remove('hidden');
       if(title)title.textContent=originalTitle;
       if(shopPaymentWidgetSession===session)shopPaymentWidgetSession=null;
     };
-    const finish=()=>{
+    const finish=(completed=false)=>{
       if(closed)return;
       const current=isCurrent();
       cleanup();
-      if(current)void showShopPaymentReturn(publicId);
+      if(current) {
+        if(completed)void showShopPaymentReturn(publicId,false,null,false);
+        else void showShopOrderChangePayment(publicId,{warning:true});
+      }
     };
     const onBack=event=>{
       if(!event.target.closest('[data-orders-page-back], #appModalCloseBtn, #appModalCancelBtn, .app-modal-back-btn, #shopProfileModalBackBtn, #shopSheetBackBtn, [aria-label="Назад"]'))return;
@@ -32850,7 +32981,8 @@ function setBottomNavActive(tab) {
     };
     const session={cleanup,finish};
     shopPaymentWidgetSession=session;
-    back.onclick=finish;
+    queueMobileUiStateSync('payment-widget-open');
+    back.onclick=()=>finish();
     page.addEventListener('click',onBack,true);
     document.addEventListener('keydown',onKey,true);
     window.addEventListener('pagehide',cleanup);
@@ -32892,7 +33024,7 @@ function setBottomNavActive(tab) {
         widget=new window.YooMoneyCheckoutWidget({confirmation_token:action.token,error_callback:error=>{
           if(attempt===initialization)showError(error);
         }});
-        widget.on('complete',()=>{if(attempt===initialization)finish();});
+        widget.on('complete',()=>{if(attempt===initialization)finish(true);});
         await widget.render(form.id);
         if(!closed && attempt===initialization && !failed)message.remove();
         if(isMobile && !closed && attempt===initialization && !failed) {
@@ -33001,9 +33133,20 @@ function setBottomNavActive(tab) {
         await mountShopPaymentWidget(root,publicId,widgetAction,isCurrent);
         return;
       }
+      let refreshedPayment = false;
+      if (current.paymentSummary.required && !current.paymentSummary.paymentSatisfied && (!continuePayment || !current.paymentSummary.canPay)) {
+        notice('Проверяем состояние оплаты…');
+        const refreshed = await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?refresh=1`,{headers});
+        if (!visible()) return;
+        current = {...current,...refreshed.data,order:{...current.order,...refreshed.data.order}};
+        refreshedPayment = true;
+        apply(current);
+      }
       if(continuePayment && (current.paymentSummary.canPay || (!current.paymentSummary.required && !current.paymentSummary.paymentSatisfied))) {
         notice('Переходим к оплате…');
-        const next=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/pay`,{method:'POST',body:{},headers:{...headers,'Idempotency-Key':crypto.randomUUID()}});
+        const next = current.payment?.action
+          ? {data:current}
+          : await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/pay`,{method:'POST',body:{},headers:{...headers,'Idempotency-Key':crypto.randomUUID()}});
         if(!visible())return;
         const action=next.data.payment?.action;
         if(action?.type==='embedded') {
@@ -33031,7 +33174,7 @@ function setBottomNavActive(tab) {
         if(Date.now()-started>=120000) { notice('Заказ получен. Подтверждение оплаты пока не получено. Проверьте оплату позже в этом заказе.');return; }
         notice('Заказ получен. Онлайн-оплата ещё не подтверждена. Можно повторить оплату или сменить способ оплаты.');
         try {
-          const next=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?refresh=0`,{headers});
+          const next=await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?refresh=1`,{headers});
           if(!visible())return;
           current=next.data;
           apply(current);
@@ -33052,13 +33195,18 @@ function setBottomNavActive(tab) {
           console.error('Payment status refresh failed:',error);
         }
       };
-      await update();
+      if (refreshedPayment && !finished()) setTimeout(update,15000);
+      else await update();
       if(showUnpaidNotice && !continuePayment && !widgetAction && current.paymentSummary.required && !current.paymentSummary.methodChangePending && !current.paymentSummary.paymentSatisfied && visible())
         await showShopOrderChangePayment(publicId,{warning:true});
     } catch(error) {
       console.error('Payment return failed:',error);
       if(!isCurrent())return;
-      if(root?.isConnected)notice('Не удалось проверить оплату. Попробуйте ещё раз в этом заказе.');
+      if(root?.isConnected)notice(error.message==='PAYMENT_REFRESH_RATE_LIMITED'
+        ? 'Проверка оплаты уже выполнялась. Повторите через несколько секунд.'
+        : error.message==='PAYMENT_OPERATION_IN_PROGRESS'
+          ? 'Платёж ещё подготавливается. Повторите проверку через несколько секунд.'
+          : 'Не удалось проверить оплату. Попробуйте ещё раз в этом заказе.');
       else showToast('Не удалось загрузить заказ после оплаты. Откройте его в разделе «Заказы».');
     } finally {
       setShopPaymentLoading(false,loadingSequence);
@@ -33090,6 +33238,43 @@ function setBottomNavActive(tab) {
       delayMs: 0,
     })).catch(() => {});
 
+    if (!isKsoCheckout) {
+      const productIds = new Set();
+      const comboIds = new Set();
+      const addProducts = item => {
+        const id = Number(item.product_id);
+        if (id > 0) productIds.add(id);
+        for (const option of item.option_items || item.options || []) {
+          const target = Number(option.target_product_id || option.product_id);
+          if (target > 0 && Number(option.qty ?? option.quantity ?? 1) > 0) productIds.add(target);
+        }
+      };
+      for (const item of state.cart || []) {
+        if (!(Number(item.qty) > 0)) continue;
+        if (item.type === 'combo') {
+          comboIds.add(Number(item.combo_id));
+          for (const selection of item.selections || []) addProducts(selection);
+        } else addProducts(item);
+      }
+      try {
+        const [response] = await Promise.all([
+          productIds.size ? apiJson('/api/public/products/batch/by-ids', { method:'POST', body:{ ids:[...productIds] } }) : Promise.resolve({data:{}}),
+          ...[...comboIds].map(id => resolveComboDetails(id, {force:true})),
+        ]);
+        for (const id of productIds) {
+          const product = response?.data?.[id];
+          if (!product || !['order','preorder'].includes(product.sale_mode)) throw new Error('Не удалось обновить условия товаров корзины.');
+          const updated = { ...state.productCache.get(id), ...product };
+          state.productCache.set(id,updated);
+          mergeProductPassport(id,{product:updated});
+        }
+      } catch (error) {
+        console.error('Checkout product conditions refresh failed',error);
+        alert('Не удалось обновить условия товаров корзины. Повторите открытие оформления.');
+        __forceHideCheckoutDeliveryProgress = false;
+        return;
+      }
+    }
     const cfg = await getOrderConfig();
     let defaultDeliverySettings = getCartPricingCachedDeliverySettings();
     const initialPricingSnapshot = buildCartPricingSnapshot();
@@ -34554,6 +34739,7 @@ function setBottomNavActive(tab) {
       const now=getStoreDateNow(timezone);
       const schedule={hours:pointHours || [],sets,timezone};
       schedule.isOpen=window.ShopCheckoutSchedule.allows(schedule,now,now.getUTCHours()*60+now.getUTCMinutes());
+      schedule.preorder = getCheckoutPreorders(schedule.timezone);
       return schedule;
     }
 
@@ -34561,16 +34747,66 @@ function setBottomNavActive(tab) {
       return getCheckoutTimeScheduleContext().timezone || storeTimezone || "+0";
     }
 
+    function getCheckoutPreorders(timezone) {
+      const ids = new Set();
+      const combos = new Map();
+      const addOptions = item => {
+        for (const option of item.option_items || item.options || []) {
+          if (Number(option.qty ?? option.quantity ?? 1) > 0) ids.add(Number(option.target_product_id || option.product_id));
+        }
+      };
+      for (const item of state.cart || []) {
+        if (!(Number(item.qty) > 0)) continue;
+        if (item.type === 'combo') {
+          const comboId = Number(item.combo_id);
+          const combo = comboDetailsCache.get(comboId)?.data
+            || [...state.combosByCategory.values()].flat().find(row => Number(row.id) === comboId);
+          combos.set(`combo:${comboId}`, combo);
+          for (const row of item.selections || []) { ids.add(Number(row.product_id)); addOptions(row); }
+        }
+        else ids.add(Number(item.product_id));
+        addOptions(item);
+      }
+      const result = { products: [], error: '' };
+      const today = getTodayDateString(timezone);
+      const entities = new Map([...ids].filter(id => id > 0).map(id => [id, state.productCache.get(id)]));
+      for (const [id, combo] of combos) entities.set(id, combo);
+      for (const [id, product] of entities) {
+        if (!product || !['order','preorder'].includes(product.sale_mode)) {
+          result.error = 'Не удалось получить режим продажи товаров. Обновите корзину.';
+          continue;
+        }
+        if (product.sale_mode !== 'preorder') continue;
+        let settings = product.preorder_settings_json;
+        try { if (typeof settings === 'string') settings = JSON.parse(settings); }
+        catch (error) { result.error = 'Не удалось прочитать условия предзаказа.'; }
+        if (!settings || !Number.isSafeInteger(settings.lead_hours) || settings.lead_hours <= 0
+          || !['any','period'].includes(settings.acceptance?.mode)
+          || !['any','period','dates'].includes(settings.receipt?.mode)
+          || !Array.isArray(settings.receipt.weekdays) || !Array.isArray(settings.receipt.dates)) {
+          result.error = 'Некорректные условия предзаказа. Обновите корзину.';
+          continue;
+        }
+        result.products.push({ product_id: id, settings });
+        if (settings.acceptance.mode === 'period' && (today < settings.acceptance.start || today > settings.acceptance.end)) {
+          result.error = `Сейчас предзаказ товара «${product.name}» не принимается.`;
+        }
+      }
+      return result;
+    }
+
     function getCheckoutAvailableTimeState() {
       const selectedMethod=methodSelect.getValue() || methodDefault || 'takeaway';
       if(!(cfg.methods || []).some(method=>method.code===selectedMethod))return {availableOptions:[],fallbackCode:''};
       const schedule = getCheckoutTimeScheduleContext();
+      if (schedule.preorder.error) return { availableOptions: [], fallbackCode: '', error: schedule.preorder.error };
+      const hasPreorder = schedule.preorder.products.length > 0;
       const atTimeOption=timeOptionByCodeInitial.at_time;
       const todaySlots=atTimeOption?buildTimeSlots(atTimeOption,null,schedule.timezone,schedule):[];
       const onDateOption=timeOptionByCodeInitial.on_date;
-      const futureSlots=onDateOption && getCheckoutSelectableDates(7).some(date=>buildTimeSlots(onDateOption,date,schedule.timezone,schedule).length>0);
+      const futureSlots=onDateOption && getCheckoutSelectableDates(hasPreorder ? 1 : 7).some(date=>buildTimeSlots(onDateOption,date,schedule.timezone,schedule).length>0);
       const configured=new Set((cfg.timeOptions || []).map(option=>option.code));
-      const availableOptions=timeOptions.filter(option=>configured.has(option.code) && (option.code==='asap'?schedule.isOpen:option.code==='at_time'?todaySlots.length>0:option.code==='on_date' && futureSlots));
+      const availableOptions=timeOptions.filter(option=>configured.has(option.code) && (!hasPreorder || option.code==='on_date') && (option.code==='asap'?schedule.isOpen:option.code==='at_time'?todaySlots.length>0:option.code==='on_date' && futureSlots));
       const defaultFallback=schedule.isOpen?'asap':todaySlots.length?'at_time':'on_date';
       const fallbackCode = availableOptions.some(opt => opt.code === defaultFallback)
         ? defaultFallback
@@ -34795,7 +35031,8 @@ function setBottomNavActive(tab) {
       const first = new Date(year, month, 1);
       const daysInMonth = new Date(year, month + 1, 0).getDate();
       const offset = (first.getDay() + 6) % 7;
-      const todayKey = toShopDateKey(new Date());
+      const schedule = getCheckoutTimeScheduleContext();
+      const todayKey = getTodayDateString(schedule.timezone);
       const selectedKey = toShopDateKey(selectedDate);
 
       const monthTitle = first.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
@@ -34811,7 +35048,8 @@ function setBottomNavActive(tab) {
         const key = toShopDateKey(d);
         const isSelected = key === selectedKey;
         const isToday = key === todayKey;
-        const isPast = key <= todayKey;
+        const isPast = key <= todayKey
+          || !buildTimeSlots(timeOptionByCodeInitial.on_date,d,schedule.timezone,schedule).length;
 
         const classes = [
           "date-cell",
@@ -34925,6 +35163,48 @@ function setBottomNavActive(tab) {
     function getCheckoutSelectableDates(limit = 30) {
       const dates = [];
       const startDate = getCheckoutStoreTodayDate();
+      const schedule = getCheckoutTimeScheduleContext();
+      const preorder = schedule.preorder;
+      if (preorder.error) return dates;
+      if (preorder.products.length) {
+        const tomorrow = new Date(startDate);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        let start = getDateString(tomorrow);
+        let end = '9999-12-31';
+        let explicitDates = null;
+        for (const { settings } of preorder.products) {
+          const leadDate = new Date(Date.now() + settings.lead_hours * 3600000 + Number(schedule.timezone || 0) * 3600000);
+          if (!Number.isFinite(leadDate.getTime())) return dates;
+          start = [start, leadDate.toISOString().slice(0,10)].sort().pop();
+          const receipt = settings.receipt;
+          if (receipt.mode === 'period') {
+            start = [start, receipt.start].sort().pop();
+            end = [end, receipt.end].sort()[0];
+          }
+          if (receipt.mode === 'dates') explicitDates = explicitDates === null ? receipt.dates.slice() : explicitDates.filter(date => receipt.dates.includes(date));
+        }
+        const option = timeOptionByCodeInitial.on_date;
+        if (!option || start > end) return dates;
+        const addDate = (key) => {
+          const date = parseShopDateKey(key);
+          if (date && key >= start && key <= end && buildTimeSlots(option,date,schedule.timezone,schedule).length) dates.push(date);
+        };
+        if (explicitDates !== null) {
+          for (const key of [...new Set(explicitDates)].sort()) { addDate(key); if (dates.length >= limit) break; }
+        } else {
+          const cursor = parseShopDateKey(start);
+          // Weekly store schedules and weekday intersections repeat every seven days.
+          // One extra week covers the partial first day caused by lead_hours.
+          const maxDays = limit * 7 + 7;
+          for (let index = 0; index < maxDays && dates.length < limit; index++) {
+            const key = getDateString(cursor);
+            if (key > end) break;
+            addDate(key);
+            cursor.setDate(cursor.getDate() + 1);
+          }
+        }
+        return dates;
+      }
       for (let index = 1; index <= limit; index += 1) {
         const nextDate = new Date(startDate);
         nextDate.setDate(startDate.getDate() + index);
@@ -34956,9 +35236,24 @@ function setBottomNavActive(tab) {
         return;
       }
       const nextState = getCheckoutAvailableTimeState();
+      timeUnavailableNote.textContent = nextState.error || (getCheckoutTimeScheduleContext().preorder.products.length
+        ? 'Нет общего времени получения для товаров корзины. Оформите несовместимые товары отдельно.'
+        : 'Нет доступного времени оформления');
       currentAvailableTimeOptions = nextState.availableOptions;
       timeUnavailableNote.classList.toggle('hidden',currentAvailableTimeOptions.length>0);
       currentAvailableTimeCodes = new Set(currentAvailableTimeOptions.map((option) => option.code));
+
+      const dateSchedule = getCheckoutTimeScheduleContext();
+      if (dateSchedule.preorder.products.length && !buildTimeSlots(timeOptionByCode.on_date,selectedDate,dateSchedule.timezone,dateSchedule).length) {
+        const first = getCheckoutSelectableDates(1)[0];
+        if (first) {
+          selectedDate = first;
+          dateDisplay.textContent = formatDateDisplay(first);
+          calendarViewYear = first.getFullYear();
+          calendarViewMonth = first.getMonth();
+        }
+        timeInput.value = '';
+      }
 
       const selectedCode = timeSelect.getValue();
       if (!currentAvailableTimeCodes.has(selectedCode)) {
@@ -35039,7 +35334,8 @@ function setBottomNavActive(tab) {
       timeSelect.setValue("on_date", false);
       const selectableDates = getCheckoutSelectableDates();
       const selectedDateKey = toShopDateKey(selectedDate);
-      if (selectedDateKey && !selectableDates.some((date) => toShopDateKey(date) === selectedDateKey)) {
+      if (selectedDateKey && !selectableDates.some((date) => toShopDateKey(date) === selectedDateKey)
+        && buildTimeSlots(config,selectedDate,getCheckoutTimeTimezone(),getCheckoutTimeScheduleContext()).length) {
         selectableDates.unshift(new Date(selectedDate));
       }
       let sheetDate = selectableDates.find((date) => toShopDateKey(date) === selectedDateKey) || selectableDates[0] || new Date(selectedDate);
@@ -35296,7 +35592,7 @@ function setBottomNavActive(tab) {
         refreshCheckoutTimeAvailability();
       }
       clearTimeout(checkoutTimeTimer);
-      checkoutTimeTimer=setTimeout(()=>syncCheckoutClock(),window.ShopCheckoutSchedule.nextDelay(schedule,cfg.timeOptions || []));
+      checkoutTimeTimer=setTimeout(()=>syncCheckoutClock(),Math.min(schedule.preorder.products.length ? 60000 : Infinity,window.ShopCheckoutSchedule.nextDelay(schedule,cfg.timeOptions || [])));
     }
     const resumeCheckoutClock=()=>{if(!document.hidden)syncCheckoutClock();};
     const updateCheckoutSettings=event=>{
@@ -36449,19 +36745,7 @@ function setBottomNavActive(tab) {
       if (typeof onBack === "function") onBack();
       const currentCustomer = await fetchMeSafe();
       if (!currentCustomer) throw new Error("ORDER_DETAILS_UNAVAILABLE");
-      const activeCartPage = document.getElementById("shopCartPage");
-      if (document.body.classList.contains("shop-cart-page-active") && activeCartPage) {
-        activeCartPage.classList.add("hidden");
-        document.body.classList.remove(
-          "shop-cart-page-active",
-          "shop-checkout-overlay-open",
-          "shop-address-page-active",
-          "shop-address-form-page-active"
-        );
-        if (typeof setActiveNav === "function") setActiveNav("menu");
-      } else if (typeof closeShopSheetIfOpen === "function") {
-        closeShopSheetIfOpen();
-      }
+      closeShopSheetIfOpen({ checkoutCompleted: true });
       const detailsContext = openProfileModal(currentCustomer, {
         initialTab: "orders",
         ordersOnly: true,
@@ -37051,6 +37335,18 @@ function setBottomNavActive(tab) {
       const orderTotalWithDelivery = roundPrice(Number(snapshotTotal || 0));
       const getCheckoutOrderErrorMessage = (err) => {
         switch (err?.message) {
+          case "PREORDER_PARENT_REQUIRED":
+            return '\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u0435 \u0441\u043e\u0441\u0442\u0430\u0432: \u043f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437\u043d\u044b\u0439 \u0442\u043e\u0432\u0430\u0440 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u043e\u0431\u044b\u0447\u043d\u043e\u043c \u0442\u043e\u0432\u0430\u0440\u0435 \u0438\u043b\u0438 \u043a\u043e\u043c\u0431\u043e.';
+          case "PREORDER_DATE_REQUIRED":
+            return "В корзине есть предзаказ. Выберите дату получения не раньше завтра.";
+          case "PREORDER_ACCEPTANCE_CLOSED":
+            return "Период приёма одного из предзаказов закрыт. Проверьте товары корзины.";
+          case "PREORDER_LEAD_TIME":
+            return "До получения осталось меньше времени, чем требуется для предзаказа. Выберите более позднее время.";
+          case "PREORDER_RECEIPT_UNAVAILABLE":
+            return "Выбранные дата или время не подходят для всех товаров корзины. Проверьте условия предзаказов и расписание точки.";
+          case "PREORDER_SETTINGS_INVALID":
+            return "Условия одного из предзаказов некорректны. Оформление этого товара сейчас недоступно.";
           case "DISCOUNT_INVALID":
             return "Выбранная скидка больше недоступна.";
           case "DISCOUNT_NOT_AVAILABLE":
@@ -37092,6 +37388,7 @@ function setBottomNavActive(tab) {
       };
       const handleOnlineOrder = async response => {
         if(payload.payment_code!=="online")return false;
+        closeShopSheetIfOpen({ checkoutCompleted: true });
         if(response.paymentAccessToken)localStorage.setItem(`shop-payment:${buildDeliveryCacheScope().tenant_id}:${response.data.public_id}`,response.paymentAccessToken);
         const payment=response.payment || response.data?.payment;
         const action=payment?.action;
@@ -37401,6 +37698,7 @@ function initShopLate() {
         && window.matchMedia?.("(max-width: 768px)").matches === true;
       let shopRootHistoryRestoring = false;
       let shopExitPromptOpen = false;
+      let shopHomeBackGeneration = null;
       const shopRootTransientHistoryKeys = [
         "sheet",
         "shopBack",
@@ -37470,17 +37768,12 @@ function initShopLate() {
       };
 
       const restoreShopRootGuard = () => {
-        const currentState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
-        window.history.pushState({
-          ...currentState,
-          shopRootPage: true,
-          shopRootScreen: "home",
-          shopRootGuard: true,
-        }, "", window.location.href);
+        window.history.pushState(buildShopRootHistoryState("home", { shopRootGuard: true }), "", window.location.href);
       };
 
       const openShopExitPrompt = () => {
         if (shopExitPromptOpen) return;
+        shopHomeBackGeneration = null;
         shopExitPromptOpen = true;
         if (typeof window.openShopExitConfirmation !== "function") {
           restoreShopRootGuard();
@@ -37520,20 +37813,54 @@ function initShopLate() {
         elNavCart?.addEventListener("click", () => pushShopRootScreen("cart"), { capture: true });
         elNavProfile?.addEventListener("click", () => pushShopRootScreen("profile"), { capture: true });
         elNavMenu?.addEventListener("click", (event) => {
+          if (document.body.classList.contains("shop-orders-page-active")) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            document.getElementById("shopProfileOrdersPage")?._shopOrdersClosePage?.({ restoreNavigation: false });
+            closeShopSheetIfOpen();
+            showShopRootHome();
+            window.history.replaceState(buildShopRootHistoryState("home"), "", window.location.href);
+            return;
+          }
           if (getShopRootScreen() === "home") return;
           event.preventDefault();
           event.stopImmediatePropagation();
           window.history.back();
         }, { capture: true });
         window.addEventListener("popstate", (event) => {
-          if (event.state?.shopRootPage !== true || String(event.state.shopRootScreen || "home") !== "home") return;
+          if (event.state?.shopRootPage !== true || String(event.state.shopRootScreen || "home") !== "home") {
+            shopHomeBackGeneration = null;
+            return;
+          }
+          // Nested screens own their Back action; arriving at home is not an exit attempt.
+          if (window.AppModal?.isOpen?.()
+            || shopRootTransientHistoryKeys.some(key => Boolean(event.state[key]))
+            || document.body.matches('.shop-details-page-active, .shop-profile-settings-page-active, .shop-address-page-active, .shop-favorites-page-active, .shop-bonus-program-page-active')) {
+            shopHomeBackGeneration = null;
+            if (!shopExitPromptOpen && event.state.shopRootGuard !== true
+              && !shopRootTransientHistoryKeys.some(key => Boolean(event.state[key]))) restoreShopRootGuard();
+            return;
+          }
+          const wasHome = elNavMenu?.classList.contains("is-active")
+            && !document.body.matches('.shop-profile-page-active, .shop-cart-page-active, .shop-orders-page-active, .shop-company-chat-open, .shop-company-chat-page-active');
+          if (wasHome) {
+            if (shopExitPromptOpen) return;
+            if (shopHomeBackGeneration === shopNavigationGeneration) {
+              openShopExitPrompt();
+            } else {
+              shopHomeBackGeneration = shopNavigationGeneration;
+              if (event.state.shopRootGuard !== true) restoreShopRootGuard();
+            }
+            return;
+          }
+          shopHomeBackGeneration = null;
           shopRootHistoryRestoring = true;
           try {
             showShopRootHome();
           } finally {
             shopRootHistoryRestoring = false;
           }
-          if (event.state.shopRootGuard !== true) openShopExitPrompt();
+          if (event.state.shopRootGuard !== true) restoreShopRootGuard();
         });
       }
 
@@ -37619,7 +37946,7 @@ function initShopLate() {
       const elNavOrdersBadge = document.getElementById("shopNavOrdersBadge");
       document.querySelector(".shop-mobile-bottom-container")?.addEventListener("click",event=>{
         const target=event.target.closest(".shop-nav-btn");
-        if(!target||target.id==="shopNavOrders"||!document.body.classList.contains("shop-orders-page-active"))return;
+        if(!target||target.id==="shopNavOrders"||target.id==="shopNavMenu"||!document.body.classList.contains("shop-orders-page-active"))return;
         document.getElementById("shopProfileOrdersPage")?._shopOrdersClosePage?.({restoreNavigation:false});
       },true);
       if (elNavOrders) {
@@ -37632,7 +37959,6 @@ function initShopLate() {
           closeShopSheetIfOpen();
           setActiveNav("orders");
           await openProfileSheet({ initialTab: "orders", ordersOnly: true, sourceScreen: "home" });
-          setActiveNav("orders");
         });
       }
       if (elNavProfile) {
@@ -37670,6 +37996,8 @@ function initShopLate() {
       };
       if (originalOpen && typeof originalOpen === 'function') {
         window.AppModal.open = function(opts) {
+          shopHomeBackGeneration = null;
+          if (elOrderDetailsFooterActions?.classList.contains('shop-order-modal-footer')) resetOrderDetailsTransientUi();
           // Добавляем запись в историю перед открытием только если sheet еще не открыт
           if (!isOpeningSheet && (!window.AppModal.isOpen || !window.AppModal.isOpen())) {
             isOpeningSheet = true;
@@ -37685,6 +38013,7 @@ function initShopLate() {
         window.AppModal.close = function(type) {
           const returnToCatalogTop = window._shopReturnToCatalogTopAfterOrderDetailsClose === true;
           const result = originalClose.call(this, type);
+          if (elOrderDetailsFooterActions?.classList.contains('shop-order-modal-footer')) resetOrderDetailsTransientUi();
           if (!window.AppModal.isOpen || !window.AppModal.isOpen()) {
             hasSheetHistoryEntry = false;
             resetShopModalHeaderUi();

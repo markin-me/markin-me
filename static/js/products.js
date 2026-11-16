@@ -115,8 +115,8 @@
   ]);
   const PRODUCT_FOOTER_BLOCK_CHIP_DEFINITIONS = PRODUCT_BLOCK_DEFINITIONS;
   const PRODUCT_FULFILLMENT_MODES = Object.freeze([
-    { value: "stock", label: "Со склада" },
-    { value: "made_to_order", label: "Под заказ" },
+    { value: "stock", label: "Готовый товар" },
+    { value: "made_to_order", label: "По рецептуре" },
   ]);
 
   function normalizeProductFulfillmentMode(value) {
@@ -188,8 +188,10 @@
       { key: "hidden", label: "Скрытые" },
       { key: "in_stock", label: "В наличии" },
       { key: "ended", label: "Закончились" },
-      { key: "fulfillment_stock", label: "Со склада" },
-      { key: "fulfillment_made_to_order", label: "Под заказ" },
+      { key: "fulfillment_stock", label: "Готовый товар" },
+      { key: "fulfillment_made_to_order", label: "По рецептуре" },
+      { key: "sale_order", label: "\u0417\u0430\u043a\u0430\u0437" },
+      { key: "sale_preorder", label: "\u041f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437" },
     ],
     options: [
       { key: "active", label: "Активные" },
@@ -216,6 +218,8 @@
         ended: true,
         fulfillment_stock: true,
         fulfillment_made_to_order: true,
+        sale_order: true,
+        sale_preorder: true,
       };
     }
     return {
@@ -302,6 +306,10 @@
   const productsBulkProductionZoneTrigger = $("#productsBulkProductionZoneTrigger");
   const productsBulkProductionZoneTriggerText = $("#productsBulkProductionZoneTriggerText");
   const productsBulkProductionZoneMenu = $("#productsBulkProductionZoneMenu");
+  const productsBulkSaleModeWrap = $("#productsBulkSaleModeWrap");
+  const productsBulkSaleModeTrigger = $("#productsBulkSaleModeTrigger");
+  const productsBulkSaleModeMenu = $("#productsBulkSaleModeMenu");
+  const productsBulkSaleModeText = $("#productsBulkSaleModeText");
   const categoriesMainList = $("#categoriesMainList");
   const categoriesEmptyHint = $("#categoriesEmptyHint");
   const optionsGroupsList = $("#optionsGroupsList");
@@ -776,6 +784,7 @@
     productsBulkActions: getDefaultProductsBulkActions(),
     productsBulkCategory: getDefaultProductsBulkCategoryState(),
     productsBulkProductionZone: getDefaultProductsBulkProductionZoneState(),
+    productsBulkSaleMode: { mode: '', settings: null },
     productsBulkApplying: false,
     productRowVariantsExpanded: new Set(),
     productRowVariantsCache: new Map(),
@@ -1186,7 +1195,8 @@
 
   function getEditorReadyProductPassport(productId) {
     const passport = window.CatalogRepository.getProductPassport(productId);
-    return passport?.editor?.schema_version === "product-editor-v1" ? passport : null;
+    return window.CatalogRepository.isOrderReadyPassport(passport)
+      && passport?.editor?.schema_version === "product-editor-v1" ? passport : null;
   }
 
   function getEditorPassportProduct(passport) {
@@ -1431,6 +1441,7 @@
   function filterProductsCollection(items) {
     const filters = normalizeProductsToolbarFilters("products", state.productsToolbar?.products?.filters);
     return (Array.isArray(items) ? items : []).filter((product) => {
+      if (!(product.sale_mode === 'preorder' ? filters.sale_preorder : filters.sale_order)) return false;
       const isActive = Number(product?.is_active || 0) === 1;
       const isVisible = Number(product?.site_visibility || 0) === 1;
       const activeAllowed = isActive ? filters.active : filters.inactive;
@@ -1447,6 +1458,12 @@
       const isEnded = hasFiniteStock && Number(product.stock_qty) <= 0;
       return isEnded ? filters.ended : filters.in_stock;
     });
+  }
+
+  function filterCombosCollection(items) {
+    const filters = normalizeProductsToolbarFilters('products', state.productsToolbar?.products?.filters);
+    return (Array.isArray(items) ? items : []).filter(combo =>
+      combo.sale_mode === 'preorder' ? filters.sale_preorder : filters.sale_order);
   }
 
   function getFilteredOptionGroups() {
@@ -1666,7 +1683,7 @@
     
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) {
-      throw new Error((data && data.error) || `HTTP_${res.status}`);
+      throw new Error((["BAD_PREORDER_SETTINGS", "BAD_BULK_UPDATE"].includes(data?.error) ? data.message : data?.error) || `HTTP_${res.status}`);
     }
     return data;
   }
@@ -1918,8 +1935,16 @@
   }
 
   async function apiGetProductionZones() {
-    return api("/api/admin/tenant/production-zones");
+    return window.AdminReferenceCache.getOrLoadReference("production-zones", {
+      load: () => api("/api/admin/tenant/production-zones"),
+      validate: (result) => result?.ok === true && Array.isArray(result?.data?.zones),
+    });
   }
+
+  document.addEventListener("admin:reference-changed", (event) => {
+    if (!event.detail?.resync && !event.detail?.names?.includes("production-zones")) return;
+    state.productionZonesLoaded = false;
+  });
 
   async function apiGetComboBlocks() {
     if (window.CatalogRepository) {
@@ -2956,6 +2981,7 @@
           authoritativeFields: [
             "price", "old_price", "stock_qty", "stockQty", "photos", "photos_json", "photo",
             "is_active", "active", "site_visibility", "visible", "fulfillment_mode", "fulfillmentMode",
+            "sale_mode", "preorder_settings_json",
             "updated_at", "sourceUpdatedAt",
           ],
         });
@@ -6141,7 +6167,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return filterProductsCollection(state.products)
       .map((product) => Number(product?.id))
       .filter(Number.isFinite)
-      .concat(shouldHideProductCombos() ? [] : (state.combosInCategory || []).map((combo) => `combo:${Number(combo.id)}`));
+      .concat(shouldHideProductCombos() ? [] : filterCombosCollection(state.combosInCategory).map((combo) => `combo:${Number(combo.id)}`));
   }
 
   function hasSelectedCombos() {
@@ -6278,7 +6304,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const actions = state.productsBulkActions || {};
     return Object.values(actions).reduce((acc, value) => acc + (value ? 1 : 0), 0)
       + (hasProductsBulkCategoryModeSelected() ? 1 : 0)
-      + (hasProductsBulkProductionZoneSelected() ? 1 : 0);
+      + (hasProductsBulkProductionZoneSelected() ? 1 : 0)
+      + (state.productsBulkSaleMode.mode ? 1 : 0);
   }
 
   function setProductsBulkAction(actionKey, nextValue) {
@@ -6295,6 +6322,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   }
 
   function resetProductsBulkActions() {
+    state.productsBulkSaleMode = { mode: '', settings: null };
+    closeProductsBulkSaleModeMenu();
     state.productsBulkActions = getDefaultProductsBulkActions();
   }
 
@@ -6367,8 +6396,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     }
     if (productsBulkApplyBtn) {
       const hasAnyAction = (onlyCombos
-        ? state.productsBulkActions?.activate || state.productsBulkActions?.deactivate
-        : Object.values(state.productsBulkActions || {}).some(Boolean) || hasProductsBulkProductionZoneSelected()) || hasValidProductsBulkCategoryAction();
+        ? state.productsBulkActions?.activate || state.productsBulkActions?.deactivate || Boolean(state.productsBulkSaleMode.mode)
+        : Object.values(state.productsBulkActions || {}).some(Boolean) || hasProductsBulkProductionZoneSelected() || Boolean(state.productsBulkSaleMode.mode)) || hasValidProductsBulkCategoryAction();
       productsBulkApplyBtn.disabled = state.productsBulkApplying || !hasAnyAction || state.selectedProductIds.size === 0;
     }
     if (productsBulkCancelBtn) {
@@ -6383,6 +6412,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         option.disabled = hasCombos && ["add", "remove"].includes(option.value);
       });
     }
+    if (productsBulkSaleModeTrigger) productsBulkSaleModeTrigger.disabled = state.productsBulkApplying;
+    if (productsBulkSaleModeText) productsBulkSaleModeText.textContent = state.productsBulkSaleMode.mode === 'preorder' ? 'Предзаказ' : state.productsBulkSaleMode.mode === 'order' ? 'Заказ' : 'Не менять';
+    productsBulkSaleModeMenu?.querySelectorAll('[data-bulk-sale-mode]').forEach(option => option.classList.toggle('is-active',option.dataset.bulkSaleMode === state.productsBulkSaleMode.mode));
     renderProductsBulkProductionZoneOptions();
     syncProductsBulkProductionZoneSelect();
     if (!state.productionZonesLoaded) ensureProductsBulkProductionZonesLoaded();
@@ -6401,6 +6433,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (actions.fulfillment_made_to_order) payload.fulfillment_mode = "made_to_order";
     const zoneId = normalizeProductProductionZoneId(state.productsBulkProductionZone?.productionZoneId);
     if (zoneId) payload.production_zone_id = zoneId;
+    if (state.productsBulkSaleMode.mode) {
+      payload.sale_mode = state.productsBulkSaleMode.mode;
+      if (payload.sale_mode === 'preorder') payload.preorder_settings_json = state.productsBulkSaleMode.settings;
+    }
     return payload;
   }
 
@@ -6408,6 +6444,47 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return (Array.isArray(categoryIds) ? categoryIds : [])
       .map((id) => state.categories.find((item) => Number(item?.id) === Number(id)) || { id: Number(id) })
       .filter((item) => Number.isFinite(Number(item?.id)) && Number(item.id) > 0);
+  }
+
+  function closeProductsBulkSaleModeMenu() {
+    productsBulkSaleModeWrap?.classList.remove('is-open');
+    productsBulkSaleModeMenu?.classList.add('hidden');
+    productsBulkSaleModeTrigger?.setAttribute('aria-expanded','false');
+    document.removeEventListener('click',closeProductsBulkSaleModeOutside,true);
+  }
+
+  function closeProductsBulkSaleModeOutside(event) {
+    if (!productsBulkSaleModeWrap?.contains(event.target)) closeProductsBulkSaleModeMenu();
+  }
+
+  function openProductsBulkPreorderSettings() {
+    const template = document.querySelector('#tplProductEditor');
+    if (!window.AppModal || !template) return;
+    const wrapper = document.createElement('div');
+    const block = template.content.querySelector('#pePreorderConditions').cloneNode(true);
+    block.classList.remove('hidden');
+    wrapper.appendChild(block);
+    const count = state.selectedProductIds.size;
+    const editor = bindProductPreorderConditions(wrapper,{product:state.productsBulkSaleMode.settings ? {sale_mode:'preorder',preorder_settings_json:state.productsBulkSaleMode.settings} : undefined});
+    window.AppModal.open({
+      title:`\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u043f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437\u0430: ${count}`,
+      content:wrapper,
+      saveText:'Применить', cancelText:'Отмена',
+      onSave: () => {
+        if (editor.loadError || editor.hasUnconfirmedInterval()) { showToast('Подтвердите интервал часов галочкой.'); return false; }
+        const settings = editor.getSettings();
+        const validPeriod = rule => rule.mode !== 'period' || (rule.start && rule.end && rule.start <= rule.end);
+        if (!Number.isSafeInteger(settings.lead_hours) || settings.lead_hours <= 0
+          || !validPeriod(settings.acceptance) || !validPeriod(settings.receipt)
+          || (settings.receipt.mode === 'dates' && !settings.receipt.dates.length)) {
+          showToast('Заполните интервал часов и выбранные периоды или даты.'); return false;
+        }
+        state.productsBulkSaleMode = {mode:'preorder',settings};
+        syncProductsBulkActionsUi();
+        return true;
+      },
+      onClose: () => editor.closeSelect(),
+    });
   }
 
   async function getProductCategoryIdsForBulk(productId) {
@@ -6454,6 +6531,15 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (Object.prototype.hasOwnProperty.call(payload, "site_visibility")) applyInlineProductValue(product, "site_visibility", payload.site_visibility);
     if (Object.prototype.hasOwnProperty.call(payload, "stock")) applyInlineProductValue(product, "stock", payload.stock);
     if (Object.prototype.hasOwnProperty.call(payload, "fulfillment_mode")) applyInlineProductValue(product, "fulfillment_mode", payload.fulfillment_mode);
+    if (Object.prototype.hasOwnProperty.call(payload, "sale_mode")) {
+      const fields = {sale_mode:payload.sale_mode};
+      if (Object.prototype.hasOwnProperty.call(payload,'preorder_settings_json')) fields.preorder_settings_json = payload.preorder_settings_json;
+      Object.assign(product,fields);
+      const patch = window.CatalogRepository?.patchProductOptimistic(product.id,fields);
+      if (patch) window.CatalogRepository.commitProductPatch(patch);
+      clearCachedProductDetails(product.id);
+      clearCachedProductView(product.id);
+    }
   }
 
   function syncProductRowAfterBulkPayload(product, payload) {
@@ -6848,7 +6934,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           </label>
         </div>
         <div class="product-row-fulfillment-field field-wrap">
-          <button class="product-row-fulfillment-toggle" type="button" data-fulfillment-toggle data-mode="${escapeHtml(fulfillmentMode)}" aria-label="Режим продажи товара">
+          <button class="product-row-fulfillment-toggle" type="button" data-fulfillment-toggle data-mode="${escapeHtml(fulfillmentMode)}" aria-label="Учёт и списание товара">
             <span>${escapeHtml(fulfillmentLabel)}</span>
           </button>
         </div>
@@ -6978,11 +7064,12 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     if (!combo || !productsList) return;
     const comboId = Number(combo.id || 0);
     if (!(comboId > 0)) return;
-    const shouldShow = !shouldHideProductCombos() && comboBelongsToCurrentCategory(combo);
+    const shouldKeep = !shouldHideProductCombos() && comboBelongsToCurrentCategory(combo);
+    const shouldShow = shouldKeep && filterCombosCollection([combo]).length > 0;
     const existingIndex = (state.combosInCategory || []).findIndex((c) => Number(c.id) === comboId);
     const existingRow = productsList.querySelector(`.order-row.combo-row[data-combo-id="${comboId}"]`);
 
-    if (shouldShow) {
+    if (shouldKeep) {
       if (existingIndex >= 0) state.combosInCategory[existingIndex] = { ...state.combosInCategory[existingIndex], ...combo };
       else state.combosInCategory.push(combo);
     } else if (existingIndex >= 0) {
@@ -7131,7 +7218,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         const ingredientsRes = await apiGetProductIngredients(id);
         const ingredients = Array.isArray(ingredientsRes?.data) ? ingredientsRes.data : [];
         if (!ingredients.length) {
-          showToast("Не удалось сменить режим продажи: добавьте состав товара.");
+          showToast("Не удалось изменить учёт и списание: добавьте состав товара.");
           return;
         }
       }
@@ -7159,7 +7246,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       syncProductRowFulfillmentControl(button.closest(".product-row"), product);
       syncProductEditorFulfillmentControl(id, previousMode);
       if (catalogPatch) window.CatalogRepository.rollbackProductPatch(catalogPatch);
-      showToast("Не удалось сменить режим продажи.");
+      showToast("Не удалось изменить учёт и списание.");
     } finally {
       button.dataset.saving = "";
       button.disabled = false;
@@ -7168,7 +7255,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
 
   function syncProductsListEmptyState() {
     if (!productsEmptyHint) return;
-    const combos = shouldHideProductCombos() ? [] : (state.combosInCategory ?? []);
+    const combos = shouldHideProductCombos() ? [] : filterCombosCollection(state.combosInCategory);
     const empty = filterProductsCollection(state.products).length === 0 && combos.length === 0;
     if (empty && state.catalogConnectionState === "offline" && getProductsCatalogCoverage().knownProducts === 0) {
       productsEmptyHint.innerHTML = "Каталог ещё не сохранён на устройстве.<br>Подключитесь к интернету, чтобы загрузить товары.";
@@ -7689,7 +7776,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const canSortProducts = !state.productsHasMore && !state.productsLoading;
     const visibleProducts = filterProductsCollection(state.products);
     const productRows = visibleProducts.map((product) => buildProductRowHtml(product, canSortProducts));
-    const combos = shouldHideProductCombos() ? [] : (state.combosInCategory ?? []);
+    const combos = shouldHideProductCombos() ? [] : filterCombosCollection(state.combosInCategory);
     const comboRows = combos.map(buildComboRowHtml);
 
     productsList.innerHTML = productRows.join("") + comboRows.join("");
@@ -12079,6 +12166,7 @@ const isViewMode = state.comboPanel.mode === "view";
     const comboSetInfo = document.getElementById("comboSetInfo");
     if (comboSetInfo) comboSetInfo.classList.remove("hidden");
     fillComboSetFormFromState();
+    bindComboSetPreorderConditions();
     renderComboSetBlocksList();
     closeComboSetBlockPicker();
     const isView = state.comboSetPanel?.mode === "view";
@@ -12118,6 +12206,7 @@ const isViewMode = state.comboPanel.mode === "view";
     };
     state.comboSetPanel.mode = "create";
     state.comboSetPanel.comboId = null;
+    state.comboSetPanel.combo = null;
     state.comboSetPanel.blocks = [];
     state.comboSetPanel.blockPickerOpen = false;
     state.comboSetPanel.blockPickerSelection = new Set();
@@ -12302,6 +12391,35 @@ const isViewMode = state.comboPanel.mode === "view";
     renderComboSetCategoryChips();
   }
 
+  let comboSetPreorderEditor = null;
+  function bindComboSetPreorderConditions() {
+    comboSetPreorderEditor?.closeSelect();
+    const form = document.getElementById('comboSetForm');
+    const key = `${state.comboSetPanel.comboId || tabsState.activeKey}:${state.comboSetPanel.mode}`;
+    if (comboSetPreorderEditor && form.dataset.preorderKey === key && form.__preorderSource === state.comboSetPanel.combo && state.comboSetPanel.formInitialized) return;
+    form.dataset.preorderKey = key;
+    form.__preorderSource = state.comboSetPanel.combo;
+    let host = form.querySelector('[data-combo-preorder]');
+    if (!host) {
+      host = document.createElement('div');
+      host.dataset.comboPreorder = '1';
+      form.appendChild(host);
+    }
+    host.replaceChildren();
+    const modeHost = document.createElement('div');
+    modeHost.id = 'pePreorderSaleMode';
+    modeHost.className = 'field-wrap';
+    const modeLabel = document.createElement('label');
+    modeLabel.className = 'field-label';
+    modeLabel.textContent = '\u0420\u0435\u0436\u0438\u043c \u043f\u0440\u043e\u0434\u0430\u0436\u0438';
+    host.appendChild(modeLabel);
+    host.appendChild(modeHost);
+    const conditions = document.getElementById('tplProductEditor').content.querySelector('#pePreorderConditions').cloneNode(true);
+    host.appendChild(conditions);
+    const product = state.comboSetPanel.combo || { sale_mode: 'order' };
+    comboSetPreorderEditor = bindProductPreorderConditions(host, { product, isView: state.comboSetPanel.mode === 'view' });
+  }
+
   function refreshComboSetBlockCardPrices() {
     const discountEl = document.getElementById("comboSetDiscount");
     const discountPercent = Number(discountEl?.value) || 0;
@@ -12342,6 +12460,8 @@ const isViewMode = state.comboPanel.mode === "view";
       category_code: categoryCode,
       image_url: firstUrl,
       sort_order: Number(sortEl?.value) || 0,
+      sale_mode: comboSetPreorderEditor.getSaleMode(),
+      preorder_settings_json: comboSetPreorderEditor.getSettings(),
       is_active: activeEl?.checked ? 1 : 0,
     };
   }
@@ -13480,6 +13600,10 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   async function saveComboSet() {
+    if (comboSetPreorderEditor.loadError || comboSetPreorderEditor.hasUnconfirmedInterval()) {
+      showToast('\u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u043f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437\u0430');
+      return;
+    }
     const payload = getComboSetFormPayload();
     if (!payload.title) {
       if (typeof toast !== "undefined") toast("Укажите название комбо-набора");
@@ -13507,7 +13631,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (typeof toast !== "undefined") toast("Ошибка сохранения");
       } catch (e) {
         console.error("saveComboSet create", e);
-        if (typeof toast !== "undefined") toast("Ошибка сохранения");
+        if (typeof toast !== "undefined") toast(e.message || "Ошибка сохранения");
       }
       return;
     }
@@ -13517,10 +13641,8 @@ const isViewMode = state.comboPanel.mode === "view";
       return;
     }
     try {
-      const [patchRes, blocksRes] = await Promise.all([
-        apiPatchCombo(comboId, payload),
-        apiPutComboBlocks(comboId, blocksPayload),
-      ]);
+      const patchRes = await apiPatchCombo(comboId, { ...payload, blocks: blocksPayload });
+      const blocksRes = { data: patchRes?.blocks };
       if (window.CatalogRepository) {
         await window.CatalogRepository.ensureCombos([comboId], { requiredCompleteness: "editor-ready", force: true });
       }
@@ -13840,6 +13962,7 @@ const isViewMode = state.comboPanel.mode === "view";
   async function setActiveTabKey(key, { activate = true } = {}) {
     const tab = tabsState.tabs.find((t) => t.key === key);
     if (!tab) return;
+    window.__adminMobilePages?.rememberRightView('products:' + key, () => setActiveTabKey(key));
     if (tabsState.activeKey === key) {
       renderTabs();
       return;
@@ -14073,6 +14196,7 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
     
+    window.__adminMobilePages?.forgetRightView('products:' + key);
     tabsState.tabs.splice(idx, 1);
     if (wasActive) {
       const next = tabsState.tabs[idx] || tabsState.tabs[idx - 1];
@@ -15219,6 +15343,199 @@ const isViewMode = state.comboPanel.mode === "view";
 
   // ---------------- Modal: product (chips + photos) ----------------
 
+  function bindProductPreorderConditions(wrapper, { product, isView = false, onOpenSelect } = {}) {
+    const preorderBlock = $("#pePreorderConditions", wrapper);
+    let savedPreorder = product?.preorder_settings_json;
+    let preorderLoadError = false;
+    if (typeof savedPreorder === "string") {
+      try { savedPreorder = JSON.parse(savedPreorder); }
+      catch (error) { preorderLoadError = true; console.error('Invalid product preorder settings', error); }
+    }
+    if (product?.sale_mode === "preorder" && !savedPreorder) preorderLoadError = true;
+    const preorderDraft = {
+      acceptance: savedPreorder?.acceptance?.mode || "any", receipt: savedPreorder?.receipt?.mode || "any",
+      acceptanceStart: savedPreorder?.acceptance?.start || "", acceptanceEnd: savedPreorder?.acceptance?.end || "",
+      start: savedPreorder?.receipt?.start || "", end: savedPreorder?.receipt?.end || "",
+      dates: new Set(savedPreorder?.receipt?.dates || []), weekdays: new Set(savedPreorder?.receipt?.weekdays || []),
+      leadHours: savedPreorder?.lead_hours ?? 48,
+      acceptanceMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+      receiptMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+    };
+    const acceptanceDate = preorderDraft.acceptanceStart;
+    const receiptDate = preorderDraft.start || [...preorderDraft.dates].sort()[0];
+    if (acceptanceDate) preorderDraft.acceptanceMonth = new Date(`${acceptanceDate.slice(0, 7)}-01T00:00:00`);
+    if (receiptDate) preorderDraft.receiptMonth = new Date(`${receiptDate.slice(0, 7)}-01T00:00:00`);
+    const weekLabels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    let closePreorderSelect = null;
+    function bindPreorderSelect(hostId, label, choices, onChange, initialValue = choices[0][0]) {
+      const host = $(hostId, wrapper);
+      if (!host) return;
+      host.classList.add("product-preorder-select");
+      host.innerHTML = `<div class="new-order-right-select-wrap product-fulfillment-select">
+        <button type="button" class="new-order-right-select-trigger" aria-label="${label}" aria-haspopup="listbox" aria-expanded="false"><span>${choices.find(([value]) => value === initialValue)?.[1] || choices[0][1]}</span><i class="fas fa-chevron-down"></i></button>
+        <div class="new-order-right-select-menu hidden" role="listbox" aria-label="${label}">${choices.map(([value, text]) => `<button type="button" class="new-order-right-select-option ${value === initialValue ? "is-selected" : ""}" data-value="${value}">${text}</button>`).join("")}</div></div>`;
+      const trigger = host.querySelector(".new-order-right-select-trigger");
+      const menu = host.querySelector(".new-order-right-select-menu");
+      const selectWrap = trigger.parentElement;
+      function close() {
+        selectWrap.classList.remove("is-open");
+        menu.classList.add("hidden");
+        trigger.setAttribute("aria-expanded", "false");
+        document.removeEventListener("click", outside, true);
+        if (closePreorderSelect === close) closePreorderSelect = null;
+      }
+      function outside(event) { if (!host.contains(event.target)) close(); }
+      trigger.disabled = isView;
+      trigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        const opening = menu.classList.contains("hidden");
+        closePreorderSelect?.();
+        if (!opening || isView) return;
+        onOpenSelect?.();
+        selectWrap.classList.add("is-open");
+        menu.classList.remove("hidden");
+        trigger.setAttribute("aria-expanded", "true");
+        closePreorderSelect = close;
+        document.addEventListener("click", outside, true);
+      });
+      menu.addEventListener("click", (event) => {
+        const option = event.target.closest("[data-value]");
+        if (!option || isView) return;
+        trigger.querySelector("span").textContent = option.textContent;
+        menu.querySelectorAll("[data-value]").forEach((item) => item.classList.toggle("is-selected", item === option));
+        onChange(option.dataset.value);
+        close();
+      });
+    }
+    function renderPreorderCalendar(kind) {
+      const host = $(kind === "acceptance" ? "#pePreorderAcceptanceCalendar" : "#pePreorderReceiptCalendar", wrapper);
+      if (!host) return;
+      const mode = preorderDraft[kind];
+      if (mode === "any") { host.innerHTML = ""; return; }
+      const month = preorderDraft[`${kind}Month`];
+      const year = month.getFullYear();
+      const monthIndex = month.getMonth();
+      const start = kind === "acceptance" ? preorderDraft.acceptanceStart : preorderDraft.start;
+      const end = kind === "acceptance" ? preorderDraft.acceptanceEnd : preorderDraft.end;
+      const cells = [];
+      for (let i = 0; i < (month.getDay() + 6) % 7; i++) cells.push('<span></span>');
+      for (let day = 1; day <= new Date(year, monthIndex + 1, 0).getDate(); day++) {
+        const iso = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        const selected = mode === "dates" ? preorderDraft.dates.has(iso) : iso === start || iso === end;
+        const inRange = mode === "period" && start && end && iso > start && iso < end;
+        cells.push(`<button type="button" class="new-order-right-calendar-cell ${selected ? "is-selected" : ""} ${inRange ? "is-in-range" : ""}" data-preorder-date="${iso}" aria-pressed="${Boolean(selected || inRange)}" aria-label="${iso}" ${isView ? "disabled" : ""}>${day}</button>`);
+      }
+      const summary = mode === "period" ? `${start || "Начало"} — ${end || "Окончание"}`
+        : `Выбрано дат: ${preorderDraft.dates.size}`;
+      host.innerHTML = `<div class="new-order-right-calendar">
+        <div class="new-order-right-calendar-head"><button type="button" class="new-order-right-calendar-nav" data-preorder-month="-1" aria-label="Предыдущий месяц">‹</button><div class="new-order-right-calendar-title">${escapeHtml(month.toLocaleDateString("ru-RU", { month: "long", year: "numeric" }))}</div><button type="button" class="new-order-right-calendar-nav" data-preorder-month="1" aria-label="Следующий месяц">›</button></div>
+        <div class="new-order-right-calendar-weekdays">${weekLabels.map((day) => `<span>${day}</span>`).join("")}</div>
+        <div class="new-order-right-calendar-grid">${cells.join("")}</div><small aria-live="polite">${summary}</small></div>`;
+    }
+    if (preorderBlock) {
+      const customHours = $("#pePreorderCustomHours", wrapper);
+      customHours.disabled = isView;
+      bindPreorderSelect("#pePreorderLead", "Минимальное время до получения", [["48", "До получения: 48 ч"], ["1", "До получения: 1 ч"], ["3", "До получения: 3 ч"], ["6", "До получения: 6 ч"], ["12", "До получения: 12 ч"], ["24", "До получения: 24 ч"], ["72", "До получения: 72 ч"], ["custom", "Другой интервал"]], (value) => {
+        const custom = value === "custom";
+        $("#pePreorderCustom", wrapper).classList.toggle("hidden", !custom);
+        customHours.closest(".product-preorder-lead").classList.toggle("is-editing", custom);
+        if (!custom) preorderDraft.leadHours = Number(value);
+        if (custom) customHours.focus();
+      }, [1, 3, 6, 12, 24, 48, 72].includes(preorderDraft.leadHours) ? String(preorderDraft.leadHours) : "custom");
+      customHours.value = String(preorderDraft.leadHours);
+      $("#pePreorderLead .new-order-right-select-trigger span", wrapper).textContent = `До получения: ${preorderDraft.leadHours} ч`;
+      function confirmCustomHours() {
+        if (isView) return;
+        if (!customHours.value || !customHours.validity.valid) {
+          customHours.focus();
+          customHours.reportValidity();
+          return;
+        }
+        preorderDraft.leadHours = customHours.valueAsNumber;
+        const trigger = $("#pePreorderLead .new-order-right-select-trigger", wrapper);
+        trigger.querySelector("span").textContent = `До получения: ${preorderDraft.leadHours} ч`;
+        $("#pePreorderCustom", wrapper).classList.add("hidden");
+        customHours.closest(".product-preorder-lead").classList.remove("is-editing");
+        trigger.focus();
+      }
+      $("#pePreorderCustomConfirm", wrapper).disabled = isView;
+      $("#pePreorderCustomConfirm", wrapper).addEventListener("click", confirmCustomHours);
+      customHours.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          confirmCustomHours();
+        }
+      });
+      bindPreorderSelect("#pePreorderAcceptance", "Приём предзаказов", [["any", "Без ограничений"], ["period", "Период"]], (value) => { preorderDraft.acceptance = value; renderPreorderCalendar("acceptance"); }, preorderDraft.acceptance);
+      bindPreorderSelect("#pePreorderReceipt", "Даты получения", [["any", "Любые даты"], ["period", "Период"], ["dates", "Отдельные даты"]], (value) => { preorderDraft.receipt = value; renderPreorderCalendar("receipt"); }, preorderDraft.receipt);
+      renderPreorderCalendar("acceptance");
+      renderPreorderCalendar("receipt");
+      const weekdays = $("#pePreorderWeekdays", wrapper);
+      weekdays.innerHTML = weekLabels.map((day, index) => `<button type="button" data-preorder-weekday="${index}" aria-pressed="${preorderDraft.weekdays.has(index)}" ${isView ? "disabled" : ""}>${day}</button>`).join("");
+      weekdays.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-preorder-weekday]");
+        if (!button || isView) return;
+        const day = Number(button.dataset.preorderWeekday);
+        if (preorderDraft.weekdays.has(day)) preorderDraft.weekdays.delete(day); else preorderDraft.weekdays.add(day);
+        button.setAttribute("aria-pressed", String(preorderDraft.weekdays.has(day)));
+      });
+      $("#pePreorderToggle", wrapper).addEventListener("click", (event) => {
+        const toggle = event.currentTarget;
+        const open = toggle.getAttribute("aria-expanded") !== "true";
+        toggle.setAttribute("aria-expanded", String(open));
+        toggle.setAttribute("aria-label", `${open ? "Свернуть" : "Развернуть"} условия предзаказа`);
+        $("#pePreorderBody", wrapper).classList.toggle("hidden", !open);
+        toggle.querySelector("i").className = `fas fa-chevron-${open ? "up" : "down"}`;
+        closePreorderSelect?.();
+      });
+      ["acceptance", "receipt"].forEach((kind) => {
+        const host = $(kind === "acceptance" ? "#pePreorderAcceptanceCalendar" : "#pePreorderReceiptCalendar", wrapper);
+        host.addEventListener("click", (event) => {
+          const nav = event.target.closest("[data-preorder-month]");
+          if (nav) {
+            const month = preorderDraft[`${kind}Month`];
+            preorderDraft[`${kind}Month`] = new Date(month.getFullYear(), month.getMonth() + Number(nav.dataset.preorderMonth), 1);
+            renderPreorderCalendar(kind);
+            return;
+          }
+          const button = event.target.closest("[data-preorder-date]");
+          if (!button || isView) return;
+          const date = button.dataset.preorderDate;
+          if (kind === "receipt" && preorderDraft.receipt === "dates") {
+            if (preorderDraft.dates.has(date)) preorderDraft.dates.delete(date); else preorderDraft.dates.add(date);
+          } else {
+            const startKey = kind === "acceptance" ? "acceptanceStart" : "start";
+            const endKey = kind === "acceptance" ? "acceptanceEnd" : "end";
+            if (!preorderDraft[startKey] || preorderDraft[endKey]) {
+              preorderDraft[startKey] = date;
+              preorderDraft[endKey] = "";
+            } else {
+              preorderDraft[endKey] = date < preorderDraft[startKey] ? preorderDraft[startKey] : date;
+              if (date < preorderDraft[startKey]) preorderDraft[startKey] = date;
+            }
+          }
+          renderPreorderCalendar(kind);
+        });
+      });
+    }
+
+    let saleMode = product?.sale_mode || 'order';
+    if ($('#pePreorderSaleMode', wrapper)) {
+      bindPreorderSelect('#pePreorderSaleMode', '\u0420\u0435\u0436\u0438\u043c \u043f\u0440\u043e\u0434\u0430\u0436\u0438', [['order', '\u0417\u0430\u043a\u0430\u0437'], ['preorder', '\u041f\u0440\u0435\u0434\u0437\u0430\u043a\u0430\u0437']], value => {
+        saleMode = value;
+        preorderBlock.classList.toggle('hidden', value !== 'preorder');
+      }, saleMode);
+      preorderBlock.classList.toggle('hidden', saleMode !== 'preorder');
+    }
+    return { getSaleMode: () => saleMode, closeSelect: () => closePreorderSelect?.(), loadError: preorderLoadError,
+      hasUnconfirmedInterval: () => Boolean($(".product-preorder-lead.is-editing", wrapper)),
+      getSettings: () => ({
+        version: 1, lead_hours: preorderDraft.leadHours,
+        acceptance: { mode: preorderDraft.acceptance, start: preorderDraft.acceptance === "period" ? preorderDraft.acceptanceStart || null : null, end: preorderDraft.acceptance === "period" ? preorderDraft.acceptanceEnd || null : null },
+        receipt: { mode: preorderDraft.receipt, start: preorderDraft.receipt === "period" ? preorderDraft.start || null : null, end: preorderDraft.receipt === "period" ? preorderDraft.end || null : null, dates: preorderDraft.receipt === "dates" ? [...preorderDraft.dates].sort() : [], weekdays: [...preorderDraft.weekdays].sort() },
+      }) };
+  }
+
   function openProductModal({ mode, product, host, advancedLoading = false, advancedReadyPromise = null } = {}) {
     const isEdit = mode === "edit";
     const isCreate = mode === "create";
@@ -15443,8 +15760,16 @@ const isViewMode = state.comboPanel.mode === "view";
           }
 
           const fulfillmentMode = normalizeProductFulfillmentMode(form.fulfillment_mode?.value);
+          if (preorderEditor.loadError) {
+            showToast('Не удалось прочитать условия предзаказа. Повторно откройте карточку товара.');
+            return false;
+          }
+          if (saleMode === "preorder" && preorderEditor.hasUnconfirmedInterval()) {
+            showToast('Подтвердите интервал часов галочкой.');
+            return false;
+          }
           if (fulfillmentMode === "made_to_order" && draftIngredients.size === 0) {
-            showToast('Для режима "Под заказ" добавьте состав товара.');
+            showToast('Для режима "По рецептуре" добавьте состав товара.');
             return false;
           }
 
@@ -15510,6 +15835,8 @@ const isViewMode = state.comboPanel.mode === "view";
             is_active: form.is_active.checked ? 1 : 0,
             site_visibility: form.site_visibility.checked ? 1 : 0,
             fulfillment_mode: fulfillmentMode,
+            sale_mode: saleMode,
+            preorder_settings_json: preorderEditor.getSettings(),
 
             // ✅ категории из chips
             category_ids: Array.from(draft.categories).filter((id) => Number.isFinite(id)),
@@ -15542,6 +15869,8 @@ const isViewMode = state.comboPanel.mode === "view";
                 is_active: payload.is_active,
                 site_visibility: payload.site_visibility,
                 fulfillment_mode: payload.fulfillment_mode,
+                sale_mode: payload.sale_mode,
+                preorder_settings_json: payload.preorder_settings_json,
                 stock_qty: payload.stock,
               }) || null;
               saveResult = await api(`/api/prod_products/${product.id}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -16132,6 +16461,61 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
 
+    const saleModeWrap = $("#peSaleModeWrap", wrapper);
+    const saleModeTrigger = $("#peSaleModeTrigger", wrapper);
+    const saleModeMenu = $("#peSaleModeMenu", wrapper);
+    const saleModeText = $("#peSaleModeText", wrapper);
+    const preorderBlock = $("#pePreorderConditions", wrapper);
+    let saleMode = product?.sale_mode || "order";
+    const preorderEditor = bindProductPreorderConditions(wrapper, { product, isView, onOpenSelect: () => {
+      closeSaleModeMenu(); closeFulfillmentModeMenu(); closeProductionZoneMenu();
+    } });
+    preorderBlock?.classList.toggle("hidden", saleMode !== "preorder");
+    if (saleModeText) saleModeText.textContent = saleMode === "preorder" ? "Предзаказ" : "Заказ";
+    saleModeMenu?.querySelectorAll("[data-value]").forEach((option) => option.classList.toggle("is-selected", option.dataset.value === saleMode));
+    function closeSaleModeMenu() {
+      saleModeWrap?.classList.remove("is-open");
+      saleModeMenu?.classList.add("hidden");
+      saleModeTrigger?.setAttribute("aria-expanded", "false");
+      document.removeEventListener("click", closeSaleModeOnOutsideClick, true);
+    }
+    function closeSaleModeOnOutsideClick(event) {
+      if (!saleModeWrap?.contains(event.target)) closeSaleModeMenu();
+    }
+    if (saleModeWrap && saleModeTrigger && saleModeMenu && saleModeText) {
+      saleModeTrigger.disabled = isView;
+      saleModeTrigger.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isView) return;
+        const nextOpen = !saleModeWrap.classList.contains("is-open");
+        saleModeWrap.classList.toggle("is-open", nextOpen);
+        saleModeMenu.classList.toggle("hidden", !nextOpen);
+        saleModeTrigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
+        if (nextOpen) {
+          closeFulfillmentModeMenu();
+          closeProductionZoneMenu();
+          document.addEventListener("click", closeSaleModeOnOutsideClick, true);
+        } else {
+          closeSaleModeMenu();
+        }
+      });
+      saleModeMenu.addEventListener("click", (event) => {
+        const option = event.target.closest("[data-value]");
+        if (!option || isView) return;
+        event.preventDefault();
+        event.stopPropagation();
+        saleModeText.textContent = option.textContent;
+        saleMode = option.dataset.value;
+        preorderBlock?.classList.toggle("hidden", option.dataset.value === "order");
+        preorderEditor.closeSelect();
+        saleModeMenu.querySelectorAll("[data-value]").forEach((item) => {
+          item.classList.toggle("is-selected", item === option);
+        });
+        closeSaleModeMenu();
+      });
+    }
+
     const fulfillmentWrap = $("#peFulfillmentModeWrap", wrapper);
     const fulfillmentTrigger = $("#peFulfillmentModeTrigger", wrapper);
     const fulfillmentMenu = $("#peFulfillmentModeMenu", wrapper);
@@ -16197,12 +16581,22 @@ const isViewMode = state.comboPanel.mode === "view";
       productionZoneWrap?.classList.remove("is-open");
       productionZoneMenu?.classList.add("hidden");
       productionZoneTrigger?.setAttribute("aria-expanded", "false");
+      document.removeEventListener("click", closeProductionZoneOnOutsideClick, true);
+    }
+
+    function closeProductionZoneOnOutsideClick(event) {
+      if (!productionZoneWrap?.contains(event.target)) closeProductionZoneMenu();
     }
 
     function closeFulfillmentModeMenu() {
       fulfillmentWrap?.classList.remove("is-open");
       fulfillmentMenu?.classList.add("hidden");
       fulfillmentTrigger?.setAttribute("aria-expanded", "false");
+      document.removeEventListener("click", closeFulfillmentModeOnOutsideClick, true);
+    }
+
+    function closeFulfillmentModeOnOutsideClick(event) {
+      if (!fulfillmentWrap?.contains(event.target)) closeFulfillmentModeMenu();
     }
 
     if (fulfillmentTrigger && fulfillmentMenu && fulfillmentSelect) {
@@ -16213,11 +16607,17 @@ const isViewMode = state.comboPanel.mode === "view";
         event.stopPropagation();
         if (isView) return;
         const nextOpen = !fulfillmentWrap?.classList.contains("is-open");
+        if (nextOpen) {
+          closeSaleModeMenu();
+          closeProductionZoneMenu();
+        }
         fulfillmentWrap?.classList.toggle("is-open", nextOpen);
         fulfillmentMenu.classList.toggle("hidden", !nextOpen);
         fulfillmentTrigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
         if (nextOpen) {
-          setTimeout(() => document.addEventListener("click", closeFulfillmentModeMenu, { once: true }), 0);
+          document.addEventListener("click", closeFulfillmentModeOnOutsideClick, true);
+        } else {
+          closeFulfillmentModeMenu();
         }
       });
       fulfillmentMenu.querySelectorAll("[data-value]").forEach((option) => {
@@ -16241,11 +16641,17 @@ const isViewMode = state.comboPanel.mode === "view";
         event.stopPropagation();
         if (isView) return;
         const nextOpen = !productionZoneWrap?.classList.contains("is-open");
+        if (nextOpen) {
+          closeSaleModeMenu();
+          closeFulfillmentModeMenu();
+        }
         productionZoneWrap?.classList.toggle("is-open", nextOpen);
         productionZoneMenu.classList.toggle("hidden", !nextOpen);
         productionZoneTrigger.setAttribute("aria-expanded", nextOpen ? "true" : "false");
         if (nextOpen) {
-          setTimeout(() => document.addEventListener("click", closeProductionZoneMenu, { once: true }), 0);
+          document.addEventListener("click", closeProductionZoneOnOutsideClick, true);
+        } else {
+          closeProductionZoneMenu();
         }
       });
       productionZoneMenu.addEventListener("click", (event) => {
@@ -23012,6 +23418,27 @@ const isViewMode = state.comboPanel.mode === "view";
       });
     }
 
+    productsBulkSaleModeTrigger?.addEventListener('click', () => {
+      if (state.productsBulkApplying) return;
+      const open = productsBulkSaleModeMenu.classList.contains('hidden');
+      closeProductsBulkSaleModeMenu();
+      if (!open) return;
+      closeProductsBulkProductionZoneMenu(); closeProductsBulkCategoryMenu(); closeProductsBulkMenu();
+      productsBulkSaleModeWrap.classList.add('is-open');
+      productsBulkSaleModeMenu.classList.remove('hidden');
+      productsBulkSaleModeTrigger.setAttribute('aria-expanded','true');
+      document.addEventListener('click',closeProductsBulkSaleModeOutside,true);
+    });
+    productsBulkSaleModeMenu?.addEventListener('click', event => {
+      const option = event.target.closest('[data-bulk-sale-mode]');
+      if (!option || state.productsBulkApplying) return;
+      closeProductsBulkSaleModeMenu();
+      if (option.dataset.bulkSaleMode === 'preorder') openProductsBulkPreorderSettings();
+      else {
+        state.productsBulkSaleMode = {mode:option.dataset.bulkSaleMode,settings:null};
+        syncProductsBulkActionsUi();
+      }
+    });
     if (productsBulkApplyBtn) {
       productsBulkApplyBtn.addEventListener("click", async () => {
         if (state.productsBulkApplying) return;
@@ -23035,7 +23462,7 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         state.productsBulkApplying = true;
         syncProductsBulkActionsUi();
-        const skippedNoIngredients = [];
+        const preparedUpdates = [];
         const failedNames = [];
         let activeProductNeedsRefresh = false;
         try {
@@ -23044,6 +23471,8 @@ const isViewMode = state.comboPanel.mode === "view";
               || (state.combosInCategory || []).find((item) => Number(item.id) === id);
             const comboPayload = {};
             if (Object.prototype.hasOwnProperty.call(payload, "is_active")) comboPayload.is_active = payload.is_active;
+            if (Object.prototype.hasOwnProperty.call(payload, 'sale_mode')) comboPayload.sale_mode = payload.sale_mode;
+            if (Object.prototype.hasOwnProperty.call(payload, 'preorder_settings_json')) comboPayload.preorder_settings_json = payload.preorder_settings_json;
             if (comboCategory) comboPayload.category_code = comboCategory.code;
             if (!Object.keys(comboPayload).length) continue;
             try {
@@ -23064,6 +23493,7 @@ const isViewMode = state.comboPanel.mode === "view";
                 const category = state.categories.find((item) => item.code === saved.category_code);
                 state.comboSetPanel.categoryIds = category ? [Number(category.id)] : [];
                 fillComboSetFormFromState();
+                bindComboSetPreorderConditions();
               }
             } catch (error) {
               console.error("Combo bulk update failed", error);
@@ -23073,27 +23503,9 @@ const isViewMode = state.comboPanel.mode === "view";
           for (const id of ids) {
             const product = state.products.find((item) => Number(item?.id) === id);
             if (!product) {
-              failedNames.push(String(id));
-              continue;
+              throw new Error(`PRODUCT_NOT_FOUND:${id}`);
             }
             const itemPayload = { ...payload };
-
-            if (
-              normalizeProductFulfillmentMode(itemPayload.fulfillment_mode) === "made_to_order" &&
-              normalizeProductFulfillmentMode(product.fulfillment_mode) !== "made_to_order"
-            ) {
-              try {
-                const ingredientsRes = await apiGetProductIngredients(id);
-                const ingredients = Array.isArray(ingredientsRes?.data) ? ingredientsRes.data : [];
-                if (!ingredients.length) {
-                  skippedNoIngredients.push(product.name || String(id));
-                  continue;
-                }
-              } catch (e) {
-                skippedNoIngredients.push(product.name || String(id));
-                continue;
-              }
-            }
 
             if (hasBulkCategoryAction) {
               let nextCategoryIds = null;
@@ -23104,8 +23516,7 @@ const isViewMode = state.comboPanel.mode === "view";
                 const nextKey = nextCategoryIds.slice().sort((a, b) => a - b).join(",");
                 if (currentKey !== nextKey) itemPayload.category_ids = nextCategoryIds;
               } catch (e) {
-                failedNames.push(product.name || String(id));
-                continue;
+                throw e;
               }
             }
 
@@ -23116,17 +23527,13 @@ const isViewMode = state.comboPanel.mode === "view";
 
             if (!Object.keys(itemPayload).length) continue;
 
-            try {
-              await api(`/api/prod_products/${id}`, {
-                method: "PATCH",
-                body: JSON.stringify(itemPayload),
-              });
-            } catch (e) {
-              failedNames.push(product.name || String(id));
-              continue;
-            }
-
+            preparedUpdates.push({id,...itemPayload});
+          }
+          if (preparedUpdates.length) await api("/api/prod_products/bulk", {method:"PATCH",body:JSON.stringify({items:preparedUpdates})});
+          for (const {id,...itemPayload} of preparedUpdates) {
+            const product = state.products.find(item=>Number(item.id)===id);
             applyProductsBulkPayloadToLocalProduct(product, itemPayload);
+            if (Object.prototype.hasOwnProperty.call(itemPayload,'sale_mode') && Number(state.selectedProductId || 0) === id) activeProductNeedsRefresh = true;
             if (Object.prototype.hasOwnProperty.call(itemPayload, "fulfillment_mode")) {
               syncProductEditorFulfillmentControl(id, itemPayload.fulfillment_mode);
               clearCachedProductDetails(id);
@@ -23155,10 +23562,6 @@ const isViewMode = state.comboPanel.mode === "view";
             combosInCategory: state.combosInCategory,
           });
           if (comboIds.length) schedulePersistProductsCache();
-          if (skippedNoIngredients.length) {
-            const suffix = skippedNoIngredients.length === 1 ? `: ${skippedNoIngredients[0]}` : ` (${skippedNoIngredients.length})`;
-            showToast(`У товара не поменялся режим продажи, нужно заполнить состав${suffix}`);
-          }
           if (failedNames.length) {
             const suffix = failedNames.length === 1 ? `: ${failedNames[0]}` : ` (${failedNames.length})`;
             showToast(`Не удалось применить действие к товару${suffix}`);

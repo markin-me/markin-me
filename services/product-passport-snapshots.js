@@ -2,7 +2,7 @@
 
 const catalogSync = require('./catalog-sync');
 
-const SNAPSHOT_SCHEMA_VERSION = 1;
+const SNAPSHOT_SCHEMA_VERSION = 3;
 const BUILD_BATCH_SIZE = 8;
 const memoryCache = new Map();
 const pendingBuilds = new Map();
@@ -134,7 +134,7 @@ async function readPassports({ db, tenantId, storeId, productIds }) {
   });
   if (missing.length) {
     const [rows] = await db.query(
-      `SELECT product_id, passport_json, status
+      `SELECT product_id, passport_json, status, schema_version
        FROM prod_product_passport_snapshots
        WHERE tenant_id=? AND store_id=? AND product_id IN (?)`,
       [tenantId, storeId, missing]
@@ -144,6 +144,7 @@ async function readPassports({ db, tenantId, storeId, productIds }) {
       const productId = Number(row.product_id || 0);
       const passport = parseSnapshot(row.passport_json);
       if (!(productId > 0) || !passport) continue;
+      if (Number(row.schema_version) !== SNAPSHOT_SCHEMA_VERSION) continue;
       found.add(productId);
       data[String(productId)] = passport;
       memoryCache.set(cacheKey(tenantId, storeId, productId), passport);
@@ -208,7 +209,7 @@ async function markRelatedProductsDirty({ db, tenantId, storeId, productIds, cat
   return related;
 }
 
-async function prepareRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert' }) {
+async function prepareRelatedProductsDirty({ db, tenantId, storeId, productIds, catalogChangeScope = null, operation = 'upsert', pendingCatalogChanges = null }) {
   const related = await resolveRelatedProductIds({ db, tenantId, productIds });
   if (!related.length) return [];
   await db.query(
@@ -220,7 +221,7 @@ async function prepareRelatedProductsDirty({ db, tenantId, storeId, productIds, 
   );
   if (catalogChangeScope === 'store') {
     await catalogSync.recordScopeChanges({
-      db, tenantId, storeId, entityType: 'product', operation, deferEmit: true,
+      db, tenantId, storeId, entityType: 'product', operation, deferEmit: true, pendingChanges: pendingCatalogChanges,
     }, related);
   }
   return related;

@@ -120,7 +120,8 @@ function applyCardState(card, product, qty, dir, context = {}) {
     const plusBlockedByLimit = stockAvailable && Number.isFinite(remaining) && remaining <= 0;
     const plusBlockedByIngredients =
       stockAvailable && Number.isFinite(pid) && pid > 0 ? (context.isIngredientBlocked || runtime.isProductBlockedByIngredientRequirements)(pid) : false;
-    const availableForAdd = stockAvailable && !plusBlockedByLimit && !plusBlockedByIngredients;
+    const availableForAdd = stockAvailable && !plusBlockedByLimit && !plusBlockedByIngredients
+      && runtime.getProductPreorderInfo(product)?.isOpen !== false;
 
     const hasCartQty = Number(qty || 0) > 0;
     const unavailableOnly = !availableForAdd && !hasCartQty;
@@ -183,7 +184,8 @@ function applyCardState(card, product, qty, dir, context = {}) {
           if (mediaPill) media.appendChild(mediaPill);
         } else {
           mediaPill.classList.toggle("is-sold-out", mediaPillLabel === "Раскупили");
-          mediaPill.innerHTML = `<span class="sp-media-pill__text">${runtime.escapeHtml(mediaPillLabel)}</span>${mediaPillLabel === "Настроить" ? '<span class="sp-media-pill__chevron" aria-hidden="true">›</span>' : ""}`;
+          mediaPill.classList.toggle("is-preorder", runtime.getProductPreorderInfo(product)?.status === 'open' && availableForAdd);
+          updateCatalogMediaPillContent(mediaPill, product, mediaPillLabel);
         }
       } else if (mediaPill) {
         mediaPill.remove();
@@ -198,13 +200,107 @@ function createCatalogMediaPill(product, availableForAdd = true) {
     pill.className = "sp-media-pill";
     pill.setAttribute("data-media-pill", "1");
     pill.classList.toggle("is-sold-out", label === "Раскупили");
-    pill.innerHTML = `<span class="sp-media-pill__text">${runtime.escapeHtml(label)}</span>${label === "Настроить" ? '<span class="sp-media-pill__chevron" aria-hidden="true">›</span>' : ""}`;
+    pill.classList.toggle("is-preorder", runtime.getProductPreorderInfo(product)?.status === 'open' && availableForAdd);
+    updateCatalogMediaPillContent(pill, product, label);
     return pill;
   }
 
+function getPreorderWeekdaysHtml(weekdays) {
+    const days = Array.isArray(weekdays)
+      ? [...new Set(weekdays.filter(day => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b)
+      : [];
+    const showDays = days.length > 0 && days.length < 7;
+    let daysLabel = '';
+    if (showDays) {
+      const names = ['\u041f\u043d', '\u0412\u0442', '\u0421\u0440', '\u0427\u0442', '\u041f\u0442', '\u0421\u0431', '\u0412\u0441'];
+      const groups = [];
+      for (const day of days) {
+        const last = groups[groups.length - 1];
+        if (last && last[last.length - 1] + 1 === day) last.push(day);
+        else groups.push([day]);
+      }
+      const isRange = groups.length === 1 && groups[0].length >= 3;
+      daysLabel = isRange
+        ? `${days[0] === 1 || days[0] === 2 ? '\u0441\u043e' : '\u0441'} ${names[days[0]]} \u043f\u043e ${names[days[days.length - 1]]}`
+        : `\u043d\u0430 ${groups.map(group => group.length >= 3
+          ? `${names[group[0]]}\u2013${names[group[group.length - 1]]}`
+          : group.map(day => names[day]).join(', ')).join(', ')}`;
+    }
+    const daysHtml = showDays ? runtime.escapeHtml(daysLabel).replace(/\u041f\u043d|\u0412\u0442|\u0421\u0440|\u0427\u0442|\u041f\u0442|\u0421\u0431|\u0412\u0441/g, day => `<strong>${day}</strong>`) : '';
+    return daysHtml;
+  }
+
+function updateCatalogMediaPillContent(pill, product, label) {
+    const weekdays = runtime.getProductPreorderInfo(product)?.settings?.receipt?.weekdays;
+    const daysHtml = pill.classList.contains('is-preorder') ? getPreorderWeekdaysHtml(weekdays) : '';
+    const showDays = Boolean(daysHtml);
+    pill.classList.toggle('has-preorder-weekdays', showDays);
+    const chevron = label === '\u041d\u0430\u0441\u0442\u0440\u043e\u0438\u0442\u044c' ? '<span class="sp-media-pill__chevron" aria-hidden="true">\u203a</span>' : '';
+    pill.innerHTML = `<span class="sp-media-pill__text">${runtime.escapeHtml(label)}${showDays ? ` ${daysHtml}` : ''}</span>${chevron}`;
+  }
+
 function getCatalogMediaPillLabel(product, availableForAdd = true, qty = 0) {
+    const preorder = runtime.getProductPreorderInfo(product);
+    if (preorder && !preorder.isOpen) return preorder.label;
     if (!availableForAdd) return Number(qty || 0) > 0 ? "Больше нет" : "Раскупили";
+    if (preorder) return preorder.label;
     return runtime.isCatalogProductConfigurable(product) ? "Настроить" : "";
+  }
+
+function getProductPreorderInfo(product) {
+    if (runtime.showPreorderMediaLabel !== true || product?.sale_mode !== 'preorder') return null;
+    let settings = product.preorder_settings_json;
+    try { if (typeof settings === 'string') settings = JSON.parse(settings); }
+    catch (error) { console.error('Invalid preorder settings',product.id,error); }
+    const today = runtime.getPreorderToday?.();
+    const acceptance = settings?.acceptance;
+    if (!today || !['any','period'].includes(acceptance?.mode)) return { settings, status:'invalid', isOpen:false, label:'Предзаказ недоступен' };
+    if (acceptance.mode === 'period') {
+      if (!acceptance.start || !acceptance.end) return { settings, status:'invalid', isOpen:false, label:'Предзаказ недоступен' };
+      if (today < acceptance.start) return { settings, status:'upcoming', isOpen:false, label:`Предзаказ с ${acceptance.start.slice(8,10)}.${acceptance.start.slice(5,7)}` };
+      if (today > acceptance.end) return { settings, status:'closed', isOpen:false, label:'Приём завершён' };
+    }
+    return { settings, status:'open', isOpen:true, label:'По предзаказу' };
+  }
+
+function getProductPreorderDescription(product) {
+    const info = runtime.getProductPreorderInfo(product);
+    if (!info?.settings?.receipt) return [];
+    const settings = info.settings, receipt = settings.receipt;
+    const today = runtime.getPreorderToday?.();
+    const formatDate = value => new Date(`${value}T12:00:00Z`).toLocaleDateString('ru-RU', { day:'numeric',month:'long',timeZone:'UTC', ...(value.slice(0,4) !== today?.slice(0,4) ? {year:'numeric'} : {}) });
+    const formatPeriod = (start, end) => start.slice(0,7) === end.slice(0,7)
+      ? `${Number(start.slice(8))}–${formatDate(end)}` : `${formatDate(start)} — ${formatDate(end)}`;
+    const lines = [];
+    if (settings.acceptance.mode === 'period') {
+      lines.push(`Приём предзаказов: ${formatPeriod(settings.acceptance.start, settings.acceptance.end)}`);
+    }
+    if (receipt.mode === 'period') {
+      lines.push(`Период получения: ${formatPeriod(receipt.start, receipt.end)}`);
+    } else if (receipt.mode === 'dates') {
+      const dates = [...new Set(receipt.dates)].sort().filter(date => !receipt.weekdays.length || receipt.weekdays.includes((new Date(`${date}T12:00:00Z`).getUTCDay()+6)%7));
+      lines.push(dates.length ? `Получение: ${dates.map(formatDate).join(', ')}` : 'Нет доступных дат получения');
+    } else lines.push('Получение по предзаказу');
+    const days = [...new Set(receipt.weekdays || [])].sort((a,b)=>a-b);
+    if (days.length && receipt.mode !== 'dates') {
+      const plural = ['понедельникам','вторникам','средам','четвергам','пятницам','субботам','воскресеньям'];
+      const from = ['с понедельника','со вторника','со среды','с четверга','с пятницы','с субботы','с воскресенья'];
+      const until = ['понедельник','вторник','среду','четверг','пятницу','субботу','воскресенье'];
+      const groups = [];
+      for (const day of days) {
+        const last = groups[groups.length-1];
+        if (last && last[last.length-1]+1 === day) last.push(day); else groups.push([day]);
+      }
+      const parts = groups.map(group => group.length >= 3 ? `${from[group[0]]} по ${until[group[group.length-1]]}` : `по ${group.map(day=>plural[day]).join(' и ')}`);
+      const text = parts.join(' и ');
+      if (receipt.mode === 'period') lines[lines.length-1] += ` (${text})`;
+      else lines[lines.length-1] = `Получение: ${text}`;
+    }
+    const hours = settings.lead_hours;
+    const hourWord = hours%100 >= 11 && hours%100 <= 14 ? 'часов' : hours%10 === 1 ? 'час' : hours%10 >= 2 && hours%10 <= 4 ? 'часа' : 'часов';
+    lines.push(`Оформляйте минимум за ${hours} ${hourWord} до получения`);
+    if (hours < 24) lines.push('Получение — начиная с завтрашнего дня');
+    return lines;
   }
 
 function isCatalogProductConfigurable(product) {
@@ -385,6 +481,8 @@ function animateNumber(el, newValue, dir) {
 function createCatalogComboCard(combo, options = {}) {
     const comboId = Number(combo.id);
     const onOpen = options.onOpen || runtime.openComboDetails;
+    let preorder = runtime.getProductPreorderInfo(combo);
+    let canOrder = preorder?.isOpen !== false && combo.is_available !== false && Number(combo.is_available ?? 1) !== 0;
     const card = document.createElement("article");
     card.className = "sp-card sp-card--combo";
     card.setAttribute("data-combo-id", String(comboId));
@@ -496,7 +594,11 @@ function createCatalogComboCard(combo, options = {}) {
     if (comboDiscountBadge) media.appendChild(comboDiscountBadge);
     const comboMediaPill = document.createElement("div");
     comboMediaPill.className = "sp-media-pill";
-    comboMediaPill.innerHTML = '<span class="sp-media-pill__text">Собрать комбо</span><span class="sp-media-pill__chevron" aria-hidden="true">›</span>';
+    if (preorder) {
+      comboMediaPill.classList.toggle("is-preorder", preorder.status === "open");
+      updateCatalogMediaPillContent(comboMediaPill, combo, preorder.label);
+    }
+    if (!preorder) comboMediaPill.innerHTML = '<span class="sp-media-pill__text">Собрать комбо</span><span class="sp-media-pill__chevron" aria-hidden="true">›</span>';
     media.appendChild(comboMediaPill);
 
     card.appendChild(media);
@@ -521,20 +623,35 @@ function createCatalogComboCard(combo, options = {}) {
       variant: "buy",
       centerHtml: `<span class="sp-current-price">от ${runtime.catalogMoneyNoKopeks(minPrice)} ₽</span>`,
       minusEnabled: false,
-      plusEnabled: true,
+      plusEnabled: canOrder,
     });
     pill.classList.add("is-empty", "sp-combo-pill");
     bottom.appendChild(pill);
     info.appendChild(bottom);
     card.appendChild(info);
+    const syncPreorderState = () => {
+      preorder = runtime.getProductPreorderInfo(combo);
+      canOrder = preorder?.isOpen !== false && combo.is_available !== false && Number(combo.is_available ?? 1) !== 0;
+      btnPlus.disabled = !canOrder;
+      btnPlus.classList.toggle('is-disabled', !canOrder);
+      if (preorder) {
+        comboMediaPill.classList.toggle('is-preorder', preorder.status === 'open');
+        updateCatalogMediaPillContent(comboMediaPill, combo, preorder.label);
+      }
+    };
+    card.__syncPreorderState = syncPreorderState;
+    syncPreorderState();
+
 
     btnPlus.addEventListener("click", (e) => {
       e.stopPropagation();
-      onOpen(comboId);
+      syncPreorderState();
+      if (canOrder) onOpen(comboId);
     });
     card.addEventListener("click", (e) => {
       if (!e.target.closest(".qty-pill")) {
-        onOpen(comboId);
+        syncPreorderState();
+      if (canOrder) onOpen(comboId);
       }
     });
     const warmComboDetailsOnIntent = () => {
@@ -568,7 +685,7 @@ function createCatalogProductCard(p, overrides = {}) {
     };
     const id = Number(p.id);
     const qty = context.getQty(id);
-    const available = context.isAvailable(p);
+    const available = context.isAvailable(p) && runtime.getProductPreorderInfo(p)?.isOpen !== false;
     const photos = runtime.safePhotos(p);
     const mainPhoto = photos[0] || "";
     const gridPhoto = p.photo_thumb || mainPhoto || "";
@@ -716,5 +833,5 @@ function getCatalogProductTitle(product) {
     return [variantLabel, name].filter(Boolean).join(" ") || name;
   }
 
-  return { startComboGridRotation, createComboGridImageNode, applyCardState, createCatalogMediaPill, getCatalogMediaPillLabel, isCatalogProductConfigurable, syncCatalogUnitPriceLabel, catalogMoneyNoKopeks, catalogCenterHtml, syncCatalogProductDiscountBadge, getCatalogProductDiscountBadge, formatCatalogDiscountBadgeAmount, animateNumber, createCatalogComboCard, getCatalogComboDiscountBadge, createCatalogProductCard, getCatalogProductDefaultLines, getCatalogProductTitle };
+  return { getPreorderWeekdaysHtml, startComboGridRotation, createComboGridImageNode, applyCardState, createCatalogMediaPill, getCatalogMediaPillLabel, getProductPreorderInfo, getProductPreorderDescription, isCatalogProductConfigurable, syncCatalogUnitPriceLabel, catalogMoneyNoKopeks, catalogCenterHtml, syncCatalogProductDiscountBadge, getCatalogProductDiscountBadge, formatCatalogDiscountBadgeAmount, animateNumber, createCatalogComboCard, getCatalogComboDiscountBadge, createCatalogProductCard, getCatalogProductDefaultLines, getCatalogProductTitle };
 });

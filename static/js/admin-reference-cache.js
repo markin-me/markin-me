@@ -5,14 +5,20 @@
 
   const memory = new Map();
   const pending = new Map();
+  const consumers = new Map();
+  const networkVerified = new Set();
   const generations = new Map();
   let runtimeGeneration = 0;
   const definitions = {
-    "delivery-settings": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000, refreshAfterMs: 60 * 1000 },
-    "checkout-address-mode": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000, refreshAfterMs: 60 * 1000 },
-    "print-options": { version: 2, ttlMs: 7 * 24 * 60 * 60 * 1000, refreshAfterMs: 60 * 1000 },
+    "delivery-settings": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000 },
+    "checkout-address-mode": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000 },
+    "print-options": { version: 2, ttlMs: 7 * 24 * 60 * 60 * 1000 },
     "store-time": { version: 1, ttlMs: 24 * 60 * 60 * 1000 },
     "payment-methods": { version: 1, ttlMs: 12 * 60 * 60 * 1000 },
+    "order-delivery-types": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000 },
+    "order-time-options": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000 },
+    "order-statuses": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000 },
+    "production-zones": { version: 1, ttlMs: 7 * 24 * 60 * 60 * 1000 },
     stores: { version: 1, ttlMs: 2 * 60 * 60 * 1000 },
   };
 
@@ -54,6 +60,7 @@
       if (scope && currentScope && currentScope.namespace === scope.namespace
         && generation === (generations.get(key) || 0) && startedRuntimeGeneration === runtimeGeneration) {
         await scope.set("value", data, { ttlMs: definitions[name].ttlMs }).catch(() => false);
+        networkVerified.add(name);
         memory.set(key, { data, stale: false, expiresAt: Date.now() + (definitions[name].refreshAfterMs || definitions[name].ttlMs) });
         if (cachedData !== null && !sameValue(cachedData, data) && typeof options.onUpdate === "function") {
           options.onUpdate(data);
@@ -72,6 +79,7 @@
     if (!definition || !options || typeof options.load !== "function") {
       throw new Error(`UNKNOWN_ADMIN_REFERENCE:${name}`);
     }
+    consumers.set(name, options);
     const scope = getScope(name);
     if (!scope) return loadNetwork(name, options, null, null);
     const key = runtimeKey(name, scope);
@@ -90,7 +98,7 @@
     }
     if (entry) {
       if (entry.stale && window.navigator.onLine !== false) {
-        loadNetwork(name, options, scope, entry.data).catch(() => {});
+        loadNetwork(name, options, scope, entry.data).catch(error => console.error('Reference refresh failed:', name, error));
       }
       return entry.data;
     }
@@ -123,8 +131,64 @@
   function resetRuntime() {
     runtimeGeneration += 1;
     memory.clear();
-    pending.clear();
+    pending.clear(); networkVerified.clear();
   }
+
+  let referenceCursor = 0, referenceEpoch = null, referenceUnsubscribe = null;
+  let referenceSerial = Promise.resolve();
+  async function startReferenceEvents() {
+    referenceUnsubscribe?.(); referenceUnsubscribe = null;
+    const cache = window.AdminPersistentCache?.scope({ domain: 'admin:reference-events', version: 1 });
+    if (!cache?.complete || !window.localStorage.getItem('authToken')) return;
+    const stored = await cache.get('cursor');
+    if (cache.namespace !== window.AdminPersistentCache.scope({ domain: 'admin:reference-events', version: 1 }).namespace) return;
+    referenceCursor = Number(stored?.cursor || 0); referenceEpoch = stored?.epoch || null;
+    referenceUnsubscribe = window.AdminPersistentCache.realtime.subscribe('references', () => ({ since: referenceCursor, epoch: referenceEpoch, context: document.body?.dataset?.adminActivePage === 'cash' ? 'cash' : 'orders' }), message => {
+      if (message.type === 'connection.closed') return;
+      if (message.type === 'references.error') { console.error('Reference subscription failed:', message.error); return; }
+      referenceSerial = referenceSerial.then(async () => {
+        if (cache.namespace !== window.AdminPersistentCache.scope({ domain: 'admin:reference-events', version: 1 }).namespace) return;
+        const names = new Set();
+        const notifications = [];
+        const reset = message.reset_required || message.type === 'references.invalidate' || (message.type === 'references.ready' && !referenceEpoch);
+        if (reset) referenceCursor = 0;
+        if (reset) Object.keys(definitions).forEach(name => {
+          if (referenceEpoch || !networkVerified.has(name)) names.add(name);
+        });
+        const changes = message.type === 'references.event' ? [message.event] : message.changes || [];
+        for (const event of changes) {
+          const storeId = Number(event.data?.store_id || 0);
+          if (!storeId || storeId === Number(window.AdminPersistentCache.currentIdentity().storeId)) {
+            (event.data?.names || []).forEach(name => names.add(name));
+            notifications.push(event.data || {});
+          }
+          referenceCursor = Math.max(referenceCursor, Number(event.id || 0));
+        }
+        for (const name of names) {
+          if (!definitions[name]) continue;
+          const previous = memory.get(runtimeKey(name, getScope(name)))?.data || null;
+          await invalidateReference(name);
+          const options = consumers.get(name);
+          if (options && typeof options.onUpdate === 'function' && options.isActive?.() !== false) {
+            void loadNetwork(name, options, getScope(name), previous).catch(error => console.error('Reference event refresh failed:', name, error));
+          }
+        }
+        notifications.forEach(detail => document.dispatchEvent(new CustomEvent('admin:reference-changed', { detail })));
+        if (reset) document.dispatchEvent(new CustomEvent('admin:reference-changed', { detail: { names: ['client-benefits', 'order-references', 'expense-documents'], resync: true } }));
+        if (message.type === 'references.ready') {
+          referenceEpoch = message.epoch; referenceCursor = Math.max(referenceCursor, Number(message.cursor || 0));
+        }
+        await cache.set('cursor', { epoch: referenceEpoch, cursor: referenceCursor });
+      }).catch(error => console.error('Reference event apply failed:', error));
+      return referenceSerial;
+    });
+  }
+  function resetReferenceEvents() { resetRuntime(); consumers.clear(); void startReferenceEvents().catch(console.error); }
+  document.addEventListener('tenantStoreChanged', resetReferenceEvents);
+  window.addEventListener('storage', event => {
+    if (['authToken', 'activeStoreId', 'user', 'tenant'].includes(event.key)) resetReferenceEvents();
+  });
+  void startReferenceEvents().catch(console.error);
 
   window.AdminReferenceCache = {
     getOrLoadReference,

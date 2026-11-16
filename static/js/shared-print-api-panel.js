@@ -1128,35 +1128,17 @@ function schedulePrintRealtimeRefresh(change){
     }
 
 function startPrintRealtime(){
-      if(printRealtimeSocket||printRealtimeReconnect)return;
-      const token=localStorage.getItem('authToken');if(!token)return;
-      const socket=new WebSocket(`${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/api/admin/orders-ws`);printRealtimeSocket=socket;
-      socket.addEventListener('message',event=>{
-        if(socket!==printRealtimeSocket)return;
-        let message;try{message=JSON.parse(event.data);}catch(error){console.error('Некорректное событие печати:',error);return;}
-        if(message.type==='ready')socket.send(JSON.stringify({type:'print.subscribe',token}));
-        if(message.type==='print.ready'){
-          const restored=printRealtimeConnected;printRealtimeConnected=true;
-          // One snapshot after subscription prevents a gap between initial HTTP load and subscribing.
-          schedulePrintRealtimeRefresh({kind:'resync'});
-          if(restored&&printQueueBody?.querySelector('.print-queue-toolbar'))setPrintQueueLoadStatus('');
+      if (printRealtimeSocket) return;
+      if (!window.AdminPersistentCache?.realtime) throw new Error('ADMIN_REALTIME_UNAVAILABLE');
+      printRealtimeSocket = window.AdminPersistentCache.realtime.subscribe('print', () => ({}), message => {
+        if (message.type === 'print.ready') {
+          printRealtimeConnected = true;
+          schedulePrintRealtimeRefresh({ kind: 'resync' });
         }
-        if(message.type==='print.changed')schedulePrintRealtimeRefresh(message);
-      });
-      socket.addEventListener('error',()=>socket.close());
-      socket.addEventListener('close',event=>{
-        if(socket!==printRealtimeSocket)return;printRealtimeSocket=null;
-        if(printQueueBody?.querySelector('.print-queue-toolbar'))setPrintQueueLoadStatus('Связь realtime потеряна. Показаны последние полученные данные.');
-        if(event.code!==1008&&localStorage.getItem('authToken')===token){printRealtimeReconnect=setTimeout(()=>{printRealtimeReconnect=null;startPrintRealtime();},2000);}
+        if (message.type === 'print.changed') schedulePrintRealtimeRefresh(message);
+        if (message.type === 'connection.closed') printRealtimeConnected = false;
       });
     }
-
-window.addEventListener('storage',event=>{
-      if(event.key!=='authToken')return;
-      clearTimeout(printRealtimeReconnect);printRealtimeReconnect=null;
-      const socket=printRealtimeSocket;printRealtimeSocket=null;socket?.close();
-      if(event.newValue)startPrintRealtime();
-    });
 
 async function loadPrintApiCards() {
       try {

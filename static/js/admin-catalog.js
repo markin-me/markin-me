@@ -51,6 +51,7 @@
   let scope = null;
   let previousReadScope = null;
   let scopeGeneration = 0;
+  let effectiveConfigGeneration = 0;
   let initPromise = null;
   let persistTimer = null;
   let persistPromise = null;
@@ -143,6 +144,7 @@
       editorReady,
       dataVersion: passport?.revision?.data_version || null,
       editorSchemaVersion: passport?.editor?.schema_version || null,
+      preorderFields: Object.prototype.hasOwnProperty.call(passport?.product || {}, "preorder_settings_json") && ["order", "preorder"].includes(passport?.product?.sale_mode),
       revision: passport?.revision?.revision || passport?.revision?.updated_at || null,
     };
   }
@@ -152,6 +154,7 @@
       row && typeof row === "object"
       && normalizeId(row.productId) === normalizeId(id)
       && row.orderReady === true
+      && row.preorderFields === true
       && row.dataVersion === "full-product-passport-v1"
     );
   }
@@ -803,6 +806,8 @@
     const productId = normalizeId(passport.product.id ?? passport.product.product_id);
     return Boolean(
       productId
+      && ["order", "preorder"].includes(passport.product.sale_mode)
+      && Object.prototype.hasOwnProperty.call(passport.product, "preorder_settings_json")
       && passport.stock && typeof passport.stock === "object"
       && passport.availability && typeof passport.availability === "object"
       && ((passport.units && typeof passport.units === "object" && Array.isArray(passport.unitConversions))
@@ -1594,6 +1599,8 @@
   function isComboReady(comboId, options = {}) {
     const id = normalizeId(comboId);
     if (!id || !combosById.has(id) || !comboRelationsById.has(id)) return false;
+    const combo = combosById.get(id);
+    if (!['order', 'preorder'].includes(combo.sale_mode) || !Object.prototype.hasOwnProperty.call(combo, 'preorder_settings_json')) return false;
     const relations = comboRelationsById.get(id) || [];
     if (relations.some((relation) => !comboBlocksById.has(relation.blockId))) return false;
     const requireEditor = options.requiredCompleteness === "editor-ready";
@@ -1659,6 +1666,7 @@
         Number(product.is_active ?? product.active ?? 1) === 1
         && Number(product.site_visibility ?? product.visible ?? 1) === 1
         && product.is_available === true
+        && (combo.sale_mode === 'preorder' || product.sale_mode !== 'preorder')
       )),
     }));
     const isAvailable = blocks.every((block) => block.products.length >= Math.max(1, Number(block.min_select || 1)));
@@ -2396,6 +2404,48 @@
     foregroundQuietUntil = 0;
   }
 
+  function effectiveStockConfigContext() {
+    return { namespace: scope?.namespace, generation: scopeGeneration, configGeneration: effectiveConfigGeneration,
+      revision: revision(manifest.durableRevision), synchronized: syncState === "online" };
+  }
+  function isCurrentEffectiveStockConfigContext(context) {
+    const current = effectiveStockConfigContext();
+    return context?.synchronized && current.synchronized && context.namespace === current.namespace
+      && context.generation === current.generation && context.configGeneration === current.configGeneration
+      && context.revision === current.revision;
+  }
+  async function readEffectiveStockConfigs(productIds) {
+    await init();
+    const context = effectiveStockConfigContext();
+    if (!scope?.complete || !context.synchronized) return {};
+    const targetScope = scope;
+    const ids = uniqueIds(productIds);
+    const records = await loadPersistentRecords(ids.map(id => `effective-stock:${id}`), targetScope, context.generation);
+    if (!isCurrentEffectiveStockConfigContext(context)) return {};
+    const result = {};
+    for (const id of ids) {
+      const record = records.get(`effective-stock:${id}`);
+      if (record?.revision === context.revision && typeof record.data?.is_fulfillable === "boolean") result[id] = record.data;
+    }
+    return result;
+  }
+  async function writeEffectiveStockConfigs(rows, context) {
+    if (!scope?.complete || !isCurrentEffectiveStockConfigContext(context)) return false;
+    const targetScope = scope;
+    await Promise.all(Object.entries(rows).map(async ([id, data]) => {
+      if (!(Number(id) > 0) || typeof data?.is_fulfillable !== "boolean") return;
+      await targetScope.set(`effective-stock:${id}`, { revision: context.revision, data }, { ttlMs: RECORD_TTL_MS });
+      if (!isCurrentEffectiveStockConfigContext(context)) await targetScope.remove(`effective-stock:${id}`);
+    }));
+    return isCurrentEffectiveStockConfigContext(context);
+  }
+  async function invalidateEffectiveStockConfigs(productIds) {
+    effectiveConfigGeneration += 1;
+    const targetScope = scope;
+    if (!targetScope?.complete) return;
+    await Promise.all(uniqueIds(productIds || []).map(id => targetScope.remove(`effective-stock:${id}`)));
+  }
+
   function subscribe(listener) {
     if (typeof listener !== "function") return function () {};
     listeners.add(listener);
@@ -2418,6 +2468,7 @@
     getTrackedCoverageCategoryIds, getCoverageTargetIds, startDownloadJob, resumeDownloadJob, getDownloadJob, cancelDownloadJob,
     beginForegroundWork, endForegroundWork, withForegroundWork,
     getRootCategoryId, getDescendantCategoryIds, subscribe, getScope, clearRuntime,
+    effectiveStockConfigContext, readEffectiveStockConfigs, writeEffectiveStockConfigs, invalidateEffectiveStockConfigs,
     getCombo, getComboForOrder, getAllCombos, getAffectedComboIds, getAffectedComboIdsForBlocks, getComboBlock, getAllComboBlocks, upsertComboBlock, upsertComboBundle, upsertComboBundles, removeCombo, removeComboBlock, ensureComboBlocks,
     ensureCombos, ensureAllCombos, ensureCombosForCategoryCodes, isComboReady,
     startSync, stopSync, reconcile, getSyncState,

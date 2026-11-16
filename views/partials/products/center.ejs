@@ -102,6 +102,17 @@
               </div>
             </div>
           </div>
+          <div class="products-bulk-production-zone-control">
+            <span class="products-bulk-production-zone-label">Режим продажи</span>
+            <div class="products-bulk-production-zone-select-wrap" id="productsBulkSaleModeWrap">
+              <button class="products-bulk-production-zone-trigger" type="button" id="productsBulkSaleModeTrigger" aria-label="Режим продажи" aria-haspopup="menu" aria-expanded="false"><span id="productsBulkSaleModeText">Не менять</span><i class="fas fa-chevron-down" aria-hidden="true"></i></button>
+              <div class="products-bulk-production-zone-menu hidden" id="productsBulkSaleModeMenu" role="menu">
+                <button class="products-bulk-production-zone-option" type="button" data-bulk-sale-mode="" role="menuitem">Не менять</button>
+                <button class="products-bulk-production-zone-option" type="button" data-bulk-sale-mode="order" role="menuitem">Заказ</button>
+                <button class="products-bulk-production-zone-option" type="button" data-bulk-sale-mode="preorder" role="menuitem">Предзаказ…</button>
+              </div>
+            </div>
+          </div>
           <div class="products-bulk-category-control">
             <label class="products-bulk-category-label" for="productsBulkCategoryMode">Категории</label>
             <select class="control control-sm products-bulk-category-select native-hidden" id="productsBulkCategoryMode" aria-label="Категории">
@@ -142,10 +153,10 @@
                 <button type="button" data-bulk-choice="" aria-pressed="true" title="Не менять" aria-label="Не менять">—</button>
                 <button type="button" data-bulk-choice="infinite_stock" aria-pressed="false">Бесконечный</button>
               </div>
-              <div class="products-bulk-switch" role="group" aria-label="Со склада / Под заказ">
-                <button type="button" data-bulk-choice="fulfillment_stock" aria-pressed="false">Со склада</button>
+              <div class="products-bulk-switch" role="group" aria-label="Готовый товар / По рецептуре">
+                <button type="button" data-bulk-choice="fulfillment_stock" aria-pressed="false">Готовый товар</button>
                 <button type="button" data-bulk-choice="" aria-pressed="true" title="Не менять" aria-label="Не менять">—</button>
-                <button type="button" data-bulk-choice="fulfillment_made_to_order" aria-pressed="false">Под заказ</button>
+                <button type="button" data-bulk-choice="fulfillment_made_to_order" aria-pressed="false">По рецептуре</button>
               </div>
             </div>
           </div>
@@ -166,7 +177,7 @@
           <span></span>
           <span>Активен</span>
           <span>Видимость</span>
-          <span>Режим продажи</span>
+          <span>Учёт и списание</span>
           <span>Остаток</span>
           <span>Себестоимость</span>
           <span>Цена</span>
@@ -374,19 +385,19 @@
 
     <div class="product-fulfillment-row">
     <div class="field-wrap product-fulfillment-mode-field">
-      <label class="field-label" for="pe_fulfillment_mode">Режим продажи</label>
+      <label class="field-label" for="pe_fulfillment_mode">Учёт и списание</label>
       <select class="control hidden" id="pe_fulfillment_mode" name="fulfillment_mode">
-        <option value="stock">Со склада</option>
-        <option value="made_to_order">Под заказ</option>
+        <option value="stock">Готовый товар</option>
+        <option value="made_to_order">По рецептуре</option>
       </select>
       <div class="new-order-right-select-wrap settings-delivery-city-selector product-fulfillment-select" id="peFulfillmentModeWrap">
-        <button class="new-order-right-select-trigger product-fulfillment-select-trigger" id="peFulfillmentModeTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Режим продажи">
-          <span id="peFulfillmentModeText">Со склада</span>
+        <button class="new-order-right-select-trigger product-fulfillment-select-trigger" id="peFulfillmentModeTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Учёт и списание">
+          <span id="peFulfillmentModeText">Готовый товар</span>
           <i class="fas fa-chevron-down" aria-hidden="true"></i>
         </button>
-        <div class="new-order-right-select-menu no-scrollbar hidden" id="peFulfillmentModeMenu" role="listbox" aria-label="Режим продажи">
-          <button class="new-order-right-select-option" type="button" data-value="stock">Со склада</button>
-          <button class="new-order-right-select-option" type="button" data-value="made_to_order">Под заказ</button>
+        <div class="new-order-right-select-menu no-scrollbar hidden" id="peFulfillmentModeMenu" role="listbox" aria-label="Учёт и списание">
+          <button class="new-order-right-select-option" type="button" data-value="stock">Готовый товар</button>
+          <button class="new-order-right-select-option" type="button" data-value="made_to_order">По рецептуре</button>
         </div>
       </div>
     </div>
@@ -406,7 +417,35 @@
         </div>
       </div>
     </div>
+    <div class="field-wrap product-fulfillment-mode-field">
+      <label class="field-label" id="peSaleModeLabel">Режим продажи</label>
+      <div class="new-order-right-select-wrap settings-delivery-city-selector product-fulfillment-select" id="peSaleModeWrap">
+        <button class="new-order-right-select-trigger product-fulfillment-select-trigger" id="peSaleModeTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="peSaleModeLabel peSaleModeText">
+          <span id="peSaleModeText">Заказ</span>
+          <i class="fas fa-chevron-down" aria-hidden="true"></i>
+        </button>
+        <div class="new-order-right-select-menu no-scrollbar hidden" id="peSaleModeMenu" role="listbox" aria-labelledby="peSaleModeLabel">
+          <button class="new-order-right-select-option is-selected" type="button" data-value="order">Заказ</button>
+          <button class="new-order-right-select-option" type="button" data-value="preorder">Предзаказ</button>
+        </div>
+      </div>
     </div>
+    </div>
+
+    <section class="info-card hidden" id="pePreorderConditions" aria-label="Условия предзаказа">
+      <div class="product-preorder-head">
+        <b class="product-preorder-title">Условия предзаказа</b>
+        <div class="product-preorder-lead"><div id="pePreorderLead"></div><div class="product-preorder-custom hidden" id="pePreorderCustom"><input id="pePreorderCustomHours" type="number" min="1" step="1" inputmode="numeric" placeholder="Часы" aria-label="Интервал в часах" /><button type="button" id="pePreorderCustomConfirm" aria-label="Подтвердить интервал"><i class="fas fa-check" aria-hidden="true"></i></button></div></div>
+        <button type="button" class="product-preorder-toggle" id="pePreorderToggle" aria-label="Свернуть условия предзаказа" aria-expanded="true" aria-controls="pePreorderBody"><i class="fas fa-chevron-up" aria-hidden="true"></i></button>
+      </div>
+      <div id="pePreorderBody">
+        <div class="product-preorder-columns">
+          <div><b>Приём предзаказов</b><div id="pePreorderAcceptance"></div><div id="pePreorderAcceptanceCalendar"></div></div>
+          <div><b>Даты получения</b><div id="pePreorderReceipt"></div><div id="pePreorderReceiptCalendar"></div></div>
+        </div>
+        <div class="product-preorder-weekdays"><b>Дни получения</b><div id="pePreorderWeekdays"></div><small>Не выбраны — доступны все дни недели.</small></div>
+      </div>
+    </section>
 
     <div class="product-nutrition-card" id="peNutritionBlock">
       <div class="product-nutrition-head">
