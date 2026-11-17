@@ -1,3 +1,4 @@
+const { createServiceTextRenderer } = require('./botContentTemplates');
 const { confirmMaxLink, sendMaxMessage, getTenantMaxBotId } = require('./maxIntegration');
 const crypto = require('crypto');
 const { listTemplates, renderTemplate } = require('./botContentTemplates');
@@ -793,15 +794,16 @@ async function sendConfiguredMaxWelcome(db, tenantId, storeId, token, userId, se
 }
 
 async function handleTenantMaxUpdate(db, helpers, { tenantId, storeId = 1, token }, u, options = {}, send = sendTenantMaxMessage) {
+  const serviceText = createServiceTextRenderer(db, tenantId, Number(storeId || 1), 'max');
   if(u?.update_type==='message_callback' && /^auth:(?:b_[A-Za-z0-9_-]{40}|r_[A-Za-z0-9_-]{43})$/.test(String(u.callback?.payload)) && options.onBrowserAuth){
     const uid=String(u.callback?.user?.user_id || '');
     if(!uid || u.callback.user.is_bot)return;
     const result=await options.onBrowserAuth({providerUserId:uid,token:u.callback.payload.slice(5),confirm:true});
-    await answerTenantMaxCallback(token,u.callback.callback_id,result.ok?'Подтверждение принято. Вернитесь в исходную вкладку для завершения входа.':'Запрос истёк или доступ не разрешён');
-    await send({db,tenantId,botToken:token,maxUserId:uid,text:result.ok?'Подтверждение принято. Вернитесь в исходную вкладку.'
+    await answerTenantMaxCallback(token,u.callback.callback_id,result.ok?await serviceText('auth_success', 'Подтверждение принято. Вернитесь в исходную вкладку для завершения входа.'):'Запрос истёк или доступ не разрешён');
+    await send({db,tenantId,botToken:token,maxUserId:uid,text:result.ok?await serviceText('auth_success', 'Подтверждение принято. Вернитесь в исходную вкладку.')
       :result.error==='EMPLOYEE_MESSENGER_NOT_LINKED'?'Вернитесь в исходную карточку и подтвердите логин и пароль, затем нажмите кнопку снова.'
       :result.error==='CUSTOMER_OWNERSHIP_PROOF_REQUIRED'?'Карточка с этим номером уже существует. Нужны ранее подтверждённый мессенджер или помощь администратора. Совпадения номера и даты рождения для привязки недостаточно.'
-      :'Вход не подтверждён. Начните заново в исходном браузере.'});
+      :await serviceText('request_error', 'Вход не подтверждён. Начните заново в исходном браузере.')});
     return;
   }
   const parsed = parseUpdate(u);
@@ -834,40 +836,40 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, storeId = 1, token
     const result=await options.onBrowserContact({providerUserId:String(message.sender.user_id),phone:phones[0][1],name:[message.sender.first_name,message.sender.last_name].filter(Boolean).join(' ') || message.sender.name,avatarUrl:message.sender.full_avatar_url || message.sender.avatar_url});
     if(result.context==='PROFILE_LINK'){
       await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok
-        ?result.guestConfirmed?'Номер телефона подтверждён! MAX подключён к вашему профилю. Теперь вам доступны бонусы и вход по коду.':'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
+        ?result.guestConfirmed?'Номер телефона подтверждён! MAX подключён к вашему профилю. Теперь вам доступны бонусы и вход по коду.':await serviceText('link_success', 'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот')
         :result.error==='CONTACT_PHONE_MISMATCH'?'Не удалось привязать мессенджер, так как номер телефона не совпадает с учётной записью':'Не удалось привязать MAX. Начните привязку заново в профиле.'});return;
     }
-    if(result.autoConfirmed){await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Номер телефона подтверждён. Вход будет завершён автоматически'});return;}
+    if(result.autoConfirmed){await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:await serviceText('auth_success', 'Номер телефона подтверждён. Вход будет завершён автоматически')});return;}
     await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok
-      ?'Контакт подтверждён. Подтвердите начатый вами вход.'
-      :result.error==='CUSTOMER_RELINK_PROOF_REQUIRED'?'Для повторного подключения используйте прежний MAX-аккаунт. Если он недоступен, восстановите доступ через магазин.':result.error==='CONTACT_REQUEST_AMBIGUOUS'?'Открыто несколько запросов входа. Отмените лишние в исходных вкладках, затем отправьте контакт снова.':'Запрос отсутствует или истёк. Начните вход заново в исходной карточке.',extraPayload:result.ok?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'Авторизоваться',payload:`auth:${result.reference}`}]]}}]}:undefined});return;
+      ?await serviceText('confirmation_pending', 'Контакт подтверждён. Подтвердите начатый вами вход.')
+      :result.error==='CUSTOMER_RELINK_PROOF_REQUIRED'?'Для повторного подключения используйте прежний MAX-аккаунт. Если он недоступен, восстановите доступ через магазин.':result.error==='CONTACT_REQUEST_AMBIGUOUS'?'Открыто несколько запросов входа. Отмените лишние в исходных вкладках, затем отправьте контакт снова.':await serviceText('request_expired', 'Запрос отсутствует или истёк. Начните вход заново в исходной карточке.'),extraPayload:result.ok?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'Авторизоваться',payload:`auth:${result.reference}`}]]}}]}:undefined});return;
   }
   if (startToken?.startsWith('l_') && parsed.userId && typeof options.onAuthLogin === 'function') {
     const result = await options.onAuthLogin({ providerUserId: parsed.userId, token: startToken });
     if (!result.ok || result.alreadySent) await send({ db, tenantId, botToken: token, maxUserId: parsed.userId,
       text: result.alreadySent ? 'Код уже отправлен. Он действует 3 минуты. Для нового кода вернитесь на карточку входа.'
-        : result.error === 'CODE_DELIVERY_FAILED' ? 'Не удалось доставить код. Создайте новый запрос на карточке входа.'
+        : result.error === 'CODE_DELIVERY_FAILED' ? await serviceText('request_error', 'Не удалось доставить код. Создайте новый запрос на карточке входа.')
         : 'Запрос входа истёк или привязка не подтверждена. Вернитесь на карточку входа. Сотруднику нужно сначала войти с паролем и привязать MAX в профиле.' });
     return;
   }
   if(startToken?.startsWith('b_') && parsed.userId && options.onBrowserAuth){
     const result=await options.onBrowserAuth({providerUserId:parsed.userId,token:startToken,confirm:false});
     if(result.ok&&result.contactRequired){
-      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Чтобы авторизоваться в системе, нажмите «Авторизоваться».',extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Авторизоваться'}]]}}]}});return;
+      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:await serviceText('contact_request', 'Чтобы авторизоваться в системе, нажмите «Авторизоваться».'),extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Авторизоваться'}]]}}]}});return;
     }
-    await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok?'Подтвердите вход. Если вы его не начинали, не нажимайте кнопку.':'Запрос истёк. Начните заново в магазине.',
+    await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok?await serviceText('confirmation_pending', 'Подтвердите вход. Если вы его не начинали, не нажимайте кнопку.'):await serviceText('request_expired', 'Запрос истёк. Начните заново в магазине.'),
       extraPayload:result.ok&&!result.confirmed?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'✅ Авторизоваться',payload:`auth:${startToken}`}]]}}]}:undefined});
     return;
   }
   if (startToken?.startsWith('a_') && parsed.userId && typeof options.onAuthLink === 'function') {
     const result = await options.onAuthLink({ provider: 'max', providerUserId: parsed.userId, token: startToken });
     if(result?.contactRequired){
-      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Подтвердите собственный контакт для привязки MAX к вашему профилю.',extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Поделиться своим контактом'}]]}}]}});return;
+      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:await serviceText('contact_request', 'Подтвердите собственный контакт для привязки MAX к вашему профилю.'),extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Поделиться своим контактом'}]]}}]}});return;
     }
     await send({ db, tenantId, botToken: token, maxUserId: parsed.userId, text: result?.ok
       ? result.context==='PROFILE_LINK'
-        ?'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
-        :'MAX успешно привязан. Вернитесь в CRM. Теперь вы можете получать коды для входа через этот бот.'
+        ?await serviceText('link_success', 'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот')
+        :await serviceText('link_success', 'MAX успешно привязан. Вернитесь в CRM. Теперь вы можете получать коды для входа через этот бот.')
       : 'Ссылка недействительна или истекла. Получите новую в профиле.' });
     return;
   }

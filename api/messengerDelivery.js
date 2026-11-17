@@ -4,6 +4,7 @@ const { buildMaxDeepLink, sendMaxMessage } = require('./maxIntegration');
 const { MessengerAuthError } = require('./messengerAuth');
 const { recordServiceMessage } = require('./messengerCleanup');
 const { requestTelegramApi } = require('./telegramApi');
+const { createServiceTextRenderer } = require('./botContentTemplates');
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 const DELIVERY_TIMEOUT_MS = 10000;
@@ -198,9 +199,13 @@ async function deliverCode(db, { tenantId, provider, providerUserId, code, purpo
   const timeout = setTimeout(() => controller.abort(provider === 'tg'
     ? new DOMException('Telegram API deadline exceeded', 'TimeoutError') : undefined), DELIVERY_TIMEOUT_MS);
   try {
-    const text = options.customer && purpose === 'login'
+    const baseText = options.customer && purpose === 'login'
       ? `${config.brand}: ${code} - Ваш код подтверждения.`
       : codeMessage(purpose, code, expiresInMinutes);
+    const serviceText = createServiceTextRenderer(db, config.tenantId, config.storeId, provider);
+    const codeNotice = await serviceText('code_sent', '');
+    // The one-time code and its server-owned validity text cannot be edited away.
+    const text = codeNotice ? `${codeNotice}\n\n${baseText}` : baseText;
     if (provider === 'max') {
       const result = await sendMaxMessage({ botToken: token, maxUserId: providerUserId, text, signal: controller.signal, requireMessageConfirmation: true });
       if (result?.ok !== true) {

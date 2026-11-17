@@ -231,7 +231,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const guest=guestToken.startsWith('g_')?await customerAuth.getGuest(db,tenantId,guestToken,false,helpers.getStoreId(req)):null;
       if(guestToken.startsWith('g_')&&!guest)throw new MessengerAuthError('UNAUTHORIZED',401);
       const request=await createBrowserRequest(db,{tenantId,accountType:'customer',provider,binding:browserBinding(req,res),ipAddress:req.ip,
-        purpose:guest?'profile_link':'login',guestSessionHash:guest?.token_hash||null});
+        purpose:'login',guestSessionHash:guest?.token_hash||null});
       await db.query('UPDATE auth_browser_requests SET requested_phone=? WHERE public_id=?',[phone,request.requestId]);
       res.json({ok:true,context:'LOGIN',request_id:request.requestId,bot_link:await buildProviderLink(db,tenantId,provider,request.token,{customer:true})});
     }catch(e){console.error('CUSTOMER_BROWSER_START_FAILED:',e.code||e.name);sendCustomerMessengerError(res,e);}

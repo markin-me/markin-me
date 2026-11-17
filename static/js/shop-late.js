@@ -27556,6 +27556,7 @@ function renderSheetAddressList() {
 
         maxLinkHint.textContent = "\u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443\u2026";
         if(!popup)maxLinkHint.textContent="Нажмите «Открыть MAX», чтобы продолжить привязку";
+        maxLinkHint.append(document.createTextNode(" "), window.AuthCard.createProviderWebLink(maxPendingLink));
         if (maxLinkPollTimer) clearInterval(maxLinkPollTimer);
         maxLinkPollTimer = setInterval(async () => {
           const linked = await loadMaxLinkStatus();
@@ -27693,6 +27694,7 @@ function renderSheetAddressList() {
 
         tgLinkHint.textContent = "\u041e\u0436\u0438\u0434\u0430\u0435\u043c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0443\u2026";
         if(!popup)tgLinkHint.textContent="Нажмите «Открыть Telegram», чтобы продолжить привязку";
+        tgLinkHint.append(document.createTextNode(" "), window.AuthCard.createProviderWebLink(tgPendingLink));
         if (tgLinkPollTimer) clearInterval(tgLinkPollTimer);
         tgLinkPollTimer = setInterval(async () => {
           const linked = await loadTgLinkStatus();
