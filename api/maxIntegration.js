@@ -1,4 +1,52 @@
 const crypto = require('crypto');
+const https = require('https');
+const tls = require('tls');
+let maxApiAgent;
+
+// Additional trust is scoped to the official MAX API; TLS verification stays enabled.
+async function fetchMaxApi(input, options = {}) {
+  const url = new URL(input);
+  if (url.protocol !== 'https:' || url.username || url.password) throw Object.assign(new Error('MAX_HTTPS_REQUIRED'), { code: 'MAX_HTTPS_REQUIRED' });
+  if (url.hostname !== 'platform-api2.max.ru') return fetch(url, options);
+  if (!maxApiAgent) {
+    const pem = require('fs').readFileSync(require('path').join(__dirname, 'max-root-ca.pem'));
+    const certificate = new crypto.X509Certificate(pem);
+    if (!certificate.ca || !certificate.verify(certificate.publicKey)
+        || certificate.fingerprint256.replaceAll(':', '') !== 'D26D2D0231B7C39F92CC738512BA54103519E4405D68B5BD703E9788CA8ECF31') {
+      throw Object.assign(new Error('MAX_CA_CERTIFICATE_INVALID'), { code: 'MAX_CA_CERTIFICATE_INVALID' });
+    }
+    const roots = typeof tls.getCACertificates === 'function' ? tls.getCACertificates('default') : tls.rootCertificates;
+    maxApiAgent = new https.Agent({ keepAlive: true, maxSockets: 8, ca: [...roots, pem] });
+  }
+  return new Promise((resolve, reject) => {
+    const request = https.request(url, {
+      method: options.method || 'GET', headers: options.headers, agent: maxApiAgent,
+      signal: options.signal || AbortSignal.timeout(10000),
+    }, response => {
+      response.once('error', reject);
+      if (response.statusCode >= 300 && response.statusCode < 400) {
+        response.resume();
+        return reject(Object.assign(new Error('MAX_API_REDIRECT_REJECTED'), { code: 'MAX_API_REDIRECT_REJECTED' }));
+      }
+      const chunks = [];
+      let size = 0;
+      response.on('data', chunk => {
+        size += chunk.length;
+        if (size > 8 * 1024 * 1024) {
+          response.destroy(Object.assign(new Error('MAX_RESPONSE_TOO_LARGE'), { code: 'MAX_RESPONSE_TOO_LARGE' }));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.once('end', () => {
+        const body = [204, 205, 304].includes(response.statusCode) ? null : Buffer.concat(chunks);
+        resolve(new Response(body, { status: response.statusCode, headers: response.headers }));
+      });
+    });
+    request.once('error', reject);
+    request.end(options.body);
+  });
+}
 
 // Subscription management uses the same provider module as outgoing messages.
 async function requestMaxBotApi(token, method, route, body, options = {}) {
@@ -8,13 +56,14 @@ async function requestMaxBotApi(token, method, route, body, options = {}) {
   if (url.origin !== base.origin || !['/me', '/subscriptions'].includes(url.pathname)) throw new Error('MAX_API_ROUTE_INVALID');
   let response;
   try {
-    response = await (options.fetch || fetch)(url, {
+    response = await (options.fetch || fetchMaxApi)(url, {
       method, redirect: 'error', signal: options.signal || AbortSignal.timeout(10000),
       headers: { Authorization: token, 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch (cause) {
-    const code = /^[A-Z][A-Z0-9_]{0,79}$/.test(cause.cause?.code || '') ? cause.cause.code : 'MAX_API_UNAVAILABLE';
+    const reason = cause.code || cause.cause?.code || '';
+    const code = /^[A-Z][A-Z0-9_]{0,79}$/.test(reason) ? reason : 'MAX_API_UNAVAILABLE';
     throw Object.assign(new Error(code), { code });
   }
   const data = await response.json().catch(() => null);
@@ -90,7 +139,7 @@ async function sendMaxMessage({ db, tenantId, maxUserId, text, botToken, extraPa
   };
 
   const sendOnce = async (payload) => {
-    const res = await fetch(`${apiBase}/messages?user_id=${userQuery}`, {
+    const res = await fetchMaxApi(`${apiBase}/messages?user_id=${userQuery}`, {
       method: 'POST',
       ...(signal?{signal}:{}),
       headers: {
@@ -258,6 +307,7 @@ async function notifyCustomerLogin({ db, tenantId, customerId }) {
 }
 
 module.exports = {
+  fetchMaxApi,
   requestMaxBotApi,
   makeLinkToken,
   buildMaxDeepLink,

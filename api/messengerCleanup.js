@@ -5,6 +5,7 @@ const { fetchTelegram } = require('./telegramTransport');
 const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
 const { requestTelegramApi } = require('./telegramApi');
+const { fetchMaxApi } = require('./maxIntegration');
 
 const operationStorage = new AsyncLocalStorage();
 const MAX_DELETE_ATTEMPTS = 5;
@@ -441,7 +442,7 @@ async function deleteMaxMessage(token, row) {
   let url;
   try { url = new URL(base); } catch { throw deletionError('MAX_HTTPS_REQUIRED', true); }
   if (url.protocol !== 'https:' || url.username || url.password) throw deletionError('MAX_HTTPS_REQUIRED', true);
-  const response = await fetch(`${base}/messages?message_id=${encodeURIComponent(row.message_id)}`, {
+  const response = await fetchMaxApi(`${base}/messages?message_id=${encodeURIComponent(row.message_id)}`, {
     method: 'DELETE', headers: { Authorization: token }, signal: AbortSignal.timeout(DELETE_TIMEOUT_MS),
   });
   const data = await response.json().catch(() => null);

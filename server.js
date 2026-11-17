@@ -2219,14 +2219,19 @@ async function handleTenantBotWebhook(req, res, provider, sharedBotKey = null) {
     if (!config) config = await loadTenantBotConfig(db, scope.tenantId, provider, { allowDisabled: true });
     if (provider === 'tg' && pollingOwnsToken(config.token)) return res.status(409).json({ ok: false, error: 'TELEGRAM_POLLING_ENABLED' });
     const namespace = provider === 'tg' ? `tg-bot:${botKey(config.token).toString('hex')}`
-      : sharedBotKey ? `max-bot:${sharedBotKey}` : getTenantWebhookSecret(config);
+      : `max-bot:${maxWebhook.botKey(config.token).toString('hex')}`;
+    let maxLegacyNamespaces = [];
+    if (provider === 'max') {
+      const [owners] = await db.query('SELECT id,max_bot_id FROM ten_tenants WHERE is_active=1 AND BINARY TRIM(max_bot_token)=BINARY ?', [config.token]);
+      maxLegacyNamespaces = owners.map(owner => getTenantWebhookSecret({ tenantId: Number(owner.id), provider: 'max', identifier: String(owner.max_bot_id || '').trim().replace(/^@/, '') }));
+    }
     stage = 'event_dispatch';
     const ingressConfig=config;
     const webhookResult = await processWebhookEvent(db, provider, req.body, async (eventDb, webhookEvent) => {
       stage = 'handler';
       await handleTenantMessengerUpdate(eventDb, helpers, ingressConfig, req.body, webhookEvent, timing);
     }, namespace, {
-      legacyNamespaces: provider === 'tg' ? await telegramLegacyNamespaces(db, config.token) : [],
+      legacyNamespaces: provider === 'tg' ? await telegramLegacyNamespaces(db, config.token) : maxLegacyNamespaces,
       onEventLockWait: timing ? durationMs => { timing.eventLockWaitMs += Math.max(0, Number(durationMs) || 0); } : null,
     });
     if (timing) {

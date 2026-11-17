@@ -5794,7 +5794,7 @@
 
 
 
-        const hasRequired = !!(String(tenant.max_bot_id || "").trim() && String(tenant.max_bot_token || "").trim());
+        const hasRequired = !!String(tenant.max_bot_token || "").trim();
 
 
 
@@ -5806,7 +5806,7 @@
 
 
 
-        maxLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните ID бота и токен MAX";
+        maxLoginEnabledInput.title = hasRequired ? "" : "Сначала укажите токен MAX";
 
 
 
@@ -24167,6 +24167,14 @@
       blocked: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0431\u043e\u0442\u0430. \u041e\u0431\u0440\u0430\u0442\u0438\u0442\u0435\u0441\u044c \u043a \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0443 CRM',
       not_configured: '\u0411\u043e\u0442 \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d',
     };
+    const maxStatusErrors = {
+      UNABLE_TO_GET_ISSUER_CERT_LOCALLY: "\u0421\u0435\u0440\u0432\u0435\u0440 \u043d\u0435 \u0434\u043e\u0432\u0435\u0440\u044f\u0435\u0442 \u0441\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u0443 MAX API",
+      MAX_CA_CERTIFICATE_INVALID: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0434\u043e\u0432\u0435\u0440\u0435\u043d\u043d\u044b\u0439 \u0441\u0435\u0440\u0442\u0438\u0444\u0438\u043a\u0430\u0442 MAX API",
+      MAX_WEBHOOK_ENDPOINT_UNAVAILABLE: "\u041f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0439 \u0430\u0434\u0440\u0435\u0441 CRM \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0434\u043b\u044f \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f MAX",
+      MAX_WEBHOOK_ENDPOINT_NOT_CONFIGURED: "\u041d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0435 \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d HTTPS-\u0430\u0434\u0440\u0435\u0441 \u0434\u043b\u044f \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f MAX",
+      AUTH_WEBHOOK_SECRET_REQUIRED: "\u041d\u0430 \u0441\u0435\u0440\u0432\u0435\u0440\u0435 \u043d\u0435 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043d \u0441\u0435\u043a\u0440\u0435\u0442 \u0434\u043b\u044f \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f MAX",
+      MAX_TEST_BOT_NOT_APPROVED: "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 \u044d\u0442\u043e\u0433\u043e \u0431\u043e\u0442\u0430 \u043d\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0435\u043d\u043e \u0432 \u0442\u0435\u0441\u0442\u043e\u0432\u043e\u0439 CRM",
+    };
     async function refreshMaxConnection(force = false) {
       if (!maxConnectionNode || maxStatusPending || !maxConnectionNode.getClientRects().length) return;
       if (!force && Date.now() - maxStatusReadAt < (maxConnectionNode.dataset.state === 'connected' ? 60000 : 5000)) return;
@@ -24176,8 +24184,12 @@
         const result = await response.json();
         if (!response.ok || !result.ok) throw new Error('MAX_STATUS_UNAVAILABLE');
         maxConnectionNode.dataset.state = result.data.state;
-        maxConnectionNode.textContent = maxStatusLabels[result.data.state] || maxStatusLabels.blocked;
-        if (result.data.bot_name && maxBotIdEl) maxBotIdEl.value = result.data.bot_name;
+        maxConnectionNode.textContent = maxStatusErrors[result.data.error] || maxStatusLabels[result.data.state] || maxStatusLabels.blocked;
+        if (!maxDraftMode && result.data.bot_name && maxBotIdEl) {
+          maxBotIdEl.value = result.data.bot_name;
+          maxOriginal.max_bot_id = result.data.bot_name;
+          maxDraft.max_bot_id = result.data.bot_name;
+        }
         maxStatusReadAt = Date.now();
       } catch (error) {
         maxConnectionNode.textContent = '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f';
@@ -24287,7 +24299,7 @@
 
 
 
-      maxLoginEnabledEl.title = hasRequired ? "" : "Сначала заполните ID бота и токен MAX";
+      maxLoginEnabledEl.title = hasRequired ? "" : "Сначала укажите токен MAX";
 
 
 
@@ -26124,7 +26136,7 @@
 
 
 
-        const hasRequired = !!(maxDraft.max_bot_id && maxDraft.max_bot_token);
+        const hasRequired = !!maxDraft.max_bot_token;
 
 
 
@@ -26132,7 +26144,7 @@
 
 
 
-          alert("Сначала заполните ID бота и токен MAX");
+          alert("Сначала укажите токен MAX");
 
 
 
@@ -26431,7 +26443,7 @@
 
 
 
-            alert("Сначала заполните ID бота и токен MAX");
+            alert("Сначала укажите токен MAX");
 
 
 

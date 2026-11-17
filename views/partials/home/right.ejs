@@ -693,8 +693,9 @@
           <div class="settings-site-field">
             <label class="field-label">ТОКЕН БОТА MAX</label>
             <div class="control-with-action">
-              <input class="control" type="password" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              <input class="control" type="password" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" aria-describedby="tenantMaxBotTokenHint" readonly onfocus="this.removeAttribute('readonly')" />
             </div>
+            <span id="tenantMaxBotTokenHint" class="field-hint">Сохранённый токен отображается маской. Для замены введите новый токен целиком.</span>
           </div>
           <div class="settings-site-field">
             <label class="field-label">СТАТУС ПОДКЛЮЧЕНИЯ</label>

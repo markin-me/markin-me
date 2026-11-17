@@ -1205,7 +1205,7 @@ module.exports = function makeAdminTenantRouter({ db, helpers, ordersEvents, can
     };
     delete nextTenant.password_hash;
     nextTenant.max_bot_token_configured = Boolean(nextTenant.max_bot_token);
-    nextTenant.max_bot_token = nextTenant.max_bot_token ? '********' : '';
+    nextTenant.max_bot_token = '*'.repeat(String(nextTenant.max_bot_token || '').length);
     nextTenant.max_connection = await req.app.get('maxWebhookWorker').statusForTenant(Number(tenant.id));
     delete nextTenant.tg_mini_app_enabled;
     delete nextTenant.map_provider_accounts_json;
@@ -4071,8 +4071,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const telegramBotUsername = req.body.telegram_bot_username !== undefined ? helpers.strOrNull(req.body.telegram_bot_username) : undefined;
       const telegramBotToken = req.body.telegram_bot_token !== undefined ? helpers.strOrNull(req.body.telegram_bot_token) : undefined;
-      const maxBotId = req.body.max_bot_id !== undefined ? helpers.strOrNull(req.body.max_bot_id) : undefined;
-      const maxBotToken = req.body.max_bot_token === '********' ? undefined
+      const maxBotToken = typeof req.body.max_bot_token === 'string' && /^\*+$/.test(req.body.max_bot_token.trim()) ? undefined
         : req.body.max_bot_token !== undefined ? helpers.strOrNull(req.body.max_bot_token) : undefined;
       if (maxBotToken) {
         try { validateMaxToken(maxBotToken); } catch (error) { return res.status(400).json({ok:false,error:error.code}); }
@@ -4293,7 +4292,6 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const nextImgWebpAggressive = imgWebpAggressive !== undefined ? imgWebpAggressive : (current.img_webp_aggressive ?? 0);
       const nextImgDeleteOriginal = imgDeleteOriginal !== undefined ? imgDeleteOriginal : (current.img_delete_original ?? 1);
 
-      const nextMaxBotId = maxBotId !== undefined ? maxBotId : (current.max_bot_id ?? null);
       const nextMaxBotToken = maxBotToken !== undefined ? maxBotToken : (current.max_bot_token ?? null);
       const nextMaxMiniAppEnabled = maxMiniAppEnabled !== undefined ? maxMiniAppEnabled : (current.max_mini_app_enabled ?? 0);
       const nextMaxLoginEnabled = maxLoginEnabled !== undefined ? maxLoginEnabled : (current.max_login_enabled ?? 0);
@@ -4380,15 +4378,15 @@ async function fetchStoreWithHours(tenantId, storeId) {
       }
 
       const [tenantUpdate] = await db.query(
-        'UPDATE ten_tenants SET name=?, email=IF(?, ?, email), phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=?, max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=? AND (NOT ? OR email <=> ?) AND max_bot_token <=> ?',
-        [nextName, changesTenantEmail, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotId, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId, changesTenantEmail, current.email, current.max_bot_token]
+        'UPDATE ten_tenants SET name=?, email=IF(?, ?, email), phone=?, timezone=?, logo_light_url=?, logo_dark_url=?, favicon_light_url=?, favicon_dark_url=?, apple_touch_icon_url=?, android_icon_url=?, price_rounding_mode=?, price_rounding_precision=?, order_stock_deduct_mode=?, order_stock_deduct_status_id=?, site_name=?, site_description=?, pwa_qr_badge_text=?, site_menu_items_json=?, subdomain=?, custom_domain=?, custom_domain_ascii=?, sound_new_order_url=?, sound_order_cancelled_url=?, sound_new_message_url=?, img_webp_quality=?, img_thumb_quality=?, img_thumb_width=?, img_main_width=?, img_webp_aggressive=?, img_delete_original=?, max_bot_id=IF(BINARY max_bot_token <=> BINARY ?,max_bot_id,NULL), max_bot_token=?, max_mini_app_enabled=?, max_login_enabled=?, telegram_bot_username=?, telegram_bot_token=?, tg_login_enabled=?, chat_welcome_message=?, chat_welcome_enabled=?, chat_assistant_name=?, chat_operator_name=?, chat_assistant_gender=?, chat_quick_questions_json=?, chat_quick_questions_enabled=?, chat_widget_enabled=?, important_messages_enabled=?, chat_client_push_enabled=?, chat_guest_thread_ttl_days=?, chat_thread_ttl_days=? WHERE id=? AND (NOT ? OR email <=> ?) AND BINARY max_bot_token <=> BINARY ?',
+        [nextName, changesTenantEmail, nextEmail, nextPhone, nextTimezone, nextLogoLight, nextLogoDark, nextFaviconLight, nextFaviconDark, nextAppleTouchIcon, nextAndroidIcon, nextRoundingMode, nextRoundingPrecision, nextStockDeductMode, nextStockDeductStatusId, nextSiteName, nextSiteDescription, nextPwaQrBadgeText, nextSiteMenuItemsJson, nextSubdomain, nextCustomDomain, nextCustomDomainAscii, nextSoundNewOrder, nextSoundCancelled, nextSoundNewMessage, nextImgWebpQuality, nextImgThumbQuality, nextImgThumbWidth, nextImgMainWidth, nextImgWebpAggressive, nextImgDeleteOriginal, nextMaxBotToken, nextMaxBotToken, nextMaxMiniAppEnabled, nextMaxLoginEnabled, nextTelegramBotUsername, nextTelegramBotToken, nextTgLoginEnabled, nextChatWelcomeMessage, nextChatWelcomeEnabled, nextChatAssistantName, nextChatOperatorName, nextChatAssistantGender, nextChatQuickQuestionsJson, nextChatQuickQuestionsEnabled, nextChatWidgetEnabled, nextImportantMessagesEnabled, nextChatClientPushEnabled, nextChatGuestThreadTtlDays, nextChatThreadTtlDays, tenantId, changesTenantEmail, current.email, current.max_bot_token]
       );
-      if (!tenantUpdate.affectedRows && nextMaxBotToken !== current.max_bot_token) return res.status(409).json({ok:false,error:'TENANT_SETTINGS_CHANGED'});
       if (changesTenantEmail && !tenantUpdate.affectedRows) {
         return res.status(409).json({ ok: false, error: 'TENANT_CREDENTIAL_CHANGED' });
       }
+      if (!tenantUpdate.affectedRows) return res.status(409).json({ok:false,error:'TENANT_SETTINGS_CHANGED'});
 
-      if (maxBotToken !== undefined) {
+      if (req.body.max_bot_token !== undefined) {
         await req.app.get('maxWebhookWorker').queueTenant(tenantId);
         if (current.max_bot_token && current.max_bot_token !== nextMaxBotToken) {
           req.app.get('maxWebhookWorker').retireToken(current.max_bot_token).catch(() => console.error('MAX_OLD_WEBHOOK_RETIRE_FAILED'));

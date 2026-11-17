@@ -1,5 +1,5 @@
 const { createServiceTextRenderer } = require('./botContentTemplates');
-const { confirmMaxLink, sendMaxMessage, getTenantMaxBotId } = require('./maxIntegration');
+const { confirmMaxLink, sendMaxMessage, getTenantMaxBotId, fetchMaxApi } = require('./maxIntegration');
 const crypto = require('crypto');
 const { listTemplates, renderTemplate } = require('./botContentTemplates');
 const { keepCurrentOperationPending, markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
@@ -752,7 +752,7 @@ async function sendTenantMaxMessage(payload) {
 async function answerTenantMaxCallback(token,callbackId,text){
   const base=String(process.env.MAX_API_BASE_URL || 'https://platform-api2.max.ru').replace(/\/$/,'');
   if(!base.startsWith('https://'))throw Object.assign(new Error('MAX_HTTPS_REQUIRED'),{code:'MAX_HTTPS_REQUIRED'});
-  const response=await fetch(`${base}/answers?callback_id=${encodeURIComponent(callbackId)}`,{method:'POST',headers:{Authorization:token,'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),body:JSON.stringify({message:{text}})});
+  const response=await fetchMaxApi(`${base}/answers?callback_id=${encodeURIComponent(callbackId)}`,{method:'POST',headers:{Authorization:token,'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),body:JSON.stringify({message:{text}})});
   const answer=await response.json().catch(()=>null);
   if(!response.ok || answer?.success!==true)throw Object.assign(new Error('MAX_CALLBACK_FAILED'),{code:'MAX_CALLBACK_FAILED'});
 }
