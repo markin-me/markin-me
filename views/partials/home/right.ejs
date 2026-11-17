@@ -694,8 +694,8 @@
                 </label>
               </div>
               <div class="settings-site-field">
-                <label class="field-label">ID БОТА MAX</label>
-                <input class="control" type="text" id="tenantMaxBotId" placeholder="@bot_username" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+                <label class="field-label">ИМЯ БОТА MAX</label>
+                <input class="control" type="text" id="tenantMaxBotId" placeholder="" readonly />
               </div>
             </div>
           </div>
@@ -704,10 +704,11 @@
             <label class="field-label">ТОКЕН БОТА MAX</label>
             <div class="control-with-action">
               <input class="control" type="password" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
-              <button class="control-inline-btn" type="button" id="tenantMaxBotTokenCopyBtn" title="Скопировать">
-                <i class="fas fa-copy"></i>
-              </button>
             </div>
+          </div>
+          <div class="settings-site-field">
+            <label class="field-label">СТАТУС ПОДКЛЮЧЕНИЯ</label>
+            <span id="tenantMaxConnectionStatus" class="field-hint" role="status" aria-live="polite"></span>
           </div>
           <div class="settings-site-field">
             <label class="field-label">ССЫЛКА ДЛЯ MAX MINI APP</label>

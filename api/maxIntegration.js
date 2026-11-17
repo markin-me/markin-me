@@ -1,5 +1,34 @@
 const crypto = require('crypto');
 
+// Subscription management uses the same provider module as outgoing messages.
+async function requestMaxBotApi(token, method, route, body, options = {}) {
+  const base = new URL(options.baseUrl || process.env.MAX_API_BASE_URL || 'https://platform-api2.max.ru');
+  if (base.protocol !== 'https:' || base.username || base.password) throw Object.assign(new Error('MAX_HTTPS_REQUIRED'), { code: 'MAX_HTTPS_REQUIRED' });
+  const url = new URL(route, base);
+  if (url.origin !== base.origin || !['/me', '/subscriptions'].includes(url.pathname)) throw new Error('MAX_API_ROUTE_INVALID');
+  let response;
+  try {
+    response = await (options.fetch || fetch)(url, {
+      method, redirect: 'error', signal: options.signal || AbortSignal.timeout(10000),
+      headers: { Authorization: token, 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch (cause) {
+    const code = /^[A-Z][A-Z0-9_]{0,79}$/.test(cause.cause?.code || '') ? cause.cause.code : 'MAX_API_UNAVAILABLE';
+    throw Object.assign(new Error(code), { code });
+  }
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data || data.success === false) {
+    const code = ({ 401: 'MAX_TOKEN_REJECTED', 403: 'MAX_ACCESS_DENIED', 429: 'MAX_RATE_LIMITED' })[response.status]
+      || (response.ok ? 'MAX_API_REJECTED' : 'MAX_API_UNAVAILABLE');
+    const retry = response.headers.get('retry-after');
+    const seconds = /^\d+$/.test(retry || '') ? Number(retry) : Math.max(0, (Date.parse(retry) - Date.now()) / 1000);
+    throw Object.assign(new Error(code), { code, retryAfter: Number.isFinite(seconds) ? seconds : 0 });
+  }
+  if (method !== 'GET' && data.success !== true) throw Object.assign(new Error('MAX_INVALID_API_RESPONSE'), { code: 'MAX_INVALID_API_RESPONSE' });
+  return data;
+}
+
 function makeLinkToken() {
   if (crypto.randomUUID) return crypto.randomUUID().replaceAll('-', '') + crypto.randomBytes(8).toString('hex');
   return crypto.randomBytes(24).toString('hex');
@@ -229,6 +258,7 @@ async function notifyCustomerLogin({ db, tenantId, customerId }) {
 }
 
 module.exports = {
+  requestMaxBotApi,
   makeLinkToken,
   buildMaxDeepLink,
   getTenantMaxBotId,

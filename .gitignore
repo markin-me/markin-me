@@ -56,3 +56,5 @@ mobile-apps/mobile-user/mobile-user-*.json
 ADM.PERF — оптимизация админской панели
 Задания
 a1186497_markin_me.sql
+
+!migrations/2026-11-17_max_auto_webhook.js

@@ -24157,6 +24157,40 @@
 
     const maxBotTokenEl = document.getElementById("tenantMaxBotToken");
 
+    const maxConnectionNode = document.getElementById("tenantMaxConnectionStatus");
+    let maxStatusPending = false, maxStatusReadAt = 0, maxStatusTimer = null;
+    const maxStatusLabels = {
+      connected: '\u0411\u043e\u0442 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d',
+      pending: '\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 \u0432\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f',
+      retry: '\u0412\u0440\u0435\u043c\u0435\u043d\u043d\u0430\u044f \u043e\u0448\u0438\u0431\u043a\u0430 MAX, \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u043c \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438',
+      invalid_token: '\u0422\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0442\u043e\u043a\u0435\u043d',
+      blocked: '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0431\u043e\u0442\u0430. \u041e\u0431\u0440\u0430\u0442\u0438\u0442\u0435\u0441\u044c \u043a \u0430\u0434\u043c\u0438\u043d\u0438\u0441\u0442\u0440\u0430\u0442\u043e\u0440\u0443 CRM',
+      not_configured: '\u0411\u043e\u0442 \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d',
+    };
+    async function refreshMaxConnection(force = false) {
+      if (!maxConnectionNode || maxStatusPending || !maxConnectionNode.getClientRects().length) return;
+      if (!force && Date.now() - maxStatusReadAt < (maxConnectionNode.dataset.state === 'connected' ? 60000 : 5000)) return;
+      maxStatusPending = true;
+      try {
+        const response = await authFetch('/api/admin/tenant/max-connection');
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error('MAX_STATUS_UNAVAILABLE');
+        maxConnectionNode.dataset.state = result.data.state;
+        maxConnectionNode.textContent = maxStatusLabels[result.data.state] || maxStatusLabels.blocked;
+        if (result.data.bot_name && maxBotIdEl) maxBotIdEl.value = result.data.bot_name;
+        maxStatusReadAt = Date.now();
+      } catch (error) {
+        maxConnectionNode.textContent = '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f';
+        maxStatusReadAt = Date.now();
+      } finally { maxStatusPending = false; }
+    }
+    maxStatusTimer = setInterval(() => { if (!document.hidden) void refreshMaxConnection(); }, 5000);
+    window.addEventListener('pagehide', () => { clearInterval(maxStatusTimer); maxStatusTimer = null; });
+    window.addEventListener('pageshow', event => {
+      if (event.persisted && !maxStatusTimer) maxStatusTimer = setInterval(() => { if (!document.hidden) void refreshMaxConnection(); }, 5000);
+    });
+
+
 
 
     const maxBotTokenCopyBtn = document.getElementById("tenantMaxBotTokenCopyBtn");
@@ -24336,7 +24370,7 @@
 
 
 
-      var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
+      var hasRequired = !!String((maxBotTokenEl && maxBotTokenEl.value) || "").trim();
 
 
 
@@ -25156,7 +25190,7 @@
 
 
 
-        maxBotIdEl.readOnly = !maxDraftMode;
+        maxBotIdEl.readOnly = true;
 
 
 
@@ -26322,6 +26356,7 @@
 
 
         setMaxDraftMode(false);
+        void refreshMaxConnection(true);
 
 
 
@@ -26481,7 +26516,7 @@
 
 
 
-          var hasRequired = !!(String((maxBotIdEl && maxBotIdEl.value) || "").trim() && String((maxBotTokenEl && maxBotTokenEl.value) || "").trim());
+          var hasRequired = !!String((maxBotTokenEl && maxBotTokenEl.value) || "").trim();
 
 
 
