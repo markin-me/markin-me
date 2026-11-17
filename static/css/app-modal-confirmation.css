@@ -47,3 +47,13 @@
 .app-modal-confirmation-choices button:not(:disabled):hover{border-color:var(--color-primary,#ff6600);color:var(--color-primary,#ff6600);}
 .app-modal-confirmation-choices button.is-opening{display:flex;align-items:center;justify-content:center;gap:8px;opacity:1;}
 .app-modal-confirmation-choices button.is-opening::before{content:"";flex:0 0 14px;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:app-modal-confirmation-spin .8s linear infinite;}
+
+@media (max-width:768px){
+  .app-modal-confirmation-panel{width:300px;min-height:0;padding:20px;border-radius:24px}
+  .app-modal-confirmation-panel h2{margin-bottom:12px;font-size:18px}
+  .app-modal-confirmation-panel p{margin-bottom:16px;font-size:14px}
+  .app-modal-confirmation-actions{gap:8px;flex-wrap:wrap}
+  .app-modal-confirmation-actions button{font-size:14px;padding:10px}
+  .app-modal-confirmation-choices{gap:8px;margin-bottom:16px}
+  .app-modal-confirmation-choices button{font-size:14px;padding:10px}
+}

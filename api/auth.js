@@ -169,6 +169,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       first_name: user.first_name || null,
       patronymic: user.patronymic || null,
       photo_revision: user.photo_revision || null,
+      phone: user.phone || null,
       role: user.role,
       tenant_id: Number(user.tenant_id),
       active_role_id: activeRoleId ? Number(activeRoleId) : null,
@@ -578,7 +579,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         return res.status(403).json({ ok: false, error: 'ROLE_SWITCH_NOT_ALLOWED' });
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.photo_revision, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.phone, u.photo_revision, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
                 t.name AS tenant_name, t.slug AS tenant_slug, t.is_active AS tenant_active
          FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
          WHERE u.id=? AND u.tenant_id=? LIMIT 1`,
@@ -622,6 +623,39 @@ module.exports = function makeAuthRouter({ db, helpers }) {
     }
   });
 
+  async function updateOwnPhoto(req, res) {
+    try {
+      const userId = Number(req.user.userId || req.user.sessionUserId || 0);
+      if (!(userId > 0)) return res.status(403).json({ ok: false, error: 'EMPLOYEE_ACCOUNT_REQUIRED' });
+      const photo = req.method === 'DELETE' ? null : await employeeIdentity.encodeEmployeePhoto(req.body?.photo_base64);
+      const revision = photo ? require('crypto').randomBytes(16).toString('hex') : null;
+      const [result] = await db.query(
+        `UPDATE app_users SET employee_photo=?, photo_revision=?
+         WHERE tenant_id=? AND id=? AND is_active=1 AND employee_status='active' AND auth_version=?`,
+        [photo, revision, Number(req.user.tenantId), userId, req.user.authVersion]
+      );
+      if (!result.affectedRows) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
+      return res.json({ ok: true, photo_revision: revision });
+    } catch (error) {
+      if (error.name === 'EmployeeIdentityError') return res.status(400).json({ ok: false, error: error.code });
+      console.error('AUTH_PROFILE_PHOTO_UPDATE_FAILED:', error.code || error.name);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  }
+  router.put('/me/photo', authMiddleware, updateOwnPhoto);
+  router.delete('/me/photo', authMiddleware, updateOwnPhoto);
+
+  async function employeePhoneVerified(tenantId, userId, phone) {
+    const normalized = helpers.normalizePhone(phone);
+    if (!(Number(userId) > 0) || !normalized) return false;
+    const [rows] = await db.query(
+      `SELECT verified_phone, phone_verified_at, conflict_code FROM auth_employee_customer_links
+       WHERE tenant_id=? AND employee_id=? LIMIT 1`, [tenantId, userId]
+    );
+    return Boolean(rows[0]?.phone_verified_at && !rows[0].conflict_code
+      && helpers.normalizePhone(rows[0].verified_phone) === normalized);
+  }
+
   router.get('/me', async (req, res) => {
     try {
       const token = readRequestToken(req);
@@ -637,10 +671,10 @@ module.exports = function makeAuthRouter({ db, helpers }) {
           if (Number(decoded.authVersion || 0) !== Number(legacyOwner.auth_version)) return res.status(401).json({ ok: false, error: 'SESSION_REVOKED' });
         }
         const [stores] = await db.query('SELECT id, name FROM ten_stores WHERE tenant_id=? AND is_active=1 ORDER BY name, id', [tenant.id]);
-        return res.json({ ok: true, user: { id: null, email: tenant.email, name: `${tenant.name} (Магазин)`, profile_name: legacyOwner?.name || null, last_name: legacyOwner?.last_name || null, first_name: legacyOwner?.first_name || null, patronymic: legacyOwner?.patronymic || null, photo_revision: legacyOwner?.photo_revision || null, tenant_id: Number(tenant.id) }, tenant: { id: Number(tenant.id), name: tenant.name, slug: tenant.slug }, roles: [], permissions: ['*'], stores });
+        return res.json({ ok: true, user: { id: null, email: tenant.email, name: `${tenant.name} (Магазин)`, profile_name: legacyOwner?.name || null, last_name: legacyOwner?.last_name || null, first_name: legacyOwner?.first_name || null, patronymic: legacyOwner?.patronymic || null, photo_revision: legacyOwner?.photo_revision || null, phone: legacyOwner?.phone || null, phone_verified: await employeePhoneVerified(tenant.id, legacyOwner?.id, legacyOwner?.phone), tenant_id: Number(tenant.id) }, tenant: { id: Number(tenant.id), name: tenant.name, slug: tenant.slug }, roles: [], permissions: ['*'], stores });
       }
       const [users] = await db.query(
-        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.photo_revision, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
+        `SELECT u.id, u.tenant_id, u.email, u.login, u.name, u.last_name, u.first_name, u.patronymic, u.phone, u.photo_revision, u.role, u.is_active, u.employee_status, u.auth_version, u.must_change_password,
                 t.name AS tenant_name, t.slug AS tenant_slug
          FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id
          WHERE u.id=? AND u.tenant_id=? AND u.is_active=1 AND t.is_active=1 LIMIT 1`,
@@ -671,7 +705,8 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       );
       return res.json({
         ok: true,
-        user: publicUser(user, activeRole && activeRole.id),
+        user: { ...publicUser(user, activeRole && activeRole.id),
+          phone_verified: await employeePhoneVerified(user.tenant_id, user.id, user.phone) },
         tenant: { id: Number(user.tenant_id), name: user.tenant_name, slug: user.tenant_slug },
         roles: roles.map(publicRole),
         active_role: activeRole ? publicRole(activeRole) : null,

@@ -10,6 +10,221 @@
   const profileMenu = document.getElementById('userMenuDropdown');
   const rootProfileNodes = Array.from(profileMenu.childNodes);
   let profileOpenVersion = 0;
+  const photo = profileMenu.querySelector('.user-menu-avatar');
+  const photoInput = document.createElement('input');
+  photoInput.type = 'file';
+  photoInput.accept = 'image/jpeg,image/png,image/webp';
+  photoInput.className = 'hidden';
+  const camera = document.createElement('span');
+  camera.className = 'admin-profile-photo-camera';
+  camera.setAttribute('aria-hidden', 'true');
+  camera.innerHTML = '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16h6l3-5h10l3 5h6a5 5 0 0 1 5 5v15a5 5 0 0 1-5 5H19M5 29v-8a5 5 0 0 1 5-5"/><circle cx="25" cy="27" r="8"/><path d="M8 34v12M2 40h12"/></svg>';
+  const removePhoto = document.createElement('button');
+  removePhoto.type = 'button';
+  removePhoto.className = 'btn admin-profile-photo-remove';
+  removePhoto.setAttribute('aria-label', 'Удалить фото');
+  removePhoto.innerHTML = '<i class="fas fa-trash-can" aria-hidden="true"></i>';
+  photo.append(camera, photoInput, removePhoto);
+  const editProfile = document.createElement('button');
+  editProfile.type = 'button';
+  editProfile.className = 'btn btn-icon admin-profile-edit-trigger';
+  editProfile.textContent = 'Изм.';
+  document.querySelector('body > header .header-content').append(editProfile);
+  let photoBusy = false;
+  document.querySelector('#userMenuLogout > span').textContent = '\u0412\u044b\u0439\u0442\u0438';
+  const phoneLabel = profileMenu.querySelector('#userMenuPhone');
+  const phoneStatus = document.createElement('div');
+  phoneStatus.className = 'admin-profile-phone-status';
+  phoneStatus.setAttribute('role', 'status');
+  const phoneMark = document.createElement('span');
+  phoneMark.className = 'admin-profile-phone-mark hidden';
+  phoneMark.setAttribute('role', 'img');
+  phoneMark.setAttribute('aria-label', 'Телефон подтверждён');
+  phoneMark.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i>';
+  const phoneHint = document.createElement('span');
+  phoneStatus.append(phoneMark, phoneHint);
+  phoneLabel.after(phoneStatus);
+  for (const id of ['userMenuChangePassword', 'userMenuMessengerSecurity']) {
+    const button = document.getElementById(id);
+    const arrow = document.createElement('i');
+    arrow.className = 'fas fa-chevron-right admin-profile-nav-arrow';
+    arrow.setAttribute('aria-hidden', 'true');
+    button.append(arrow);
+  }
+  let phoneStatusRequest = null;
+  async function loadProfilePhone(force = false) {
+    const version = profileOpenVersion;
+    if (force || !window.AdminAccessContext?.user) {
+      phoneHint.textContent = 'Проверяем номер…';
+      phoneMark.classList.add('hidden');
+    }
+    try {
+      const token = localStorage.getItem('authToken');
+      let result;
+      if (force) {
+        if (!phoneStatusRequest) phoneStatusRequest = api('/api/auth/me').finally(() => { phoneStatusRequest = null; });
+        result = await phoneStatusRequest;
+      } else result = await (window.AdminAccessContext || window.AdminAccessContextPromise);
+      if (token !== localStorage.getItem('authToken')) return;
+      if (typeof result?.user?.phone_verified !== 'boolean') throw new Error('INVALID_PHONE_VERIFICATION_STATUS');
+      if (force && window.AdminAccessContext?.user) {
+        Object.assign(window.AdminAccessContext.user, { phone: result.user.phone, phone_verified: result.user.phone_verified });
+        localStorage.setItem('user', JSON.stringify(window.AdminAccessContext.user));
+      }
+      if (version !== profileOpenVersion) return;
+      const number = String(result.user.phone || '').replace(/\D/g, '');
+      phoneLabel.textContent = /^7\d{10}$/.test(number)
+        ? number.replace(/^7(\d{3})(\d{3})(\d{2})(\d{2})$/, '+7 ($1) $2-$3-$4') : number ? '+' + number : '';
+      phoneHint.textContent = result.user.phone_verified ? 'Номер подтверждён' : 'Номер не подтверждён';
+      phoneMark.classList.toggle('hidden', !result.user.phone_verified);
+    } catch (error) {
+      if (version !== profileOpenVersion) return;
+      phoneHint.textContent = 'Не удалось проверить номер.';
+      console.error('ADMIN_PROFILE_PHONE_LOAD_FAILED', error.code || error.name);
+    }
+  }
+
+  function resetPhotoEditor() {
+    profileMenu.classList.remove('is-profile-editing');
+    photo.closest('.user-menu-header').classList.remove('is-photo-expanded');
+    photo.setAttribute('role', 'button');
+    photo.tabIndex = 0;
+    photo.setAttribute('aria-label', 'Развернуть фотографию профиля');
+    photo.setAttribute('aria-expanded', 'false');
+  }
+  editProfile.addEventListener('click', event => {
+    event.stopPropagation();
+    openProfileSection('Изменить профиль', resetPhotoEditor);
+    profileMenu.classList.add('is-profile-editing');
+    photo.setAttribute('role', 'button');
+    photo.tabIndex = 0;
+    photo.setAttribute('aria-label', 'Изменить фотографию профиля');
+    photo.focus();
+  });
+  function activatePhoto() {
+    if (!mobileProfile() || photoBusy) return;
+    if (profileMenu.classList.contains('is-profile-editing')) { photoInput.click(); return; }
+    if (photo.querySelector('img').classList.contains('hidden')) { editProfile.click(); return; }
+    const header = photo.closest('.user-menu-header');
+    const from = photo.getBoundingClientRect();
+    const textFrames = [...header.querySelectorAll('.user-menu-name,.user-menu-phone')].map(element => {
+      element.getAnimations().forEach(animation => animation.cancel());
+      return { element, rect: element.getBoundingClientRect() };
+    });
+    photo.getAnimations().forEach(animation => animation.cancel());
+    if (!header.classList.contains('is-photo-expanded')) header.style.setProperty('--profile-cover-height', header.offsetHeight + 'px');
+    const expanded = header.classList.toggle('is-photo-expanded');
+    photo.setAttribute('aria-expanded', String(expanded));
+    photo.setAttribute('aria-label', expanded ? 'Свернуть фотографию профиля' : 'Развернуть фотографию профиля');
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const to = photo.getBoundingClientRect();
+    const timing = { duration: 320, easing: 'cubic-bezier(.2,.8,.2,1)' };
+    photo.animate([
+      { transformOrigin: 'top left', transform: `translate(${from.left-to.left}px,${from.top-to.top}px) scale(${from.width/to.width},${from.height/to.height})`, borderRadius: expanded ? '50%' : '22px' },
+      { transformOrigin: 'top left', transform: 'none', borderRadius: expanded ? '22px' : '50%' },
+    ], timing);
+    textFrames.forEach(({ element, rect }) => {
+      const target = element.getBoundingClientRect();
+      element.animate([{ transform: `translate(${rect.left-target.left}px,${rect.top-target.top}px)` }, { transform: 'none' }], timing);
+    });
+  }
+  photo.addEventListener('click', event => {
+    if (event.target.closest('button,input')) return;
+    activatePhoto();
+  });
+  photo.addEventListener('keydown', event => {
+    if (event.target !== photo) return;
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activatePhoto(); }
+  });
+  async function savePhoto(options) {
+    if (photoBusy) return;
+    const version = profileOpenVersion;
+    photoBusy = true;
+    photo.setAttribute('aria-busy', 'true');
+    removePhoto.disabled = true;
+    try {
+      const result = await api('/api/auth/me/photo', options);
+      await window.updateAdminProfilePhoto(result.photo_revision);
+      if (version === profileOpenVersion && mobileProfile() && profileMenu.classList.contains('is-profile-editing')) window.__adminMobilePages.back();
+    } catch (error) {
+      await window.AppModal.alert(error.code === 'INVALID_EMPLOYEE_PHOTO'
+        ? 'Выберите JPEG, PNG или WebP размером до 5 МБ.' : 'Не удалось сохранить фото. Попробуйте ещё раз.');
+    } finally {
+      photoBusy = false;
+      photo.removeAttribute('aria-busy');
+      removePhoto.disabled = false;
+    }
+  }
+  photoInput.addEventListener('change', async () => {
+    const file = photoInput.files[0];
+    photoInput.value = '';
+    if (!file || photoBusy) return;
+    if (file.size > 5 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      await window.AppModal.alert('Выберите JPEG, PNG или WebP размером до 5 МБ.');
+      return;
+    }
+    const version = profileOpenVersion;
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      if (version !== profileOpenVersion || !profileMenu.classList.contains('is-profile-editing')) return;
+      await savePhoto({ method: 'PUT', body: JSON.stringify({ photo_base64: data }) });
+    } catch (error) { await window.AppModal.alert('Не удалось прочитать фотографию.'); }
+  });
+  removePhoto.addEventListener('click', async event => {
+    event.stopPropagation();
+    if (photoBusy) return;
+    const version = profileOpenVersion;
+    if (!await window.AppModal.confirm({ title: 'Удалить фото профиля?', message: 'Фотографию можно будет загрузить снова.', saveText: 'Удалить' })) return;
+    if (version !== profileOpenVersion || !profileMenu.classList.contains('is-profile-editing')) return;
+    await savePhoto({ method: 'DELETE' });
+  });
+
+  const mobileProfile = () => profileMenu.classList.contains('admin-profile-page');
+  function resetProfile() {
+    profileOpenVersion++;
+    resetPhotoEditor();
+    profileMenu.dataset.profileView = 'root';
+    clearInterval(pollTimer);pollTimer = null;
+    profileMenu.replaceChildren(...rootProfileNodes);
+    profileMenu.classList.remove('is-messengers-screen');
+  }
+  function openProfileSection(title, restore) {
+    if (!mobileProfile()) return;
+    photo.closest('.user-menu-header').classList.remove('is-photo-expanded');
+    profileMenu.dataset.profileView = 'section';
+    window.__adminMobilePages.openSubview(title, () => {
+      profileMenu.dataset.profileView = 'root';
+      restore();
+      void loadProfilePhone();
+    }, {
+      key: 'admin-profile-section', element: profileMenu, global: true,
+    });
+  }
+  document.getElementById('shopProfileBtn')?.addEventListener('click', event => {
+    if (!matchMedia('(max-width: 768px)').matches) return;
+    event.preventDefault();event.stopImmediatePropagation();
+    if (typeof isAuthenticated === 'function' && !isAuthenticated()) { location.href = '/login'; return; }
+    if (mobileProfile()) return;
+    resetProfile();
+    if (document.getElementById('app-sidebar')?.classList.contains('is-open')) document.getElementById('adminMobileMenuBtn')?.click();
+    const opened = window.__adminMobilePages.openSubview('\u041f\u0440\u043e\u0444\u0438\u043b\u044c', () => {
+      profileMenu.classList.remove('admin-profile-page');
+      document.body.classList.remove('admin-profile-page-open');
+      document.getElementById('shopProfileBtn')?.closest('.user-menu-wrapper')?.classList.remove('active');
+      resetProfile();
+    }, { key: 'admin-profile', element: profileMenu, global: true });
+    if (!opened) return;
+    profileMenu.classList.add('admin-profile-page');
+    void loadProfilePhone();
+    document.body.classList.add('admin-profile-page-open');
+    document.getElementById('shopProfileBtn')?.closest('.user-menu-wrapper')?.classList.add('active');
+  }, true);
+
   document.getElementById('shopProfileBtn')?.addEventListener('click', () => {
     profileOpenVersion++;
     if (profileMenu.firstChild === rootProfileNodes[0]) return;
@@ -42,7 +257,8 @@
       const notice = document.createElement('p');
       notice.setAttribute('role', 'status');
       content.append(notice);
-      const restore = () => { profile.replaceChildren(...profileNodes); link.focus(); };
+      const restoreContent = () => { profile.replaceChildren(...profileNodes); link.focus(); };
+      const restore = () => { if (mobileProfile()) window.__adminMobilePages.back(); else restoreContent(); };
       content.querySelector('.auth-password-cancel').remove();
       const toolbar = document.createElement('div');
       toolbar.className = 'messenger-security-toolbar';
@@ -70,13 +286,14 @@
           if (result.token) localStorage.setItem('authToken', result.token);
           if (result.user) localStorage.setItem('user', JSON.stringify(result.user));
           if (result.tenant) localStorage.setItem('tenant', JSON.stringify(result.tenant));
-          restore();
+          if (profile.contains(content)) restore();
         } catch (error) {
           notice.textContent = ({ CURRENT_PASSWORD_INVALID: 'Текущий пароль указан неверно.', PASSWORD_TOO_WEAK: 'Добавьте латинские буквы обоих регистров и цифры.', PASSWORD_TOO_SHORT: 'Минимум 12 символов.', PASSWORD_TOO_LONG: 'Пароль не должен превышать 72 байта.' })[error.code] || errorText(error.code);
         } finally { submit.disabled = false; }
       });
       if (openedVersion !== profileOpenVersion || !document.getElementById('shopProfileBtn')?.closest('.user-menu-wrapper')?.classList.contains('active')) return;
       profile.replaceChildren(content);
+      openProfileSection(heading.textContent, restoreContent);
       form.querySelector('input').focus();
     } catch (error) {
       await window.AppModal.alert('Не удалось загрузить форму смены пароля. Попробуйте ещё раз.');
@@ -197,6 +414,8 @@
           const status = await api('/api/auth/messenger-links');
           bindingsCache = status;
           if (status.channels?.[provider]) {
+            clearInterval(pollTimer);pollTimer = null;
+            await loadProfilePhone(true);
             pendingLinks.delete(provider);
             clearInterval(pollTimer);
             await render();
@@ -224,6 +443,7 @@
     if (!confirmed) return;
     try {
       await api(`/api/auth/messenger-links/${provider}`, { method: 'DELETE' });
+      await loadProfilePhone(true);
       bindingsCache = null;
       await render(true);
       setNotice(`${labels[provider]} отвязан.`, false);
@@ -234,6 +454,7 @@
 
   trigger.addEventListener('click', (event) => {
     event.stopPropagation();
+    profileOpenVersion++;
     const profile = document.getElementById('userMenuDropdown');
     const profileNodes = Array.from(profile.childNodes);
     const content = document.createElement('div');
@@ -248,11 +469,15 @@
     back.innerHTML = '<i class="fas fa-arrow-left" aria-hidden="true"></i>';
     back.addEventListener('click', (event) => {
       event.stopPropagation();
+      if (mobileProfile()) window.__adminMobilePages.back();
+      else restoreContent();
+    });
+    const restoreContent = () => {
       clearInterval(pollTimer);pollTimer = null;
       profile.replaceChildren(...profileNodes);
       profile.classList.remove('is-messengers-screen');
       trigger.focus();
-    });
+    };
     const heading = document.createElement('h2');
     heading.textContent = 'Мессенджеры';
     toolbar.append(back, heading);
@@ -270,6 +495,7 @@
     content.append(toolbar, panel, notice);
     profile.classList.add('is-messengers-screen');
     profile.replaceChildren(content);
+    openProfileSection(heading.textContent, restoreContent);
     render();
   });
 })();

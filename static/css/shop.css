@@ -28272,3 +28272,25 @@ body.page-shop .shop-products-grid > .sp-card .sp-cart-total-stack{
   justify-content: flex-end;
   transform: none;
 }
+
+@media (max-width:768px){
+  .shop-profile-page > .shop-profile-page-header,
+  .shop-profile-settings-page > .shop-profile-settings-page-header{flex-shrink:0}
+  #shopProfileSettingsPage:not(.shop-profile-settings-page-in-modal):has(.shop-profile-settings-redesign) .shop-profile-settings-page-content{padding-top:0}
+  #shopProfileSettingsPage .shop-profile-settings-redesign > .shop-profile-settings-toolbar,
+  #shopProfileSettingsPage .shop-profile-settings-redesign .shop-profile-settings-screen-header{
+    position:sticky;
+    top:0;
+    z-index:5;
+    margin:0 -16px;
+    padding:16px;
+    min-height:64px;
+    box-sizing:border-box;
+    background:var(--color-surface);
+  }
+}
+
+@media (max-width:768px){
+  #shopProfileSettingsPage .shop-profile-settings-redesign:has(.is-photo-expanded) .shop-profile-settings-toolbar,
+  #shopProfileSettingsPage .shop-profile-settings-redesign:has(.is-photo-expanded) .shop-profile-settings-toolbar .btn{color:var(--color-text)}
+}

@@ -402,6 +402,7 @@
             var nameEl = document.getElementById('userMenuName');
             var emailEl = document.getElementById('userMenuEmail');
             var tenantEl = document.getElementById('userMenuTenant');
+            var phoneEl = document.getElementById('userMenuPhone');
             var passwordLink = document.getElementById('userMenuChangePassword');
             if (passwordLink) passwordLink.classList.add('hidden');
             
@@ -410,6 +411,7 @@
               var tenant = JSON.parse(tenantStr);
               if (passwordLink) passwordLink.classList.toggle('hidden', !(Number(user.id) > 0));
               
+              if (phoneEl) phoneEl.textContent = user.phone ? '+' + String(user.phone).replace(/\D/g, '') : '';
               var fullName = String(user.profile_name || user.name || '').trim();
               var nameParts = fullName.split(/\s+/);
               var surname = user.last_name || nameParts[0] || '';
@@ -484,7 +486,7 @@
 
         // Закрытие меню при клике вне его
         document.addEventListener('click', function (e) {
-          if (menuWrapper && !menuWrapper.contains(e.target) && !dropdown.contains(e.target)) {
+          if (!dropdown.classList.contains('admin-profile-page') && menuWrapper && !menuWrapper.contains(e.target) && !dropdown.contains(e.target)) {
             menuWrapper.classList.remove('active');
           }
         });
@@ -493,12 +495,6 @@
         updateUserInfo();
 
         // ===== Часы текущего времени филиала =====
-        var timeEl = document.getElementById('userMenuTime');
-        var clockStop = null;
-
-        if (timeEl && typeof CurrentTime !== 'undefined') {
-          clockStop = CurrentTime.startClock(timeEl);
-        }
 
         // ===== Селектор точек продаж =====
         var storeButton = document.getElementById('userMenuStoreButton');
@@ -755,7 +751,6 @@
               }
 
               // Stop clock before reload
-              if (clockStop) clockStop();
 
               // Save new store ID
               localStorage.setItem('activeStoreId', String(store.id));

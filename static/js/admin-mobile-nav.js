@@ -520,7 +520,7 @@
     if (isMobile()) {
       ensureMobileBackEntry();
       moveAccountControls();
-      if (usesDedicatedMobileNavigation()) {
+      if (usesDedicatedMobileNavigation() && !mobileSubview?.global) {
         restoreContextActions();
         restoreOrderTabs();
         body.classList.remove("admin-mobile-pages", "admin-mobile-view-left", "admin-mobile-view-center", "admin-mobile-view-right");
@@ -532,6 +532,13 @@
       const current = viewStack[viewStack.length - 1] || { level: currentLevel, title: rootTitle };
       showLevel(current.level, current.title, false);
       return;
+    }
+    while (mobileSubview?.global) {
+      const subview = mobileSubview;
+      mobileSubview = null;
+      if (viewStack[viewStack.length - 1]?.subview) viewStack.pop();
+      subview.onBack?.();
+      mobileSubview = viewStack[viewStack.length - 1]?.subview || null;
     }
     restoreContextActions();
     body.classList.remove('orders-mobile-selection');
@@ -560,7 +567,13 @@
     },
     canGoBack: function () { return Boolean(mobileSubview || (usesDedicatedMobileNavigation() ? !body.classList.contains('chat-mobile-left-open') : currentLevel !== getRootLevel())); },
     openCenter: function (title) {
-      if (!isMobile() || usesDedicatedMobileNavigation()) return false;
+      if (!isMobile()) return false;
+      while (mobileSubview?.global) {
+        const previous = mobileSubview;
+        goBack();
+        if (mobileSubview === previous) return false;
+      }
+      if (usesDedicatedMobileNavigation()) return false;
       if (currentLevel !== "center") {
         showLevel("center", title || rootTitle, true);
       } else {
@@ -569,7 +582,13 @@
       return true;
     },
     openRight: function (title) {
-      if (!isMobile() || usesDedicatedMobileNavigation()) return false;
+      if (!isMobile()) return false;
+      while (mobileSubview?.global) {
+        const previous = mobileSubview;
+        goBack();
+        if (mobileSubview === previous) return false;
+      }
+      if (usesDedicatedMobileNavigation()) return false;
       if (currentLevel !== "right") {
         showLevel("right", resolveRightTitle(title), true);
       } else {
@@ -583,13 +602,14 @@
       return true;
     },
     openSubview: function (title, onBack, options) {
-      if (!isMobile() || usesDedicatedMobileNavigation() || (currentLevel !== "center" && currentLevel !== "right")) return false;
+      if (!isMobile() || (!options?.global && (usesDedicatedMobileNavigation() || (currentLevel !== "center" && currentLevel !== "right")))) return false;
       const sourceLevel = currentLevel;
       const key = options?.key || 'subview';
       if (!mobileSubview || mobileSubview.key !== key) captureViewScroll();
       const previousSubview = mobileSubview;
       mobileSubview = {
         key,
+        global: options?.global === true,
         element: options?.element || null,
         title: String(title || "").trim() || rootTitle,
         onBack: typeof onBack === "function" ? onBack : null,
@@ -688,7 +708,7 @@
     gesture.direction = direction;
     gesture.source = mobileSubview?.element || (gesture.fromCenter ? centerColumn : rightColumn);
     if (direction < 0) gesture.preview = rightColumn;
-    else if (mobileSubview) gesture.preview = previous?.subview?.element || (currentLevel === 'center' ? centerColumn : rightColumn);
+    else if (mobileSubview) gesture.preview = previous?.subview?.element || (currentLevel === 'left' ? leftColumn : currentLevel === 'center' ? centerColumn : rightColumn);
     else if (!usesDedicatedMobileNavigation() && previous?.level === 'left') gesture.preview = leftColumn;
     else if (!usesDedicatedMobileNavigation() && previous?.level === 'center') gesture.preview = centerColumn;
     else if (usesDedicatedMobileNavigation() && gesture.fromCenter) gesture.preview = leftColumn;

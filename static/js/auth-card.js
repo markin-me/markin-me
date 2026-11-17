@@ -5,22 +5,10 @@
     try{const r=JSON.parse(sessionStorage.getItem(pendingKey(context))||'null');return r&&/^[A-Za-z0-9_-]{43}$/.test(r.id)&&Date.now()-r.at<(context==='customer'?600000:180000)?r:null;}
     catch(error){console.warn('AUTH_PENDING_STORAGE_UNAVAILABLE');return null;}
   }
-  const providerWindows=new Map();
   function openProviderWindow(url){
-    const existing=url?providerWindows.get(url):null;
-    if(existing&&!existing.closed){existing.location.href=url;existing.focus();return existing;}
-    const popup=window.open(url||'about:blank','_blank');
-    if(!popup)return null;
-    if(url){providerWindows.set(url,popup);popup.opener=null;return popup;}
-    try{
-      popup.document.documentElement.lang='ru';
-      popup.document.title='Переход в мессенджер';
-      const text=popup.document.createElement('p');
-      text.textContent='Подготавливаем безопасную ссылку. Если переход не произошёл, вернитесь в исходную вкладку: там будет ссылка или причина ошибки.';
-      popup.document.body.replaceChildren(text);
-      popup.opener=null;
-    }catch(error){console.error('AUTH_POPUP_INIT_FAILED',error.name);}
-    return popup;
+    if(!url)return false;
+    window.location.assign(url);
+    return true;
   }
   function create(options = {}) {
     const {context='customer',onSuccess,dependencies:d={}}=options;
@@ -207,10 +195,7 @@
       finally{checking=false;if(!disposed&&requestId)timer=setTimeout(check,2000);}
     };
     let activeProviderLink=null;
-    const openCustomerProvider=url=>{
-      if(activeProviderLink?.url===url&&activeProviderLink.popup&&!activeProviderLink.popup.closed){activeProviderLink.popup.location.href=url;activeProviderLink.popup.focus();return activeProviderLink.popup;}
-      return openProviderWindow(url);
-    };
+    const openCustomerProvider=url=>openProviderWindow(url);
     const cancel=()=>{stop();if(!recovery)customerRun++;activeProviderLink=null;credentialBinding=false;progress.textContent='';submit.textContent=recovery?'Подтвердить в мессенджере':'Войти';const id=requestId;requestId='';remember();if(id)api(endpoint+'/status',{method:'POST',signal:AbortSignal.timeout(15000),body:{request_id:id,cancel:true}}).catch(()=>{console.warn('AUTH_CANCEL_NOT_CONFIRMED');});};
     const buttons=[];
     for(const provider of ['max','tg']){
@@ -229,25 +214,25 @@
           finally{busy=false;button.disabled=false;button.classList.remove('is-loading');}
           return;
         }
-        if(!recovery&&requestId&&activeProviderLink?.provider===provider){activeProviderLink.popup=openCustomerProvider(activeProviderLink.url);return;}
+        if(!recovery&&requestId&&activeProviderLink?.provider===provider){openCustomerProvider(activeProviderLink.url);return;}
         if(recovery&&(identity.value.length<12||identity.value!==secret.value)){message.textContent='Введите одинаковый новый пароль от 12 символов в оба поля.';form.classList.remove('hidden');identity.focus();return;}
         if(busy)return;
         if(!recovery&&requestId&&activeProviderLink?.provider!==provider){otherProviderRequests.add(requestId);requestId='';}
         cancel();const run=customerRun;busy=true;buttons.forEach(b=>b.disabled=true);button.classList.add('is-loading');if(employee)form.classList.add('hidden');
-        let popup=recovery?openProviderWindow():null;
+        let opened=false;
         const label=button.querySelector('.shop-auth-method-label'),labelParts=label?[...label.childNodes]:[];
         if(!recovery){button.setAttribute('aria-busy','true');label.textContent=provider==='tg'?'Открываем Telegram…':'Открываем MAX…';}
         message.textContent=recovery?'Создаём запрос входа…':'';
-        try{const result=await api(endpoint+'/start',{method:'POST',body:{provider,phone:employee?employeePhone.value:identity.value,purpose:recovery?'password_reset':'login'},signal:AbortSignal.timeout(15000)});if(disposed||!employee&&run!==customerRun){popup?.close();return;}
+        try{const result=await api(endpoint+'/start',{method:'POST',body:{provider,phone:employee?employeePhone.value:identity.value,purpose:recovery?'password_reset':'login'},signal:AbortSignal.timeout(15000)});if(disposed||!employee&&run!==customerRun){return;}
           requestId=result.request_id;deadlineAt=Date.now()+180000;remember();const url=new URL(result.bot_link);
           if(url.protocol!=='https:' || !['t.me','max.ru'].includes(url.hostname))throw new Error('BOT_LINK_INVALID');
-          if(recovery){if(popup)popup.location.replace(url.href);}
-          else{popup=openCustomerProvider(url.href);activeProviderLink={provider,url:url.href,popup};}
+          if(recovery){opened=openProviderWindow(url.href);}
+          else{opened=openCustomerProvider(url.href);activeProviderLink={provider,url:url.href};}
           message.replaceChildren(document.createTextNode(recovery?'Подтвердите свой номер системной кнопкой в боте, затем вернитесь сюда. ':''));
-          const link=document.createElement('a');link.href=url.href;link.target='_blank';link.rel='noopener';link.textContent=employee?'Открыть бота':provider==='tg'?'Открыть Telegram':'Открыть MAX';
-          if(!recovery){link.className='btn shop-auth-open-provider';link.addEventListener('click',event=>{event.preventDefault();if(activeProviderLink)activeProviderLink.popup=openCustomerProvider(url.href);});}
-          if(recovery||!popup)message.append(link);timer=setTimeout(check,1500);
-        }catch(e){popup?.close();if(disposed||!employee&&run!==customerRun)return;cancel();if(employee){if(recovery)message.textContent=errorText(e.message);else customerError(e);}else{customerStep('methods');customerError(e);}}finally{busy=false;buttons.forEach(b=>b.disabled=false);button.classList.remove('is-loading');button.removeAttribute('aria-busy');if(label){label.replaceChildren(...labelParts);if(requestId&&activeProviderLink?.provider===provider)label.textContent=provider==='tg'?'Открыть Telegram':'Открыть MAX';}}
+          const link=document.createElement('a');link.href=url.href;link.target='_self';link.rel='noopener';link.textContent=employee?'Открыть бота':provider==='tg'?'Открыть Telegram':'Открыть MAX';
+          if(!recovery){link.className='btn shop-auth-open-provider';link.addEventListener('click',event=>{event.preventDefault();if(activeProviderLink)openCustomerProvider(url.href);});}
+          if(recovery||!opened)message.append(link);timer=setTimeout(check,1500);
+        }catch(e){if(disposed||!employee&&run!==customerRun)return;cancel();if(employee){if(recovery)message.textContent=errorText(e.message);else customerError(e);}else{customerStep('methods');customerError(e);}}finally{busy=false;buttons.forEach(b=>b.disabled=false);button.classList.remove('is-loading');button.removeAttribute('aria-busy');if(label){label.replaceChildren(...labelParts);if(requestId&&activeProviderLink?.provider===provider)label.textContent=provider==='tg'?'Открыть Telegram':'Открыть MAX';}}
       });
     }
     const alternative=document.createElement('button');alternative.type='button';alternative.className=employee&&!recovery?'btn shop-auth-guest':'btn btn-primary';alternative.textContent=recovery?'Задать новый пароль':employee?'По логину и паролю':'По телефону';
@@ -812,8 +797,8 @@
       if (until > Date.now()) messengerResendTimer = setInterval(update, 1000);
     };
 
-    const requestMessengerCode = async (provider = "", popup = null) => {
-      if (!["max", "tg"].includes(provider)) { popup?.close(); setBirthdayError("Выберите MAX или Telegram."); return false; }
+    const requestMessengerCode = async (provider = "", openProvider = false) => {
+      if (!["max", "tg"].includes(provider)) {  setBirthdayError("Выберите MAX или Telegram."); return false; }
       messengerProvider = provider;
       resendCodeBtn.disabled = true;
       loginBtn.disabled = true;
@@ -830,7 +815,7 @@
             : { phone: phone.value, provider: provider || undefined, start_in_bot: true },
           headers: { "x-customer-token": "" },
         });
-        if (disposed) { popup?.close(); return false; }
+        if (disposed) {  return false; }
         messengerRequestId = String(json.request_id || "");
         messengerProvider = String(json.sent_via || "");
         telegramFallbackBtn.classList.add("hidden");
@@ -841,21 +826,21 @@
           codeMeta.textContent = `Запрос создан, код ещё не отправлен. Нажмите Start в ${providerName}, затем введите код здесь. Код действует 3 минуты после отправки. `;
           const link = document.createElement("a");
           link.href = url.href;
-          link.target = "_blank";
+          link.target = "_self";
           link.rel = "noopener noreferrer";
           link.textContent = `Открыть ${providerName}`;
           codeMeta.append(link);
-          if (popup) popup.location.replace(url.href);
+          if (openProvider) openProviderWindow(url.href);
         } else {
           codeMeta.textContent = `Код отправлен в ${providerName} (${json.destination || "привязанный профиль"}). Он действует 3 минуты.`;
-          popup?.close();
+
         }
         startMessengerResendCountdown(json.resend_after);
         clearCodeInputs();
         focusCodeIndex(0);
         return true;
       } catch (error) {
-        popup?.close();
+
         const code = String(error?.message || "");
         const canFallback = Boolean(error?.payload?.fallback_available);
         telegramFallbackBtn.classList.toggle("hidden", !canFallback);
@@ -937,12 +922,9 @@
         phone.focus();
         return;
       }
-      // Open synchronously so mobile browsers do not block navigation after the request.
-      const popup = window.open("about:blank", "_blank");
-      if (popup) popup.opener = null;
       setCodeStepUi();
       revealSecondStep();
-      await requestMessengerCode(provider, popup);
+      await requestMessengerCode(provider, true);
     };
     maxLoginBtn.addEventListener("click", () => openBotLogin("max"));
     tgLoginBtn.addEventListener("click", () => openBotLogin("tg"));
