@@ -52,6 +52,7 @@
     button.append(arrow);
   }
   let phoneStatusRequest = null;
+  let phoneStatusCache = null;
   async function loadProfilePhone(force = false) {
     const version = profileOpenVersion;
     if (force || !window.AdminAccessContext?.user) {
@@ -60,13 +61,21 @@
     }
     try {
       const token = localStorage.getItem('authToken');
-      let result;
-      if (force) {
-        if (!phoneStatusRequest) phoneStatusRequest = api('/api/auth/me').finally(() => { phoneStatusRequest = null; });
-        result = await phoneStatusRequest;
-      } else result = await (window.AdminAccessContext || window.AdminAccessContextPromise);
+      if (force) phoneStatusCache = null;
+      let result = phoneStatusCache?.token === token ? phoneStatusCache.result : null;
+      if (!result) {
+        if (!phoneStatusRequest || phoneStatusRequest.token !== token) {
+          const request = { token, promise: null };
+          request.promise = api('/api/auth/me').finally(() => {
+            if (phoneStatusRequest === request) phoneStatusRequest = null;
+          });
+          phoneStatusRequest = request;
+        }
+        result = await phoneStatusRequest.promise;
+      }
       if (token !== localStorage.getItem('authToken')) return;
       if (typeof result?.user?.phone_verified !== 'boolean') throw new Error('INVALID_PHONE_VERIFICATION_STATUS');
+      phoneStatusCache = { token, result };
       if (force && window.AdminAccessContext?.user) {
         Object.assign(window.AdminAccessContext.user, { phone: result.user.phone, phone_verified: result.user.phone_verified });
         localStorage.setItem('user', JSON.stringify(window.AdminAccessContext.user));
@@ -80,7 +89,7 @@
     } catch (error) {
       if (version !== profileOpenVersion) return;
       phoneHint.textContent = 'Не удалось проверить номер.';
-      console.error('ADMIN_PROFILE_PHONE_LOAD_FAILED', error.code || error.name);
+      console.error('ADMIN_PROFILE_PHONE_LOAD_FAILED', error);
     }
   }
 
@@ -362,6 +371,7 @@
     button.disabled = !channel && availability?.available === false;
     if (!ready) button.addEventListener('click', () => channel ? showUnlink(provider) : startLink(provider, button));
     actions.append(button);
+    if (!channel && pendingLinks.has(provider)) actions.append(window.AuthCard.createProviderWebLink(pendingLinks.get(provider).url));
     wrapper.append(copy, actions);
     return wrapper;
   }
@@ -405,6 +415,9 @@
       if (url.protocol !== 'https:' || !['t.me', 'max.ru'].includes(url.hostname)) throw new Error('BOT_LINK_INVALID');
       pendingLinks.set(provider, { url: url.href, expiresAt: Date.parse(result.expires_at) });
       const popup = window.AuthCard.openProviderWindow(url.href);
+      const webLink = window.AuthCard.createProviderWebLink(url.href);
+      button.closest('.messenger-security-actions').querySelector('a')?.remove();
+      button.closest('.messenger-security-actions').append(webLink);
       if (!popup) setNotice(`Разрешите всплывающие окна и снова нажмите «Привязать ${labels[provider]}».`, true);
       if (popup) setNotice(`Завершите привязку в ${labels[provider]}. Статус обновится автоматически.`, false);
       clearInterval(pollTimer);

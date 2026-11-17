@@ -1,3 +1,4 @@
+const { createServiceTextRenderer } = require('./botContentTemplates');
 const { connectStoreChat } = require('./telegramBot');
 const { requestTelegramApi } = require('./telegramApi');
 const { markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
@@ -33,6 +34,7 @@ async function sendTelegramMessage(token, chatId, text, extra = null, onTelegram
 }
 
 async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options = {}) {
+  const serviceText = createServiceTextRenderer(db, tenantBot.tenantId, Number(tenantBot.storeId || 1), 'tg');
   const send = (chatId, text, extra = null) => sendTelegramMessage(
     tenantBot.token, chatId, text, extra, options.onTelegramApiTiming
   );
@@ -44,10 +46,10 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
       callback_query_id: callback.id, text: result.ok ? 'Вход подтверждён' : 'Запрос истёк или доступ не разрешён',
     }, { onTiming: options.onTelegramApiTiming });
     await send(callback.from.id,result.ok
-      ? result.purpose==='password_reset'?'✅ Подтверждение смены пароля принято. Вернитесь в исходную вкладку CRM.':'Подтверждение принято. Вернитесь в исходную вкладку — CRM завершит вход там.'
+      ? result.purpose==='password_reset'?'✅ Подтверждение смены пароля принято. Вернитесь в исходную вкладку CRM.':await serviceText('auth_success', 'Подтверждение принято. Вернитесь в исходную вкладку — CRM завершит вход там.')
       :result.error==='EMPLOYEE_MESSENGER_NOT_LINKED'?'Привязка не подтверждена. Начните вход заново в исходной карточке.'
       :result.error==='CUSTOMER_OWNERSHIP_PROOF_REQUIRED'?'По этому номеру уже есть карточка. Контакт не даёт доступа к её данным. Нужно подтверждение через ранее привязанный мессенджер или помощь администратора; дата рождения для новой привязки не подходит.'
-      :'Вход не подтверждён. Запрос истёк, привязка конфликтует или требуется обновление CRM. Вернитесь в исходную карточку входа.');
+      :await serviceText('request_error', 'Вход не подтверждён. Запрос истёк, привязка конфликтует или требуется обновление CRM. Вернитесь в исходную карточку входа.'));
     return;
   }
   const msg = upd?.message;
@@ -84,11 +86,11 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
   if(payload.startsWith('b_') && options.onBrowserAuth){
     const result=await options.onBrowserAuth({providerUserId:String(fromId),token:payload,confirm:false});
     if(result.ok&&result.contactRequired){
-      await send(chatId,'Чтобы авторизоваться в системе, нажмите «Авторизоваться».',
+      await send(chatId,await serviceText('contact_request', 'Чтобы авторизоваться в системе, нажмите «Авторизоваться».'),
         {reply_markup:{keyboard:[[{text:'Авторизоваться',request_contact:true}]],resize_keyboard:true,one_time_keyboard:true}});
       return;
     }
-    await send(chatId,result.ok?'Подтвердите вход в исходном браузере. Если вы не начинали вход, не нажимайте кнопку.':'Запрос истёк. Начните вход заново в магазине.',
+    await send(chatId,result.ok?await serviceText('confirmation_pending', 'Подтвердите вход в исходном браузере. Если вы не начинали вход, не нажимайте кнопку.'):await serviceText('request_expired', 'Запрос истёк. Начните вход заново в магазине.'),
       result.ok&&!result.confirmed?{reply_markup:{inline_keyboard:[[{text:result.purpose==='password_reset'?'✅ Подтвердить смену пароля':'✅ Авторизоваться',callback_data:`auth:${payload}`}]]}}:{reply_markup:{remove_keyboard:true}});
     return;
   }
@@ -97,22 +99,22 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
     const result = await options.onAuthLogin({ providerUserId: String(fromId), token: payload });
     if (!result.ok || result.alreadySent) await send(chatId,
       result.alreadySent ? 'Код уже отправлен. Он действует 3 минуты. Для нового кода вернитесь на карточку входа.'
-        : result.error === 'CODE_DELIVERY_FAILED' ? 'Не удалось доставить код. Создайте новый запрос на карточке входа.'
+        : result.error === 'CODE_DELIVERY_FAILED' ? await serviceText('request_error', 'Не удалось доставить код. Создайте новый запрос на карточке входа.')
         : 'Запрос входа истёк или привязка не подтверждена. Вернитесь на карточку входа. Сотруднику нужно сначала войти с паролем и привязать мессенджер в профиле.');
     return;
   }
   if (payload.startsWith('a_') && typeof options.onAuthLink === 'function') {
     const result = await options.onAuthLink({ provider: 'tg', providerUserId: String(fromId), token: payload });
     if (result?.contactRequired) {
-      await send(chatId, 'Чтобы привязать мессенджер к учётной записи, нажмите кнопку «Привязать».', {
+      await send(chatId, await serviceText('contact_request', 'Чтобы привязать мессенджер к учётной записи, нажмите кнопку «Привязать».'), {
         reply_markup: { keyboard: [[{ text: 'Привязать', request_contact: true }]], resize_keyboard: true, one_time_keyboard: true },
       });
       return;
     }
     await send(chatId, result?.ok
       ? result.context==='PROFILE_LINK'
-        ? 'Telegram успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
-        : 'Telegram успешно привязан. Вернитесь в CRM. Теперь вы можете получать коды для входа через этот бот.'
+        ? await serviceText('link_success', 'Telegram успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот')
+        : await serviceText('link_success', 'Telegram успешно привязан. Вернитесь в CRM. Теперь вы можете получать коды для входа через этот бот.')
       : 'Ссылка недействительна, истекла или привязка конфликтует. Получите новую в профиле.',
       { reply_markup: { remove_keyboard: true } });
     return;
@@ -128,26 +130,26 @@ async function handleTenantTelegramUpdate(db, helpers, tenantBot, upd, options =
       const browser=await options.onBrowserContact({providerUserId:String(fromId),phone:contactPhone,name:[msg.from.first_name,msg.from.last_name].filter(Boolean).join(' ')});
       if(browser.context==='PROFILE_LINK'){
         await send(chatId,browser.ok
-          ?browser.guestConfirmed?'Номер телефона подтверждён! Telegram подключён к вашему профилю. Теперь вам доступны бонусы и вход по коду.':'Telegram успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот'
+          ?browser.guestConfirmed?'Номер телефона подтверждён! Telegram подключён к вашему профилю. Теперь вам доступны бонусы и вход по коду.':await serviceText('link_success', 'Telegram успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот')
           :browser.error==='CONTACT_PHONE_MISMATCH'?'Не удалось привязать мессенджер, так как номер телефона не совпадает с учётной записью':'Не удалось привязать Telegram. Начните привязку заново в профиле.',{reply_markup:{remove_keyboard:true}});
         return;
       }
       if(browser.autoConfirmed){
-        await send(chatId,'Номер телефона подтверждён. Вход будет завершён автоматически',{reply_markup:{remove_keyboard:true}});
+        await send(chatId,await serviceText('auth_success', 'Номер телефона подтверждён. Вход будет завершён автоматически'),{reply_markup:{remove_keyboard:true}});
         await send(chatId,'При последующих авторизациях вы будете получать код в этом боте');
         return;
       }
       if(browser.ok){
-        await send(chatId,'Контакт подтверждён. Нажмите «Авторизоваться».',
+        await send(chatId,await serviceText('confirmation_pending', 'Контакт подтверждён. Нажмите «Авторизоваться».'),
           {reply_markup:{remove_keyboard:true}});
-        await send(chatId,'Подтвердите именно начатый вами вход.',{reply_markup:{inline_keyboard:[[{text:'Авторизоваться',callback_data:`auth:${browser.reference}`}]]}});return;
+        await send(chatId,await serviceText('confirmation_pending', 'Подтвердите именно начатый вами вход.'),{reply_markup:{inline_keyboard:[[{text:'Авторизоваться',callback_data:`auth:${browser.reference}`}]]}});return;
       }
       if(browser.matched!==false){
         if(browser.error==='CUSTOMER_RELINK_PROOF_REQUIRED'){
           await send(chatId,'Для повторного подключения используйте тот Telegram-аккаунт, который был привязан раньше. Если он недоступен, восстановите доступ через магазин.');return;
         }
         console.warn('TELEGRAM_BROWSER_CONTACT_REJECTED',{tenantId:tenantBot.tenantId,reason:browser.error||'BROWSER_CONTACT_REJECTED'});
-        const reason={CONTACT_PHONE_MISMATCH:'Номер собственного контакта отличается от введённого в магазине. Отмените вход и начните заново со своим номером.',ACCOUNT_PERSON_CONFLICT:'Обнаружена другая подтверждённая привязка. Доступ не выдан; требуется безопасное разрешение конфликта администратором.',CUSTOMER_PHONE_CONFLICT:'Номер и мессенджер относятся к разным карточкам. Автоматическое объединение запрещено; обратитесь к администратору.',REQUEST_EXPIRED:'Запрос истёк. Отмените вход в исходной вкладке, начните заново и передайте контакт в течение трёх минут.'}[browser.error];
+        const reason={CONTACT_PHONE_MISMATCH:'Номер собственного контакта отличается от введённого в магазине. Отмените вход и начните заново со своим номером.',ACCOUNT_PERSON_CONFLICT:'Обнаружена другая подтверждённая привязка. Доступ не выдан; требуется безопасное разрешение конфликта администратором.',CUSTOMER_PHONE_CONFLICT:'Номер и мессенджер относятся к разным карточкам. Автоматическое объединение запрещено; обратитесь к администратору.',REQUEST_EXPIRED:await serviceText('request_expired', 'Запрос истёк. Отмените вход в исходной вкладке, начните заново и передайте контакт в течение трёх минут.')}[browser.error];
         if(reason){await send(chatId,reason);return;}
         await send(chatId,browser.error==='CONTACT_REQUEST_AMBIGUOUS'?'Одновременно открыто несколько запросов входа. Отмените лишние запросы в исходных вкладках, затем отправьте свой контакт снова.':'Контакт не принят для входа. Создайте новый запрос в исходной карточке.');return;
       }

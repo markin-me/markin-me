@@ -5,9 +5,54 @@
     try{const r=JSON.parse(sessionStorage.getItem(pendingKey(context))||'null');return r&&/^[A-Za-z0-9_-]{43}$/.test(r.id)&&Date.now()-r.at<(context==='customer'?600000:180000)?r:null;}
     catch(error){console.warn('AUTH_PENDING_STORAGE_UNAVAILABLE');return null;}
   }
+  let cancelProviderLaunch = null;
+  function providerLinks(value) {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || !['t.me', 'max.ru'].includes(url.hostname)
+        || !/^\/[A-Za-z0-9_]+\/?$/.test(url.pathname)) throw new Error('BOT_LINK_INVALID');
+    if (url.hostname === 'max.ru') {
+      const web = new URL(url.href); web.hostname = 'web.max.ru';
+      return { app: 'max://' + url.host + url.pathname + url.search, web: web.href };
+    }
+    const app = new URL('tg://resolve');
+    app.searchParams.set('domain', url.pathname.replace(/\//g, ''));
+    for (const key of ['start', 'startapp']) {
+      if (url.searchParams.has(key)) app.searchParams.set(key, url.searchParams.get(key));
+    }
+    return { app: app.href, web: 'https://web.telegram.org/k/#?tgaddr=' + encodeURIComponent(app.href) };
+  }
+  function createProviderWebLink(url) {
+    const link = document.createElement('a');
+    link.href = providerLinks(url).web;
+    link.target = '_blank'; link.rel = 'noopener noreferrer';
+    link.textContent = '\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0432\u0435\u0431-\u0432\u0435\u0440\u0441\u0438\u044e';
+    link.addEventListener('click', () => cancelProviderLaunch?.());
+    return link;
+  }
   function openProviderWindow(url){
-    if(!url)return false;
-    window.location.assign(url);
+    if (!url) return false;
+    const links = providerLinks(url);
+    cancelProviderLaunch?.();
+    let timer;
+    const cancel = () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', cancel);
+      window.removeEventListener('blur', cancel);
+      if (cancelProviderLaunch === cancel) cancelProviderLaunch = null;
+    };
+    const onVisibility = () => { if (document.hidden) cancel(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', cancel, { once: true });
+    // An OS permission prompt must not open a second tab behind the prompt.
+    window.addEventListener('blur', cancel, { once: true });
+    cancelProviderLaunch = cancel;
+    timer = setTimeout(() => {
+      cancel();
+      if (!document.hidden) window.open(links.web, '_blank', 'noopener,noreferrer');
+    }, 2200);
+    try { window.location.assign(links.app); }
+    catch (error) { cancel(); window.open(links.web, '_blank', 'noopener,noreferrer'); }
     return true;
   }
   function create(options = {}) {
@@ -86,8 +131,6 @@
           button.disabled=false;button.dataset.codeChannel='false';
         });
         message.textContent='Не удалось отправить код. Подтвердите номер через другой мессенджер или войдите как гость.';
-        const unconfirmedButton=buttons.find(button=>error.payload.link_channels?.includes(button.dataset.provider));
-        if(unconfirmedButton)setTimeout(()=>{if(!disposed&&!busy)unconfirmedButton.click();},0);
         return;
       }
       if(customerPhase==='phone'){
@@ -229,9 +272,8 @@
           if(recovery){opened=openProviderWindow(url.href);}
           else{opened=openCustomerProvider(url.href);activeProviderLink={provider,url:url.href};}
           message.replaceChildren(document.createTextNode(recovery?'Подтвердите свой номер системной кнопкой в боте, затем вернитесь сюда. ':''));
-          const link=document.createElement('a');link.href=url.href;link.target='_self';link.rel='noopener';link.textContent=employee?'Открыть бота':provider==='tg'?'Открыть Telegram':'Открыть MAX';
-          if(!recovery){link.className='btn shop-auth-open-provider';link.addEventListener('click',event=>{event.preventDefault();if(activeProviderLink)openCustomerProvider(url.href);});}
-          if(recovery||!opened)message.append(link);timer=setTimeout(check,1500);
+          const link=createProviderWebLink(url.href);link.className='btn shop-auth-open-provider';
+          message.append(link);timer=setTimeout(check,1500);
         }catch(e){if(disposed||!employee&&run!==customerRun)return;cancel();if(employee){if(recovery)message.textContent=errorText(e.message);else customerError(e);}else{customerStep('methods');customerError(e);}}finally{busy=false;buttons.forEach(b=>b.disabled=false);button.classList.remove('is-loading');button.removeAttribute('aria-busy');if(label){label.replaceChildren(...labelParts);if(requestId&&activeProviderLink?.provider===provider)label.textContent=provider==='tg'?'Открыть Telegram':'Открыть MAX';}}
       });
     }
@@ -824,11 +866,7 @@
           const url = new URL(json.bot_link);
           if (url.protocol !== "https:" || !["t.me", "max.ru"].includes(url.hostname)) throw new Error("BOT_LINK_INVALID");
           codeMeta.textContent = `Запрос создан, код ещё не отправлен. Нажмите Start в ${providerName}, затем введите код здесь. Код действует 3 минуты после отправки. `;
-          const link = document.createElement("a");
-          link.href = url.href;
-          link.target = "_self";
-          link.rel = "noopener noreferrer";
-          link.textContent = `Открыть ${providerName}`;
+          const link = createProviderWebLink(url.href);
           codeMeta.append(link);
           if (openProvider) openProviderWindow(url.href);
         } else {
@@ -1076,6 +1114,6 @@
   }
 
 
-  window.AuthCard = Object.freeze({ create, openProviderWindow, hasPendingRequest:context=>!!pendingRequest(context) });
+  window.AuthCard = Object.freeze({ create, openProviderWindow, createProviderWebLink, hasPendingRequest:context=>!!pendingRequest(context) });
 })();
 

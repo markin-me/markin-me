@@ -57,6 +57,22 @@ function renderTemplate(text, variables) {
   });
 }
 
+function createServiceTextRenderer(db, tenantId, storeId, provider) {
+  let templates;
+  let variables;
+  return async (key, originalText) => {
+    if (!templates) templates = listTemplates(db, tenantId, storeId, provider);
+    const template = (await templates).find(item => item.key === key);
+    if (!template) throw new Error('BOT_TEMPLATE_KEY_INVALID');
+    if (!template.customized) return originalText;
+    if (!variables) variables = db.query(
+      `SELECT s.name AS store_name,t.site_name,t.name FROM ten_tenants t
+       LEFT JOIN ten_stores s ON s.tenant_id=t.id AND s.id=? WHERE t.id=? LIMIT 1`, [storeId, tenantId]
+    ).then(([rows]) => ({ store_name: rows[0]?.store_name || rows[0]?.site_name || rows[0]?.name || '' }));
+    return renderTemplate(template.text, await variables);
+  };
+}
+
 async function listTemplates(db, tenantId, storeId, providerValue) {
   const provider = normalizeProvider(providerValue);
   if (!provider) throw Object.assign(new Error('BOT_PROVIDER_INVALID'), { status: 400, code: 'BOT_PROVIDER_INVALID' });
@@ -131,6 +147,7 @@ async function resetTemplate(db, tenantId, storeId, providerValue, key) {
 }
 
 module.exports = {
+  createServiceTextRenderer,
   TEMPLATE_DEFINITIONS,
   listTemplates,
   normalizeButtons,
