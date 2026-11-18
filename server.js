@@ -2533,7 +2533,7 @@ app.use('/api/admin/important-messages', authMiddleware, makeAdminImportantMessa
   ensurePushSubscriptionsTable: makeChatTempRouter.ensurePushSubscriptionsTable,
   sendPushToSubscriptions: makeChatTempRouter.sendPushToSubscriptions,
 }));
-const adminOrdersRouter=makeAdminOrdersRouter({db,helpers,ordersEvents,can,validateCheckoutPreorders:publicShopRouter.validateCheckoutPreorders});
+const adminOrdersRouter=makeAdminOrdersRouter({db,helpers,ordersEvents,can,validateCheckoutPreorders:publicShopRouter.validateCheckoutPreorders,validateAutoAddOrder:publicShopRouter.validateAutoAddOrder});
 publicShopRouter.setAbandonedCleanup(()=>adminOrdersRouter.cleanupAbandoned(app.get('paymentServiceClient')));
 app.post('/api/admin/orders/checkout', authMiddleware, requireAdminPermission, (req, res, next) => {
   const value = req.body || {};
@@ -2808,6 +2808,7 @@ const adminProductsRouter = makeAdminProductsRouter({
   helpers,
   ordersEvents,
   buildAdminFullProductPassports: publicShopRouter.buildAdminFullProductPassports,
+  loadAutoAdd: publicShopRouter.loadAutoAdd,
 });
 function requireProductApiPermission(req, res, next) {
   const route = String(req.path || '').toLowerCase();

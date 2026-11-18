@@ -5,9 +5,10 @@ const fs = require('fs');
 const multer = require('multer');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const catalogSync = require('../../services/catalog-sync');
+const { normalizeProductConfiguration } = require('../helpers/orderOnlinePricing');
 const { isUserSessionActive } = require('../middleware/auth');
 
-module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, buildAdminFullProductPassports }) {
+module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, buildAdminFullProductPassports, loadAutoAdd }) {
   const router = express.Router();
 
   async function publishStockChanged(tenantId, storeId, payload = {}) {
@@ -253,6 +254,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     const method = String(req.method || '').toUpperCase();
     const requestPath = String(req.path || '');
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return next();
+    if (requestPath.startsWith('/admin/auto-add/')) req.__catalogReferenceChanged = true;
     const tenantId = helpers.getTenantId(req);
     try {
       let rows = [];
@@ -1631,6 +1633,16 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         return res.status(503).json({ ok: false, error: 'PASSPORT_BUILDER_UNAVAILABLE' });
       }
       const payload = await buildAdminFullProductPassports({ tenantId, storeId, productIds: ids });
+      for (const passport of Object.values(payload.data || {})) {
+        const optionDetails = {};
+        const assignments = (passport.optionAssignments || []).filter(row => Number(row.is_active) === 1);
+        for (const assignment of assignments) {
+          optionDetails[Number(assignment.group_id)] = await getAdminOptionGroupDetails(tenantId,
+            Number(assignment.group_id), Number(passport.product.id));
+        }
+        passport.editor.option_details = optionDetails;
+        passport.editor.catalog_details_version = 2;
+      }
       return res.json(payload);
     } catch (e) {
       console.error(e);
@@ -1696,7 +1708,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           [tenantId, ...blockIds]
         );
         [blockProducts] = await db.query(
-          `SELECT id, block_id, product_id, sort_order, is_default
+          `SELECT id, block_id, product_id, sort_order, is_default, configuration_json
              FROM prod_combo_block_products
             WHERE tenant_id=? AND block_id IN (${blockPlaceholders})
             ORDER BY block_id ASC, sort_order ASC, id ASC`,
@@ -2326,10 +2338,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       }
 
       const clientComposition = items.join(', ');
-      await db.query(
-        `UPDATE prod_products SET client_composition=? WHERE tenant_id=? AND id=?`,
-        [clientComposition, tenantId, productId]
-      );
+      if (req.body?.preview !== true) {
+        await db.query(
+          `UPDATE prod_products SET client_composition=? WHERE tenant_id=? AND id=?`,
+          [clientComposition, tenantId, productId]
+        );
+      }
 
       res.json({
         ok: true,
@@ -3424,24 +3438,19 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     }
   });
 
-  router.get('/admin/options/groups/:id', async (req, res) => {
-    try {
-      const tenantId = helpers.getTenantId(req);
-      const id = Number(req.params.id);
-      const scopedProductId = Number(req.query?.product_id || 0);
-      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
-
+  async function getAdminOptionGroupDetails(tenantId, id, scopedProductId = 0) {
       const [[group]] = await db.query(
         'SELECT * FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1',
         [tenantId, id]
       );
-      if (!group) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      if (!group) throw Object.assign(new Error('NOT_FOUND'), { status: 404 });
 
       const [items] = await db.query(
         `SELECT i.*,
                 p.name AS product_name,
                 p.price AS product_price,
-                p.photos_json AS product_photos_json
+                p.photos_json AS product_photos_json,
+                p.blocks_config_json AS product_blocks_config_json
         FROM prod_option_items i
         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
         WHERE i.tenant_id=? AND i.group_id=? AND i.target_type='product'
@@ -3497,8 +3506,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const productSettingMap = new Map();
       if (Number.isFinite(scopedProductId) && scopedProductId > 0) {
         const [settingRows] = await db.query(
-          `SELECT option_item_id, default_selected, variant_override_enabled,
-                  default_variant_group_id, default_variant_value_index
+          `SELECT option_item_id, default_selected, is_locked, variant_override_enabled,
+                  default_variant_group_id, default_variant_value_index, configuration_json
            FROM prod_option_item_product_settings
            WHERE tenant_id=? AND product_id=? AND group_id=?`,
           [tenantId, scopedProductId, id]
@@ -3536,9 +3545,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       const normalizedItems = items.map((item) => ({
         ...item,
+        product_configuration_json: productSettingMap.get(Number(item.id))?.configuration_json ?? null,
+        configuration_json: productSettingMap.get(Number(item.id))?.configuration_json ?? item.configuration_json,
         product_photos_json: helpers.safeJsonArray(item.product_photos_json),
         category_ids: itemCategoryMap.get(Number(item.target_product_id)) || [],
-        available_variants: itemVariantMap.get(Number(item.target_product_id)) || [],
+        available_variants: normalizeProductBlocksConfig(item.product_blocks_config_json).variants
+          ? (itemVariantMap.get(Number(item.target_product_id)) || []) : [],
         is_excluded_for_product: excludedItemIds.has(Number(item.id)),
         default_source: productSettingMap.get(Number(item.id))?.default_selected == null ? 'group' : 'product',
         effective_default_selected: excludedItemIds.has(Number(item.id))
@@ -3550,6 +3562,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         effective_default_variant_value_index: productSettingMap.get(Number(item.id))?.variant_override_enabled
           ? productSettingMap.get(Number(item.id)).default_variant_value_index
           : item.default_variant_value_index,
+        product_is_locked: Boolean(productSettingMap.get(Number(item.id))?.is_locked),
         product_default_selected: productSettingMap.get(Number(item.id))?.default_selected ?? null,
         product_variant_override_enabled: Boolean(productSettingMap.get(Number(item.id))?.variant_override_enabled),
         product_default_variant_group_id: productSettingMap.get(Number(item.id))?.default_variant_group_id ?? null,
@@ -3560,9 +3573,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         .map((item) => Number(item.id))
         .filter((itemId) => Number.isFinite(itemId) && itemId > 0);
 
-      res.json({
-        ok: true,
-        data: {
+      return {
           group,
           items: normalizedItems,
           assignments,
@@ -3573,11 +3584,18 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
                 visible_item_ids: visibleItemIds,
               }
             : null,
-        },
-      });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+        };
+  }
+
+  router.get('/admin/options/groups/:id', async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      const data = await getAdminOptionGroupDetails(helpers.getTenantId(req), id, Number(req.query?.product_id || 0));
+      res.json({ ok: true, data });
+    } catch (error) {
+      console.error(error);
+      res.status(error.status || 500).json({ ok: false, error: error.status ? error.message : 'DB_ERROR' });
     }
   });
 
@@ -3654,6 +3672,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
     }
     for (const item of items) {
       const qtyMin = helpers.numOrNull(item.qty_min) ?? 1;
+      item.configuration = await normalizeProductConfiguration(conn, tenantId, Number(item.target_product_id), item.configuration);
       const qtyMax = helpers.numOrNull(item.qty_max) ?? 1;
       if (!Number.isInteger(qtyMin) || !Number.isInteger(qtyMax) || qtyMin < 1 || qtyMax < qtyMin) {
         throw new Error('INVALID_ITEM_LIMITS');
@@ -3703,14 +3722,15 @@ router.post('/admin/options/group-bundle', async (req, res) => {
           helpers.numOrNull(item.sort_order) ?? idx * 10,
           helpers.toBool(item.default_selected, false) ? 1 : 0,
           item.default_variant_group_id == null ? null : Number(item.default_variant_group_id),
-          item.default_variant_value_index == null ? null : Number(item.default_variant_value_index)
+          item.default_variant_value_index == null ? null : Number(item.default_variant_value_index),
+          item.configuration == null ? null : JSON.stringify(item.configuration)
         ];
       });
 
       await conn.query(
         `INSERT INTO prod_option_items
          (tenant_id, group_id, target_type, target_product_id, price_mode, price_value, qty_min, qty_max, is_active, sort_order,
-          default_selected, default_variant_group_id, default_variant_value_index)
+          default_selected, default_variant_group_id, default_variant_value_index, configuration_json)
          VALUES ?`,
         [values]
       );
@@ -3974,18 +3994,19 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const oldItemByProduct = new Map(oldItems.map((row) => [Number(row.target_product_id), Number(row.id)]));
       for (const [index, item] of items.entries()) {
         const productId = Number(item.target_product_id);
+        const configuration = await normalizeProductConfiguration(conn, tenantId, productId, item.configuration);
         const priceMode = item.price_mode === 'fixed' ? 'fixed' : 'from_target';
         const values = [priceMode, priceMode === 'fixed' ? Number(item.price_value) : 0,
           helpers.numOrNull(item.qty_min) ?? 1, helpers.numOrNull(item.qty_max) ?? 1,
           helpers.toBool(item.default_selected, false) ? 1 : 0,
           item.default_variant_group_id == null ? null : Number(item.default_variant_group_id),
           item.default_variant_value_index == null ? null : Number(item.default_variant_value_index),
-          helpers.numOrNull(item.sort_order) ?? index * 10];
+          helpers.numOrNull(item.sort_order) ?? index * 10, configuration == null ? null : JSON.stringify(configuration)];
         const oldId = oldItemByProduct.get(productId);
         if (oldId) {
           await conn.query(
             `UPDATE prod_option_items SET price_mode=?, price_value=?, qty_min=?, qty_max=?,
-               default_selected=?, default_variant_group_id=?, default_variant_value_index=?, sort_order=?
+               default_selected=?, default_variant_group_id=?, default_variant_value_index=?, sort_order=?, configuration_json=?
              WHERE tenant_id=? AND id=?`,
             [...values, tenantId, oldId]
           );
@@ -3995,8 +4016,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
             `INSERT INTO prod_option_items
              (tenant_id, group_id, target_type, target_product_id, price_mode, price_value,
               qty_min, qty_max, default_selected, default_variant_group_id,
-              default_variant_value_index, sort_order, is_active)
-             VALUES (?, ?, 'product', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+              default_variant_value_index, sort_order, configuration_json, is_active)
+             VALUES (?, ?, 'product', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
             [tenantId, groupId, productId, ...values]
           );
         }
@@ -5004,6 +5025,120 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   // Auto-add items to cart (groups + items)
   // ------------------------------
 
+  function normalizeAutoAddRule(body) {
+    const invalid = (field) => { const error = new Error('INVALID_AUTO_ADD_RULE'); error.field = field; error.status = 400; throw error; };
+    const integer = (value, field, nullable = false) => {
+      if (nullable && value == null) return null;
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) invalid(field);
+      return value;
+    };
+    const amount = (value, field) => {
+      if (value == null) return null;
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 99999999.99 || Math.abs(value * 100 - Math.round(value * 100)) > 0.000001) invalid(field);
+      return value;
+    };
+    const bool = (value, field) => {
+      if (![true, false, 0, 1].includes(value)) invalid(field);
+      return Number(Boolean(value));
+    };
+    const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+      && value >= '1000-01-01' && value <= '9999-12-31'
+      && Number.isFinite(new Date(`${value}T12:00:00Z`).getTime())
+      && new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) === value;
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    if (!title || title.length > 255) invalid('title');
+    const description = body.description == null ? null : typeof body.description === 'string' ? body.description.trim() || null : invalid('description');
+    if (description?.length > 255) invalid('description');
+    const min = amount(body.min_cart_amount, 'min_cart_amount');
+    const max = amount(body.max_cart_amount, 'max_cart_amount');
+    if (min != null && max != null && max < min) invalid('max_cart_amount');
+    const schedule = body.schedule;
+    if (!schedule || !['always', 'schedule'].includes(schedule.mode) || !['shared', 'individual'].includes(schedule.assignment) || !['created', 'receipt'].includes(schedule.basis)) invalid('schedule');
+    const receipt = schedule.settings?.receipt;
+    if (!receipt || !['any', 'period', 'dates'].includes(receipt.mode)) invalid('schedule.receipt');
+    if (!Array.isArray(receipt.weekdays) || receipt.weekdays.some(day => !Number.isInteger(day) || day < 0 || day > 6) || new Set(receipt.weekdays).size !== receipt.weekdays.length) invalid('schedule.weekdays');
+    if (!Array.isArray(receipt.dates) || receipt.dates.length > 10000 || receipt.dates.some(value => !date(value)) || new Set(receipt.dates).size !== receipt.dates.length) invalid('schedule.dates');
+    if ((receipt.start != null && !date(receipt.start)) || (receipt.end != null && !date(receipt.end))) invalid('schedule.period');
+    if (receipt.start && receipt.end && receipt.end < receipt.start) invalid('schedule.period');
+    if (schedule.mode === 'schedule' && receipt.mode === 'period' && (!receipt.start || !receipt.end)) invalid('schedule.period');
+    if (schedule.mode === 'schedule' && receipt.mode === 'dates' && !receipt.dates.length) invalid('schedule.dates');
+    if (!Array.isArray(body.items) || body.items.length > 10000) invalid('items');
+    const seen = new Set();
+    const items = body.items.map((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) invalid(`items.${index}`);
+      const productId = integer(item.product_id, `items.${index}.product_id`);
+      if (!productId) invalid(`items.${index}.product_id`);
+      const slot = item.schedule_slot;
+      if (slot !== 'shared' && !(typeof slot === 'string' && /^weekday:[0-6]$/.test(slot)) && !date(slot)) invalid(`items.${index}.schedule_slot`);
+      const key = `${slot}:${productId}`;
+      if (seen.has(key)) invalid(`items.${index}.duplicate`);
+      seen.add(key);
+      const step = amount(item.free_per_amount, `items.${index}.free_per_amount`);
+      if (step === 0) invalid(`items.${index}.free_per_amount`);
+      const maxFree = integer(item.max_free_qty, `items.${index}.max_free_qty`, true);
+      if (maxFree != null && maxFree > 4294967295) invalid(`items.${index}.max_free_qty`);
+      return { productId, slot, step, maxFree, configuration: item.configuration ?? null, sortOrder: integer(item.sort_order ?? index * 10, `items.${index}.sort_order`) };
+    });
+    return { title, description, min, max, items,
+      isActive: bool(body.is_active, 'is_active'), firstFree: bool(body.first_free, 'first_free'),
+      addAutomatically: bool(body.add_automatically ?? 1, 'add_automatically'),
+      availableToGuests: bool(body.available_to_guests ?? 1, 'available_to_guests'),
+      allowQty: bool(body.allow_customer_qty, 'allow_customer_qty'), allowRemove: bool(body.allow_customer_remove, 'allow_customer_remove'),
+      limit: integer(body.total_issue_limit, 'total_issue_limit', true), sort: integer(body.sort_order ?? 0, 'sort_order'),
+      schedule: { mode: schedule.mode, assignment: schedule.assignment, basis: schedule.basis,
+        settings: { receipt: { mode: receipt.mode, start: receipt.start ?? null, end: receipt.end ?? null,
+          dates: [...receipt.dates].sort(), weekdays: [...receipt.weekdays].sort() } } },
+    };
+  }
+
+  async function saveAutoAddRule(req, res, id = null) {
+    let conn;
+    try {
+      const rule = normalizeAutoAddRule(req.body);
+      const tenantId = helpers.getTenantId(req);
+      if (id != null && (!Number.isSafeInteger(id) || id <= 0)) return res.status(400).json({ ok: false, error: 'BAD_ID' });
+      conn = await db.getConnection();
+      await conn.beginTransaction();
+      if (id != null) {
+        const [existing] = await conn.query('SELECT id FROM prod_auto_add_groups WHERE tenant_id=? AND id=? FOR UPDATE', [tenantId, id]);
+        if (!existing.length) { await conn.rollback(); return res.status(404).json({ ok: false, error: 'AUTO_ADD_NOT_FOUND' }); }
+      }
+      const productIds = [...new Set(rule.items.map(item => item.productId))];
+      if (productIds.length) {
+        const [products] = await conn.query('SELECT id FROM prod_products WHERE tenant_id=? AND id IN (?)', [tenantId, productIds]);
+        if (products.length !== productIds.length) { await conn.rollback(); return res.status(400).json({ ok: false, error: 'PRODUCT_NOT_FOUND' }); }
+      }
+      const columns = ['title', 'description', 'is_active', 'sort_order', 'min_cart_amount', 'max_cart_amount',
+        'allow_customer_qty', 'allow_customer_remove', 'rule_version', 'first_free', 'total_issue_limit', 'schedule_json', 'add_automatically', 'available_to_guests'];
+      const values = [rule.title, rule.description, rule.isActive, rule.sort, rule.min, rule.max,
+        rule.allowQty, rule.allowRemove, 1, rule.firstFree, rule.limit, JSON.stringify(rule.schedule), rule.addAutomatically, rule.availableToGuests];
+      if (id == null) {
+        const [result] = await conn.query(`INSERT INTO prod_auto_add_groups (tenant_id,${columns.join(',')}) VALUES (?,${columns.map(() => '?').join(',')})`, [tenantId, ...values]);
+        id = Number(result.insertId);
+      } else {
+        await conn.query(`UPDATE prod_auto_add_groups SET ${columns.map(column => `${column}=?`).join(',')} WHERE tenant_id=? AND id=?`, [...values, tenantId, id]);
+      }
+      await conn.query('DELETE FROM prod_auto_add_items WHERE tenant_id=? AND group_id=?', [tenantId, id]);
+      for (const item of rule.items) {
+        const configuration = await normalizeProductConfiguration(conn, tenantId, item.productId, item.configuration);
+        await conn.query(`INSERT INTO prod_auto_add_items
+          (tenant_id,group_id,product_id,schedule_slot,default_qty,min_qty,max_qty,price_override,
+           free_first_qty,free_per_amount,free_per_amount_qty,max_free_qty,is_active,sort_order,configuration_json)
+          VALUES (?,?,?,?,0,0,NULL,NULL,?,?,1,?,1,?,?)`,
+        [tenantId, id, item.productId, item.slot, rule.firstFree, item.step, item.maxFree, item.sortOrder, configuration == null ? null : JSON.stringify(configuration)]);
+      }
+      await conn.commit();
+      return res.json({ ok: true, id });
+    } catch (error) {
+      if (conn) await conn.rollback();
+      if (error.status === 400) return res.status(400).json({ ok: false, error: error.message, field: error.field });
+      console.error('Failed to save auto-add rule', error);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    } finally {
+      conn?.release();
+    }
+  }
+
   router.get('/admin/auto-add/groups', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -5042,6 +5177,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   });
 
   router.post('/admin/auto-add/groups', async (req, res) => {
+    if (req.body.rule_version === 1) return saveAutoAddRule(req, res);
     try {
       const tenantId = helpers.getTenantId(req);
       const title = helpers.strOrNull(req.body.title);
@@ -5072,6 +5208,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
   });
 
   router.patch('/admin/auto-add/groups/:id', async (req, res) => {
+    if (req.body.rule_version === 1) return saveAutoAddRule(req, res, Number(req.params.id));
     try {
       const tenantId = helpers.getTenantId(req);
       const id = Number(req.params.id);
@@ -5549,7 +5686,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       );
       if (!block) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       const [productsRaw] = await db.query(
-        `SELECT bp.id, bp.product_id, bp.sort_order, bp.is_default, p.name AS product_name, p.price AS product_price, p.photos_json AS product_photos_json,
+        `SELECT bp.id, bp.product_id, bp.sort_order, bp.is_default, bp.configuration_json, p.name AS product_name, p.price AS product_price, p.photos_json AS product_photos_json,
            (SELECT 1 FROM prod_variant_assignments va
             INNER JOIN prod_variant_groups vg ON vg.id = va.variant_group_id AND vg.tenant_id = va.tenant_id
             WHERE va.tenant_id = bp.tenant_id AND va.product_id = bp.product_id AND va.is_active = 1 AND vg.is_active = 1 LIMIT 1) AS has_variants,
@@ -5572,6 +5709,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           product_price: r.product_price != null ? Number(r.product_price) : 0,
           sort_order: r.sort_order,
           is_default: r.is_default,
+          configuration_json: r.configuration_json,
           product_photo,
           has_variants: r.has_variants != null ? 1 : 0,
           has_changeable_composition: r.has_changeable_composition != null ? 1 : 0,
@@ -5586,7 +5724,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       res.json({ ok: true, data: { ...block, products } });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      res.status(e.status || 500).json({ ok: false, error: e.status ? e.message : 'DB_ERROR' });
     }
   });
 
@@ -5598,12 +5736,15 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const minSelect = Math.max(0, parseInt(helpers.numOrNull(req.body.min_select), 10) || 1);
       const maxSelect = Math.max(1, parseInt(helpers.numOrNull(req.body.max_select), 10) || 1);
       if (!title || !title.trim()) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
+      const configuredProducts = Array.isArray(req.body.products) ? await Promise.all(req.body.products.map(async (product) => ({
+        ...product, configuration: await normalizeProductConfiguration(db, tenantId, Number(product.product_id), product.configuration ?? null),
+      }))) : null;
       const [result] = await db.query(
         'INSERT INTO prod_combo_blocks (tenant_id, title, sort_order, min_select, max_select) VALUES (?,?,?,?,?)',
         [tenantId, title.trim(), sortOrder, minSelect, Math.max(minSelect, maxSelect)]
       );
       const blockId = result.insertId;
-      const products = Array.isArray(req.body.products) ? req.body.products : [];
+      const products = configuredProducts || [];
       if (products.length) {
         let defaultSet = false;
         for (let i = 0; i < products.length; i++) {
@@ -5612,8 +5753,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           if (!Number.isFinite(productId) || productId <= 0) continue;
           const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
           await db.query(
-            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
-            [tenantId, blockId, productId, Number(p.sort_order) ?? i, isDefault]
+            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default, configuration_json) VALUES (?,?,?,?,?,?)',
+            [tenantId, blockId, productId, Number(p.sort_order) ?? i, isDefault, p.configuration == null ? null : JSON.stringify(p.configuration)]
           );
         }
       }
@@ -5624,7 +5765,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       res.status(201).json({ ok: true, data: block });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      res.status(e.status || 500).json({ ok: false, error: e.status ? e.message : 'DB_ERROR' });
     }
   });
 
@@ -5638,6 +5779,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         [tenantId, id]
       );
       if (!existing) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+      const configuredProducts = Array.isArray(req.body.products) ? await Promise.all(req.body.products.map(async (product) => ({
+        ...product, configuration: await normalizeProductConfiguration(db, tenantId, Number(product.product_id), product.configuration ?? null),
+      }))) : null;
       const title = helpers.strOrNull(req.body.title);
       const sortOrder = helpers.numOrNull(req.body.sort_order);
       const minSelect = req.body.min_select !== undefined ? Math.max(0, parseInt(req.body.min_select, 10) || 1) : null;
@@ -5656,7 +5800,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       }
       if (Array.isArray(req.body.products)) {
         await db.query('DELETE FROM prod_combo_block_products WHERE tenant_id=? AND block_id=?', [tenantId, id]);
-        const products = req.body.products;
+        const products = configuredProducts;
         let defaultSet = false;
         for (let i = 0; i < products.length; i++) {
           const p = products[i];
@@ -5664,8 +5808,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           if (!Number.isFinite(productId) || productId <= 0) continue;
           const isDefault = p.is_default ? 1 : (defaultSet ? 0 : (defaultSet = true, 1));
           await db.query(
-            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default) VALUES (?,?,?,?,?)',
-            [tenantId, id, productId, Number(p.sort_order) ?? i, isDefault]
+            'INSERT INTO prod_combo_block_products (tenant_id, block_id, product_id, sort_order, is_default, configuration_json) VALUES (?,?,?,?,?,?)',
+            [tenantId, id, productId, Number(p.sort_order) ?? i, isDefault, p.configuration == null ? null : JSON.stringify(p.configuration)]
           );
         }
       }
@@ -5676,7 +5820,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       res.json({ ok: true, data: block });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      res.status(e.status || 500).json({ ok: false, error: e.status ? e.message : 'DB_ERROR' });
     }
   });
 
@@ -6169,6 +6313,14 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           await conn.rollback();
           return res.status(400).json({ ok: false, error: 'INVALID_ITEM_IDS' });
         }
+        const locked = itemSettings.filter(setting => helpers.toBool(setting.is_locked, false));
+        if (locked.length > 1 || locked.some(setting => excludedItemIds.includes(Number(setting.option_item_id)))) {
+          await conn.rollback();
+          return res.status(400).json({ ok: false, error: 'INVALID_LOCKED_OPTION' });
+        }
+        if (locked.length) itemSettings.forEach(setting => {
+          setting.default_selected = Number(setting.option_item_id) === Number(locked[0].option_item_id) ? 1 : 0;
+        });
         const settingsById = new Map(itemSettings.map((setting) => [Number(setting.option_item_id), setting]));
         const selectedCount = groupItemRows.filter((item) => {
           if (excludedItemIds.includes(Number(item.id))) return false;
@@ -6199,6 +6351,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           ));
         }
         for (const setting of itemSettings) {
+          setting.configuration = await normalizeProductConfiguration(conn, tenantId,
+            Number(itemById.get(Number(setting.option_item_id)).target_product_id), setting.configuration ?? null);
           if (setting.default_selected != null && ![0, 1, false, true].includes(setting.default_selected)) {
             await conn.rollback();
             return res.status(400).json({ ok: false, error: 'INVALID_DEFAULT_SELECTED' });
@@ -6247,20 +6401,22 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           [tenantId, productId, groupId]
         );
         const savedSettings = itemSettings.filter((setting) =>
-          setting.default_selected != null || helpers.toBool(setting.variant_override_enabled, false)
+          setting.default_selected != null || helpers.toBool(setting.is_locked, false) || helpers.toBool(setting.variant_override_enabled, false) || setting.configuration != null
         );
         if (savedSettings.length) {
           await conn.query(
             `INSERT INTO prod_option_item_product_settings
-             (tenant_id, product_id, group_id, option_item_id, default_selected,
-              variant_override_enabled, default_variant_group_id, default_variant_value_index)
+             (tenant_id, product_id, group_id, option_item_id, default_selected, is_locked,
+              variant_override_enabled, default_variant_group_id, default_variant_value_index, configuration_json)
              VALUES ?`,
             [savedSettings.map((setting) => [
               tenantId, productId, groupId, Number(setting.option_item_id),
               setting.default_selected == null ? null : (helpers.toBool(setting.default_selected, false) ? 1 : 0),
+              helpers.toBool(setting.is_locked, false) ? 1 : 0,
               helpers.toBool(setting.variant_override_enabled, false) ? 1 : 0,
               setting.default_variant_group_id == null ? null : Number(setting.default_variant_group_id),
               setting.default_variant_value_index == null ? null : Number(setting.default_variant_value_index),
+              setting.configuration == null ? null : JSON.stringify(setting.configuration),
             ])]
           );
         }
@@ -6517,7 +6673,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         }
       );
       res.set("x-admin-cache", cacheState);
-      return res.json(payload);
+      return res.json({ ...payload, data: { ...payload.data, autoAdd: await loadAutoAdd(req) } });
     } catch (e) {
       console.error(e);
       return res.status(500).json({ ok: false, error: "DB_ERROR" });

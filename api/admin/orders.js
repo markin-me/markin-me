@@ -1,6 +1,7 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const {syncAutoAddOrderUsage} = require('../helpers/orderOnlinePricing');
 const customerBonus=require('../helpers/customerBonus');
 const productPassportSnapshots = require("../../services/product-passport-snapshots");
 const { sendOrderToPrintBot, enqueueSingleLabelPrintJob } = require("../printPush");
@@ -37,7 +38,7 @@ const {
 const makePrintApiRouter = require("../print");
 const chatTempRuntime = require("../chatTemp");
 
-module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can, validateCheckoutPreorders }) {
+module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can, validateCheckoutPreorders, validateAutoAddOrder }) {
   const router = express.Router();
   router.post(['/preorder-availability','/:id/preorder-availability'], async (req, res) => {
     const tenantId = helpers.getTenantId(req), storeId = helpers.getStoreId(req);
@@ -3438,6 +3439,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
   // ---------------------------
   // PUT /api/admin/orders/:id/status
   async function releaseCanceledOrderResources(conn,tenantId,orderRow) {
+    await syncAutoAddOrderUsage(conn, { tenantId, orderId: orderRow.id, items: [], release: true });
     await releaseOrderBonusReserve(conn,{tenantId,orderId:orderRow.id,customerId:Number(orderRow.customer_id || 0) || null});
         let orderItems = [];
         try {
@@ -3620,6 +3622,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
   }
 
   async function applyOrderStatusEffects(conn, {tenantId,storeId,id,statusId,orderRow,isCanceledTarget,isSuccessfulFinalTarget}) {
+      if (!isCanceledTarget) {
+        const autoAddItems = typeof orderRow.items === 'string' ? JSON.parse(orderRow.items) : orderRow.items || [];
+        await syncAutoAddOrderUsage(conn, { tenantId, orderId: id, items: autoAddItems });
+      }
       if (isCanceledTarget) {
         await releaseCanceledOrderResources(conn,tenantId,orderRow);
       } else if (isSuccessfulFinalTarget) {
@@ -4198,6 +4204,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
                 qty: optionQty,
                 variant_group_id: variantGroupId > 0 ? variantGroupId : null,
                 variant_value_index: Number.isFinite(variantValueIndex) ? variantValueIndex : null,
+                ingredients: Array.isArray(opt.ingredients) ? opt.ingredients : [],
+                variant_label: String(opt.variant_label || ''),
               };
             })
             .filter(Boolean)
@@ -4228,6 +4236,10 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           variant_value_index: Number.isFinite(Number(rawItem?.variant_value_index)) ? Number(rawItem.variant_value_index) : null,
           variant_label: helpers.strOrNull(rawItem?.variant_label),
           is_gift_reward: Number(rawItem?.is_gift_reward || 0) === 1 ? 1 : 0,
+          auto_add: Number(rawItem?.auto_add || 0) === 1 ? 1 : 0,
+          auto_add_group_id: Number(rawItem?.auto_add_group_id || 0) || null,
+          auto_add_rule_version: Number(rawItem?.auto_add_rule_version || 0),
+          auto_add_free_qty: Number(rawItem?.auto_add_free_qty || 0),
           gift_reward_id: Number(rawItem?.gift_reward_id || 0) > 0 ? Number(rawItem.gift_reward_id) : null,
           line_total: lineTotal,
           old_line_total: originalLineTotal,
@@ -4335,6 +4347,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
                   oi.target_product_id,
                   oi.price_mode,
                   oi.price_value,
+                  oi.configuration_json,
                   p.name AS product_name,
                   p.price AS product_price
            FROM prod_option_items oi
@@ -4357,6 +4370,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
             title: toText(row?.product_name),
             price: roundMoney(optionPrice),
             target_product_id: Number(row?.target_product_id || 0) || null,
+            configuration_json: typeof row.configuration_json === 'string' ? JSON.parse(row.configuration_json) : row.configuration_json,
           });
         });
       }
@@ -4531,6 +4545,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
               title: optionTitle,
               price: roundMoney(optionPrice),
               qty: optionQty,
+              ingredients: optionMeta?.configuration_json?.ingredients || (Array.isArray(opt.ingredients) ? opt.ingredients : []),
             };
             const targetProductId = Number(optionMeta?.target_product_id || 0);
             if (targetProductId > 0) out.target_product_id = targetProductId;
@@ -4538,6 +4553,11 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
             if (optionVariantGroupId > 0) out.variant_group_id = optionVariantGroupId;
             if (Number.isFinite(optionVariantValueIndex)) out.variant_value_index = optionVariantValueIndex;
             if (optionVariantLabel) out.variant_label = optionVariantLabel;
+            if (!(optionVariantGroupId > 0) && optionMeta?.configuration_json?.variant_group_id != null) {
+              out.variant_group_id = optionMeta.configuration_json.variant_group_id;
+              out.variant_value_index = optionMeta.configuration_json.variant_value_index;
+              out.variant_label = optionMeta.configuration_json.variant_label;
+            }
             return out;
           })
           .filter(Boolean);
@@ -5019,6 +5039,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const [preorderStores] = await editConnection.query('SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=?',[tenantId,storeId]);
       if (!preorderStores.length) throw new Error('ORDER_STORE_NOT_FOUND');
       const preorderSnapshot = await validateCheckoutPreorders(editConnection,{tenantId,storeId,items,timeOptionCode,scheduledAt,methodCode,timezone:preorderStores[0].timezone,existingOrder:lockedOrders[0]});
+      await validateAutoAddOrder(editConnection, { tenantId, storeId, orderId: id, items, scheduledAt, createdAt: helpers.utcToStoreDateTime(lockedOrders[0].created_at, preorderStores[0].timezone), timezone: preorderStores[0].timezone });
+      await syncAutoAddOrderUsage(editConnection, { tenantId, orderId: id, items, release: isSavedCanceled });
+      updateParams[updateFields.indexOf('items=?')] = JSON.stringify(items);
       if (preorderSnapshot?.time_option_id) updateParams[updateParams.length-5] = preorderSnapshot.time_option_id;
       updateFields.push('sale_mode=?','preorder_snapshot_json=?');
       updateParams.splice(updateParams.length-3,0,preorderSnapshot?'preorder':'order',preorderSnapshot?JSON.stringify(preorderSnapshot):null);
@@ -5110,7 +5133,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       if (e && (e.code === "BONUS_ACCOUNT_NOT_FOUND" || e.code === "BONUS_BALANCE_NOT_ENOUGH")) {
         return res.status(409).json({ ok: false, error: e.code });
       }
-      if(e?.code==='ORDER_PAYMENT_EDIT_LOCKED' || String(e?.code || '').startsWith('PREORDER_'))return res.status(409).json({ok:false,error:e.code});
+      if(e?.code==='ORDER_PAYMENT_EDIT_LOCKED' || String(e?.code || '').startsWith('PREORDER_') || String(e?.code || '').startsWith('AUTO_ADD_'))return res.status(e.status || 409).json({ok:false,error:e.code});
       res.status(500).json({ ok: false, error: "DB_ERROR" });
     }
   });
@@ -5137,10 +5160,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       );
       const customerId = Number(rows?.[0]?.customer_id || 0);
 
-      await db.query(
+      const deleteConnection = await db.getConnection();
+      try {
+      await deleteConnection.beginTransaction();
+      await deleteConnection.query('SELECT id FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? FOR UPDATE', [tenantId, storeId, id]);
+      await syncAutoAddOrderUsage(deleteConnection, { tenantId, orderId: id, items: [], release: true });
+      await deleteConnection.query(
         `UPDATE order_orders SET is_active=0 WHERE tenant_id=? AND store_id=? AND id=?`,
         [tenantId, storeId, id]
       );
+      await deleteConnection.commit();
+      } catch (error) { await deleteConnection.rollback(); throw error; }
+      finally { deleteConnection.release(); }
 
       await syncCustomerOrderMetrics(db, tenantId, customerId);
 

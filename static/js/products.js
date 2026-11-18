@@ -541,6 +541,7 @@
       return;
     }
 
+    hideAllDetailPanels();
     // Hide all default content
     if (productInfo) productInfo.classList.add("hidden");
     if (categoryInfo) categoryInfo.classList.add("hidden");
@@ -581,7 +582,7 @@
           const moreBtn = actions.querySelector("#productMoreBtn");
           
           // Always show all buttons
-          if (defaultEditBtn) defaultEditBtn.classList.remove("hidden");
+          if (defaultEditBtn) defaultEditBtn.classList.toggle("hidden", state.type === "product-edit");
           if (defaultCloseBtn) defaultCloseBtn.classList.remove("hidden");
           if (moreBtn) moreBtn.classList.remove("hidden");
           
@@ -636,6 +637,7 @@
             state.content.classList.remove("hidden");
           } else {
             body.appendChild(state.content);
+            state.content.classList.remove("hidden");
           }
           body.classList.remove("hidden");
           // Make sure body is visible
@@ -651,6 +653,7 @@
       // Show footer in edit mode
       if (state.type === "product-edit") {
         showProductFooterEdit();
+        state.syncBlockChips?.();
       } else {
         showProductFooterView();
       }
@@ -1195,8 +1198,7 @@
 
   function getEditorReadyProductPassport(productId) {
     const passport = window.CatalogRepository.getProductPassport(productId);
-    return window.CatalogRepository.isOrderReadyPassport(passport)
-      && passport?.editor?.schema_version === "product-editor-v1" ? passport : null;
+    return window.CatalogRepository.isEditorReadyPassport(passport) ? passport : null;
   }
 
   function getEditorPassportProduct(passport) {
@@ -1222,6 +1224,14 @@
     ].map(Number).filter((value) => value > 0))];
     const categories = categoryIds.map((categoryId) => window.CatalogRepository.getCategory(categoryId) || { id: categoryId });
     const optionAssignments = Array.isArray(passport.optionAssignments) ? passport.optionAssignments : [];
+    Object.values(passport.editor?.option_details || {}).forEach(details => {
+      const groupId = Number(details.group?.id);
+      if (!(groupId > 0)) return;
+      state.optionGroupCache.set(makeOptionGroupCacheKey(groupId, id), details);
+      const index = state.optionGroups.findIndex(group => Number(group.id) === groupId);
+      if (index >= 0) state.optionGroups[index] = { ...state.optionGroups[index], ...details.group };
+      else state.optionGroups.push({ ...details.group });
+    });
     const optionGroups = Array.isArray(passport.options) ? passport.options : [];
     optionGroups.forEach((group) => {
       const groupId = Number(group?.id || group?.group_id || 0);
@@ -1977,7 +1987,7 @@
             id: relation.relationId, product_id: relation.productId,
             product_name: product.name || product.product_name || "",
             product_price: Number(product.price || 0), product_photo: product.photo || null,
-            sort_order: relation.sortOrder, is_default: relation.isDefault ? 1 : 0,
+            sort_order: relation.sortOrder, is_default: relation.isDefault ? 1 : 0, configuration_json: relation.configuration_json ?? null,
             has_variants: Array.isArray(window.CatalogRepository.getProductPassport(relation.productId)?.variants) && window.CatalogRepository.getProductPassport(relation.productId).variants.length ? 1 : 0,
             has_changeable_composition: Array.isArray(window.CatalogRepository.getProductPassport(relation.productId)?.ingredients) && window.CatalogRepository.getProductPassport(relation.productId).ingredients.length ? 1 : 0,
           };
@@ -2150,7 +2160,7 @@
   }
 
   async function apiGenerateProductComposition(productId) {
-    return api(`/api/admin/products/${productId}/generate-composition`, { method: "POST" });
+    return api(`/api/admin/products/${productId}/generate-composition`, { method: "POST", body: JSON.stringify({ preview: true }) });
   }
 
   async function apiGetProductDependentRecalcPreview(productId) {
@@ -2345,6 +2355,7 @@
   }
 
   function syncProductsToolbar() {
+    $("#addMainWrapper")?.classList.toggle("hidden", state.mode === "badges");
     const isVisible = isProductsToolbarModeVisible();
     if (productsCatalogStatus) productsCatalogStatus.classList.toggle("hidden", state.mode !== "products");
     if (state.mode !== "products") closeProductsCatalogMenu();
@@ -2618,6 +2629,8 @@
     } else if (state.mode === "variants") {
       const btn = productsAccordion.querySelector('[data-view="variants"]');
       if (btn) btn.classList.add("is-active");
+    } else if (state.mode === "badges") {
+      productsAccordion.querySelector('[data-view="badges"]')?.classList.add("is-active");
     } else if (state.mode === "auto-add") {
       const btn = productsAccordion.querySelector('[data-view="auto-add"]');
       if (btn) btn.classList.add("is-active");
@@ -2699,6 +2712,170 @@
     syncProductsToolbar();
   }
 
+  // Read-only directory of the product catalog badges implemented in shared components.
+  const badgeDefinitions = [
+  [
+    "variant",
+    "Выбрать вариант ›",
+    "Только варианты товара.",
+    "configure"
+  ],
+  [
+    "ingredients",
+    "Изменить состав ›",
+    "Только изменяемый состав.",
+    "configure"
+  ],
+  [
+    "options",
+    "Выбрать опции ›",
+    "Только опции товара.",
+    "configure"
+  ],
+  [
+    "variant-ingredients",
+    "Вариант и состав ›",
+    "Варианты и состав без опций.",
+    "configure"
+  ],
+  [
+    "variant-options",
+    "Варианты и опции ›",
+    "Варианты и опции без состава.",
+    "configure"
+  ],
+  [
+    "ingredients-options",
+    "Состав и опции ›",
+    "Состав и опции без вариантов.",
+    "configure"
+  ],
+  [
+    "configure",
+    "Настроить товар ›",
+    "Варианты, состав и опции вместе.",
+    "configure"
+  ],
+  [
+    "combo",
+    "Собрать комбо ›",
+    "Открывает выбор компонентов комбо.",
+    "configure"
+  ],
+  [
+    "sold-out",
+    "Раскупили",
+    "Добавление недоступно, товара нет в корзине.",
+    "sold-out"
+  ],
+  [
+    "no-more",
+    "Больше нет",
+    "Добавление недоступно, товар уже есть в корзине.",
+    "configure"
+  ],
+  [
+    "preorder",
+    "По предзаказу",
+    "Приём открыт. Дни недели дописываются из настроек.",
+    "preorder"
+  ],
+  [
+    "preorder-from",
+    "Предзаказ с {дд.мм}",
+    "Дата начала периода приёма ещё не наступила.",
+    "configure"
+  ],
+  [
+    "preorder-closed",
+    "Приём завершён",
+    "Период приёма предзаказов закончился.",
+    "configure"
+  ],
+  [
+    "preorder-invalid",
+    "Предзаказ недоступен",
+    "Нельзя определить дату или корректные условия приёма.",
+    "configure"
+  ],
+  [
+    "discount-percent",
+    "−{процент}%",
+    "Процент скидки на товар или комбо определяется автоматически.",
+    "discount"
+  ],
+  [
+    "discount-amount",
+    "−{сумма} ₽",
+    "Денежное представление рассчитанной скидки.",
+    "discount"
+  ],
+  [
+    "buy-get",
+    "{всего}={оплатить}",
+    "Акция количества. Значения берутся из buy_qty и reward_qty; без них используется badge_text.",
+    "bogo"
+  ],
+  [
+    "action",
+    "{подпись акции}",
+    "В подробностях товара отображается badge_text акции.",
+    "action"
+  ]
+  , ["gift", "Подарок", "Иконка подарочной позиции в корзине. У бонусного подарка количество фиксировано.", "gift"]
+].map(([id, title, condition, style]) => ({
+    id, title, condition, style,
+    placement: id === "action" ? "Акция в подробностях товара" : id === "combo" ? "Карточка комбо · витрина и приём заказа" : id.startsWith("preorder") ? "Товары и комбо · где включён предзаказ" : id.startsWith("discount") ? "Товары и комбо · витрина и приём заказа" : "Товары · витрина и приём заказа",
+    source: id === "action" ? "shared-product-runtime.js · createProductBuyXGetYActionCard" : id === "buy-get" ? "shared-product-runtime.js · getCatalogBuyXGetYBadgeText" : id.startsWith("discount") ? "shared-product-card.js · getCatalogProductDiscountBadge / getCatalogComboDiscountBadge / formatCatalogDiscountBadgeAmount" : id.startsWith("preorder") ? "shared-product-card.js · getProductPreorderInfo" : id === "combo" ? "shared-product-card.js · createCatalogComboCard" : "shared-product-card.js · getCatalogMediaPillLabel",
+  }));
+
+  function renderBadgeSample(badge) {
+    if (badge.style === "gift") return '<span class="badge-sample"><span class="sp-card-bogo-badge" aria-label="Подарок" title="Подарок"><i class="fas fa-gift" aria-hidden="true"></i></span></span>';
+    const className = badge.style === "discount" ? "sp-card-discount-badge" : badge.style === "bogo" ? "sp-card-bogo-badge" : badge.style === "action" ? "shop-product-action-card__badge" : "sp-media-pill" + (badge.style === "preorder" ? " is-preorder" : badge.style === "sold-out" ? " is-sold-out" : "");
+    const sample = badge.id === "discount-percent" ? "-15%" : badge.id === "discount-amount" ? "-100 ₽" : badge.id === "buy-get" ? "2=1" : badge.id === "action" ? "1+1" : badge.id === "preorder-from" ? "Предзаказ с 20.11" : badge.title;
+    return `<span class="badge-sample"><span class="${className}">${escapeHtml(sample)}</span></span>`;
+  }
+
+  function enterBadgesMode() {
+    state.mode = "badges";
+    clearProductsBulkSelection();
+    clearProductSelection();
+    setToolbarTitle("Бейджи", "fa-tags");
+    showView("badges");
+    showDetailsEmpty();
+    syncActiveMenuItems();
+    syncProductsToolbar();
+    const list = $("#badgeDefinitionsList");
+    list.innerHTML = badgeDefinitions.map(badge => `<button class="options-row" type="button" data-badge-id="${badge.id}"><div>${renderBadgeSample(badge)}<div class="options-row-title">${escapeHtml(badge.title)}</div><div class="options-row-meta">${escapeHtml(badge.condition)} ${escapeHtml(badge.placement)}</div></div></button>`).join("");
+    list.onclick = event => {
+      const row = event.target.closest("[data-badge-id]");
+      const badge = badgeDefinitions.find(item => item.id === row?.dataset.badgeId);
+      if (badge) ensureTab({ type: "badge", id: badge.id, title: badge.title, onActivate: () => showBadgeDetails(badge) });
+    };
+  }
+
+  function showBadgeDetails(badge) {
+    hideAllDetailPanels();
+    [productEmpty, categoryEmpty, optionEmpty, autoAddEmpty, comboEmpty, stockDocEmpty].forEach(el => el?.classList.add("hidden"));
+    hideProductFooter();
+    if (editProductBtn) editProductBtn.classList.add("hidden");
+    if (productInfoHeader) productInfoHeader.classList.remove("hidden");
+    const panel = $("#badgeDetails");
+    panel.innerHTML = `<section><div class="section-title">Бейдж</div>${renderBadgeSample(badge)}<div class="control badge-preview">${escapeHtml(badge.title)}</div></section><section><div class="section-title">Где применяется</div><p>${escapeHtml(badge.id === "gift" ? "Подарочная позиция в корзине витрины" : badge.placement)}</p></section><section><div class="section-title">Условия отображения</div><p>${escapeHtml(badge.condition)}</p></section><section><div class="section-title">Источник в коде</div><p>${escapeHtml(badge.id === "gift" ? "shop-core.js · cart-gift-fixed-qty / fa-gift" : badge.source)}</p><small class="muted">Только просмотр. Подписи и правила отображения заданы в коде.</small></section>`;
+    panel.classList.remove("hidden");
+    const mobile = window.matchMedia("(max-width: 768px)").matches;
+    if (mobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
+      window.__adminMobilePages.openRight(badge.title);
+    } else if (mobile && sheetHost) {
+      sheetHost.innerHTML = "";
+      sheetHost.appendChild(panel);
+      openSheet();
+    } else {
+      if (detailsDesktopHost && panel.parentElement !== detailsDesktopHost) detailsDesktopHost.appendChild(panel);
+      closeSheet();
+    }
+  }
+
   async function enterAutoAddMode() {
     state.mode = "auto-add";
     clearProductsBulkSelection();
@@ -2778,6 +2955,7 @@
   async function openComboBlock(blockId) {
     const block = state.comboBlocks.find((b) => Number(b.id) === blockId);
     if (!block) return;
+    const activeTabKey = tabsState.activeKey;
     let blockData = block;
     try {
       const res = await apiGetComboBlock(blockId);
@@ -2785,8 +2963,9 @@
     } catch (e) {
       console.error("openComboBlock", e);
     }
+    if (tabsState.activeKey !== activeTabKey) return;
     const products = Array.isArray(blockData.products)
-      ? blockData.products.map((p) => ({ product_id: p.product_id, name: p.product_name || p.name, sort_order: p.sort_order ?? 0, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? p.price ?? 0, has_variants: p.has_variants ? 1 : 0, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }))
+      ? blockData.products.map((p) => ({ product_id: p.product_id, name: p.product_name || p.name, sort_order: p.sort_order ?? 0, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? p.price ?? 0, has_variants: p.has_variants ? 1 : 0, configuration_json: p.configuration_json ?? null, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }))
       : [];
     const tabId = `combo-block-${blockId}`;
     ensureTab({
@@ -2822,6 +3001,7 @@
     const maxSelect = Math.max(1, parseInt(comboBlockMaxSelectInput?.value, 10) || 1);
     const products = (state.comboBlockProducts || []).map((p, i) => ({
       product_id: p.product_id,
+      configuration: readSelectedProductConfiguration(p),
       sort_order: p.sort_order ?? i,
       is_default: p.is_default ? 1 : 0,
     }));
@@ -2843,7 +3023,7 @@
             state.comboBlockProducts = [];
             showComboBlockDetails({ block: state.comboBlockDraft, products: [] }, { mode: "view" });
             apiGetComboBlock(block.id).then((r) => {
-              if (r?.data?.products) state.comboBlockProducts = r.data.products.map((p) => ({ product_id: p.product_id, name: p.product_name, sort_order: p.sort_order, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? 0, has_variants: p.has_variants ? 1 : 0, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }));
+              if (r?.data?.products) state.comboBlockProducts = r.data.products.map((p) => ({ product_id: p.product_id, name: p.product_name, sort_order: p.sort_order, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? 0, has_variants: p.has_variants ? 1 : 0, configuration_json: p.configuration_json ?? null, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }));
               renderComboBlockProductsList();
             });
             showProductFooterView();
@@ -3021,9 +3201,12 @@
             const nextValue = flags?.has_variants ? 1 : 0;
             if (!flags || Number(product.has_variants || 0) === nextValue) return;
             product.has_variants = nextValue;
+            upsertSavedProductInList(product, getCatalogProductCategoryIds(product), {
+              preserveOrderReady: true, deferListFinalization: true, preserveCategoryMembership: true,
+            });
             changed = true;
           });
-          if (changed) renderProductsList();
+          if (changed) finalizeSavedProductsListUpdate();
         }).catch(() => null);
       }
     } catch (error) {
@@ -3155,8 +3338,7 @@
   }
 
   function ensureEditorOptionGroups() {
-    if (editorOptionGroupsLoaded || state.optionGroups.length) {
-      editorOptionGroupsLoaded = true;
+    if (editorOptionGroupsLoaded) {
       return Promise.resolve(state.optionGroups);
     }
     if (!optionGroupsLoadPromise) {
@@ -3197,15 +3379,19 @@
   }
 
   async function loadOptionGroupDetails(id, { productId = null } = {}) {
+    const activeTabKey = tabsState.activeKey;
     const res = await apiGetOptionGroup(id, { productId });
-    state.optionGroupDetails = res.data || null;
     if (res.data) {
       state.optionGroupCache.set(makeOptionGroupCacheKey(id, productId), res.data);
     }
+    if (tabsState.activeKey !== activeTabKey) return;
+    state.optionGroupDetails = res.data || null;
   }
 
   async function loadVariantGroupDetails(id) {
+    const activeTabKey = tabsState.activeKey;
     const res = await apiGetVariantGroup(id);
+    if (tabsState.activeKey !== activeTabKey) return;
     const data = res.data || null;
 
     if (data && data.tiers) {
@@ -4322,8 +4508,7 @@ function buildOptionGroupPayload(formValues) {
       state.autoAddItems = Array.isArray(data.items) ? data.items : [];
     } catch (e) {
       console.error("Failed to load auto-add groups", e);
-      state.autoAddGroups = [];
-      state.autoAddItems = [];
+      throw e;
     }
   }
 
@@ -4433,7 +4618,9 @@ function buildAutoAddGroupDetails(groupId) {
 
   function getAutoAddItemsSource() {
     if (state.autoAddPanel.mode === "create" || state.autoAddPanel.mode === "edit") {
-      return state.autoAddDraft?.items || [];
+      const schedule = state.autoAddDraft?.schedule;
+      const slot = schedule?.mode === "schedule" && schedule.assignment === "individual" ? schedule.slot : "shared";
+      return (state.autoAddDraft?.items || []).filter(item => (item.schedule_slot || "shared") === slot);
     }
     return state.autoAddGroupDetails?.items || [];
   }
@@ -4462,6 +4649,11 @@ function buildAutoAddGroupDetails(groupId) {
   function syncAutoAddDraftGroupFromForm() {
     if (!state.autoAddDraft) return;
     state.autoAddDraft.group = { ...state.autoAddDraft.group, ...getAutoAddGroupFormValues() };
+    const limitInput = $("#autoAddTotalIssueLimit");
+    state.autoAddDraft.totalIssueLimit = limitInput.value === "" ? null : Number(limitInput.value);
+    state.autoAddDraft.firstFree = $("#autoAddFirstFree").checked;
+    state.autoAddDraft.group.available_to_guests = $('#autoAddAvailableToGuests').checked ? 1 : 0;
+    state.autoAddDraft.group.add_automatically = $("#autoAddAutomatically").checked ? 1 : 0;
   }
 
   function persistAutoAddEditState() {
@@ -4530,6 +4722,7 @@ function buildAutoAddGroupDetails(groupId) {
     return {
       tempId: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       product_id: null,
+      schedule_slot: state.autoAddDraft?.schedule?.mode === "schedule" && state.autoAddDraft.schedule.assignment === "individual" ? state.autoAddDraft.schedule.slot : "shared",
       product_name: "",
       default_qty: 1,
       min_qty: 1,
@@ -4560,95 +4753,35 @@ function buildAutoAddGroupDetails(groupId) {
     };
   }
 
-  function renderAutoAddItems(items) {
-    if (!autoAddItemsList) return;
+  function renderAutoAddItems(items, host = autoAddItemsList) {
+    if (!host) return;
     const editable = isAutoAddEditable();
 
     if (!items.length) {
-      autoAddItemsList.innerHTML = `<div class="empty-hint">Пока нет товаров...</div>`;
+      host.innerHTML = `<div class="empty-hint">Товары не выбраны</div>`;
       return;
     }
 
-    autoAddItemsList.innerHTML = items.map((item, idx) => {
+    host.innerHTML = items.map((item, idx) => {
       const key = getAutoAddItemKey(item) || `auto-${idx}`;
-      const safeName = escapeHtml(item.product_name || "");
-      const selectedLabel = safeName || "Не выбран";
-      const defaultQty = item.default_qty ?? 1;
-      const minQty = item.min_qty ?? 1;
-      const maxQty = item.max_qty ?? "";
-      const priceOverride = item.price_override ?? "";
-      const freeFirst = item.free_first_qty ?? 0;
       const freePerAmount = item.free_per_amount ?? "";
-      const freePerQty = item.free_per_amount_qty ?? 1;
       const maxFree = item.max_free_qty ?? "";
-      const sortOrder = item.sort_order ?? 0;
-      const isActive = item.is_active === 0 ? "" : "checked";
       const disabled = editable ? "" : "disabled";
 
       return `
-        <div class="option-item-row auto-add-item-card" data-auto-item-key="${key}">
-          <div class="auto-add-item-header">
-            <div class="auto-add-item-title">
-              <label class="field-label">Товар *</label>
-              <input class="control auto-add-item-search" type="search" placeholder="Начните вводить название..." data-auto-item-search="${key}" value="${safeName}" ${disabled} />
-              <div class="options-list auto-add-search-results" data-auto-item-results="${key}"></div>
-              <div class="options-row-meta auto-add-item-selected" data-auto-item-selected="${key}">${selectedLabel}</div>
-            </div>
-            <div class="auto-add-item-actions">
-              <label class="switch switch-compact">
-                <input class="switch-input" type="checkbox" data-auto-item-field="is_active" data-auto-item-key="${key}" ${isActive} ${disabled} />
-                <span class="switch-ui" aria-hidden="true"></span>
-                <span class="switch-text">Активен</span>
-              </label>
-              ${editable ? `
-                <button class="btn btn-icon auto-add-item-remove" type="button" data-auto-item-remove="${key}" title="Удалить" aria-label="Удалить товар">
-                  <i class="fas fa-times"></i>
-                </button>
-              ` : ""}
-            </div>
+        <div class="auto-add-product-table-row" data-auto-item-key="${key}">
+          <div class="auto-add-product-name">
+            ${renderOptionProductCard(item, { showCheckbox: false, allowVariants: false, allowConfiguration: true, editable, itemKey: key })}
           </div>
-          <div class="form-row-3 auto-add-item-row">
-            <div>
-              <label class="field-label">По умолчанию</label>
-              <input class="control" type="number" min="0" data-auto-item-field="default_qty" data-auto-item-key="${key}" value="${defaultQty}" ${disabled} />
-            </div>
-            <div>
-              <label class="field-label">Мин.</label>
-              <input class="control" type="number" min="0" data-auto-item-field="min_qty" data-auto-item-key="${key}" value="${minQty}" ${disabled} />
-            </div>
-            <div>
-              <label class="field-label">Макс.</label>
-              <input class="control" type="number" min="0" data-auto-item-field="max_qty" data-auto-item-key="${key}" value="${maxQty}" ${disabled} />
-            </div>
+          <div>
+            <label class="field-label" for="auto-amount-${key}">За каждые, ₽</label>
+            <input class="control" id="auto-amount-${key}" type="number" min="0.01" step="0.01" data-auto-item-field="free_per_amount" data-auto-item-key="${key}" value="${freePerAmount}" ${disabled} />
           </div>
-          <div class="form-row-3 auto-add-item-row">
-            <div>
-              <label class="field-label">Цена (override)</label>
-              <input class="control" type="number" min="0" step="0.01" data-auto-item-field="price_override" data-auto-item-key="${key}" value="${priceOverride}" ${disabled} />
-            </div>
-            <div>
-              <label class="field-label">Первые бесплатно</label>
-              <input class="control" type="number" min="0" data-auto-item-field="free_first_qty" data-auto-item-key="${key}" value="${freeFirst}" ${disabled} />
-            </div>
-            <div>
-              <label class="field-label">Бесплатно за сумму</label>
-              <input class="control" type="number" min="0" step="1" data-auto-item-field="free_per_amount" data-auto-item-key="${key}" value="${freePerAmount}" ${disabled} />
-            </div>
+          <div>
+            <label class="field-label" for="auto-max-${key}">Макс. бесплатно, шт.</label>
+            <input class="control" id="auto-max-${key}" type="number" min="0" step="1" data-auto-item-field="max_free_qty" data-auto-item-key="${key}" value="${maxFree}" title="Максимум бесплатных штук в одном заказе" ${disabled} />
           </div>
-          <div class="form-row-3 auto-add-item-row">
-            <div>
-              <label class="field-label">Кол-во за сумму</label>
-              <input class="control" type="number" min="1" data-auto-item-field="free_per_amount_qty" data-auto-item-key="${key}" value="${freePerQty}" ${disabled} />
-            </div>
-            <div>
-              <label class="field-label">Лимит бесплатно</label>
-              <input class="control" type="number" min="0" data-auto-item-field="max_free_qty" data-auto-item-key="${key}" value="${maxFree}" ${disabled} />
-            </div>
-            <div>
-              <label class="field-label">Сортировка</label>
-              <input class="control" type="number" min="0" data-auto-item-field="sort_order" data-auto-item-key="${key}" value="${sortOrder}" ${disabled} />
-            </div>
-          </div>
+          ${editable ? `<button class="btn btn-icon auto-add-item-remove" type="button" data-auto-item-remove="${key}" aria-label="Удалить товар"><i class="fas fa-times" aria-hidden="true"></i></button>` : ""}
         </div>
       `;
     }).join("");
@@ -4720,6 +4853,15 @@ function buildAutoAddGroupDetails(groupId) {
 
     autoAddItemsList.addEventListener("click", (event) => {
       if (!isAutoAddEditable()) return;
+      const addButton = event.target.closest("[data-auto-slot-add]");
+      if (addButton) {
+        state.autoAddDraft.schedule.slot = addButton.dataset.autoSlotAdd;
+        openOptionPicker("auto-add", { context: "auto-add" }).catch(error => {
+          console.error("Failed to open scheduled auto-add catalog", error);
+          showToast("Не удалось загрузить каталог товаров.");
+        });
+        return;
+      }
       const removeBtn = event.target.closest("[data-auto-item-remove]");
       if (removeBtn) {
         const key = removeBtn.dataset.autoItemRemove;
@@ -4735,7 +4877,7 @@ function buildAutoAddGroupDetails(groupId) {
           (x) => String(x.tempId ?? x.id ?? x.product_id) !== String(key)
         );
         state.autoAddPanel.itemsDirty = true;
-        renderAutoAddItems(getAutoAddItemsSource());
+        renderAutoAddScheduleSlots();
         persistAutoAddEditState();
         return;
       }
@@ -4956,11 +5098,11 @@ function buildAutoAddGroupDetails(groupId) {
     }
 
     const existing = new Set(
-      state.autoAddDraft.items
+      getAutoAddItemsSource()
         .map((x) => Number(x.product_id))
         .filter((pid) => Number.isFinite(pid) && pid > 0)
     );
-    const emptySlots = state.autoAddDraft.items.filter((x) => !Number(x.product_id));
+    const emptySlots = getAutoAddItemsSource().filter((x) => !Number(x.product_id));
     let emptyIndex = 0;
     state.autoAddPanel.pickerProducts.forEach((product) => {
       const id = Number(product.id);
@@ -5124,6 +5266,161 @@ function buildAutoAddGroupDetails(groupId) {
     renderAutoAddGroupLevel();
   }
 
+  let autoAddScheduleEditor = null;
+  let closeAutoAddScheduleInfo = null;
+
+  function renderAutoAddScheduleSlots() {
+    const schedule = state.autoAddDraft?.schedule;
+    const host = $("#autoAddScheduleSlots");
+    if (!schedule || !host) return;
+    const individual = schedule.mode === "schedule" && schedule.assignment === "individual";
+    const receipt = schedule.settings.receipt;
+    const labels = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
+    const formatDate = date => new Date(`${date}T12:00:00`).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", weekday: "long" });
+    const matches = date => !receipt.weekdays.length || receipt.weekdays.includes((new Date(`${date}T12:00:00`).getDay() + 6) % 7);
+    let slots = [];
+    if (receipt.mode === "dates") {
+      slots = receipt.dates.filter(matches).sort().map(date => [date, formatDate(date)]);
+    } else if (receipt.mode === "period" && receipt.start && receipt.end) {
+      const cursor = new Date(`${receipt.start}T12:00:00`);
+      while (true) {
+        const date = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+        if (date > receipt.end) break;
+        if (matches(date)) slots.push([date, formatDate(date)]);
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    } else if (receipt.mode === "any") {
+      slots = (receipt.weekdays.length ? receipt.weekdays : [0, 1, 2, 3, 4, 5, 6]).map(day => [`weekday:${day}`, `${labels[day]} · каждую неделю`]);
+    }
+    if (!slots.some(([key]) => key === schedule.slot)) schedule.slot = slots[0]?.[0] || null;
+    closeAutoAddScheduleInfo?.();
+    host.replaceChildren();
+    if (schedule.mode === "schedule") {
+      const shortDays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+      const days = receipt.weekdays.map(day => shortDays[day]).join(", ");
+      const numericDate = date => date.split("-").reverse().join(".");
+      let summary;
+      if (receipt.mode === "any") {
+        summary = days ? `Каждую неделю · ${days}` : "Ежедневно";
+      } else if (receipt.mode === "period" && (!receipt.start || !receipt.end)) {
+        summary = "Выберите начало и конец периода";
+      } else if (receipt.mode === "dates" && !receipt.dates.length) {
+        summary = "Выберите даты";
+      } else if (!slots.length) {
+        summary = "Нет подходящих дат";
+      } else if (receipt.mode === "period") {
+        const start = receipt.start.split("-");
+        const end = receipt.end.split("-");
+        const from = start[0] !== end[0] ? numericDate(receipt.start)
+          : start[1] !== end[1] ? `${start[2]}.${start[1]}` : start[2];
+        summary = `${from}–${numericDate(receipt.end)} · ${days || "ежедневно"}`;
+        if (days) summary += ` · дат: ${slots.length}`;
+      } else if (days) {
+        summary = `Подходят ${slots.length} из ${receipt.dates.length} дат · ${days}`;
+      } else if (slots.length === 1) {
+        const date = slots[0][0];
+        summary = `${numericDate(date)} · ${shortDays[(new Date(`${date}T12:00:00`).getDay() + 6) % 7]}`;
+      } else if (slots.length <= 3) {
+        const sameMonth = slots.every(([date]) => date.slice(0, 7) === slots[0][0].slice(0, 7));
+        summary = sameMonth
+          ? `${slots.map(([date]) => date.slice(8)).join(", ")}.${slots[0][0].slice(5, 7)}.${slots[0][0].slice(0, 4)}`
+          : slots.map(([date]) => numericDate(date)).join(", ");
+      } else {
+        summary = `Выбрано дат: ${slots.length}`;
+      }
+      const text = document.createElement("span");
+      text.textContent = summary;
+      host.append(text);
+      if (slots.length) {
+        const info = document.createElement("details");
+        info.className = "auto-add-schedule-info";
+        info.innerHTML = `<summary aria-label="Даты автодобавления"><i class="fas fa-info-circle" aria-hidden="true"></i></summary><div class="auto-add-schedule-info-popup"><b>Даты автодобавления</b><ul>${slots.map(([key, label]) => key.startsWith("weekday:")
+          ? `<li><span>${escapeHtml(label)}</span></li>`
+          : `<li><span>${numericDate(key)}</span><span>${labels[(new Date(`${key}T12:00:00`).getDay() + 6) % 7]}</span></li>`).join("")}</ul></div>`;
+        const close = () => {
+          info.open = false;
+          document.removeEventListener("pointerdown", outside, true);
+          document.removeEventListener("keydown", keydown);
+        };
+        const outside = event => { if (!info.contains(event.target)) close(); };
+        const keydown = event => { if (event.key === "Escape") close(); };
+        info.addEventListener("toggle", () => {
+          if (!info.isConnected || !info.open) { close(); return; }
+          document.addEventListener("pointerdown", outside, true);
+          document.addEventListener("keydown", keydown);
+        });
+        closeAutoAddScheduleInfo = close;
+        host.append(info);
+      }
+    }
+    if (autoAddItemsAddBtn) {
+      autoAddItemsAddBtn.classList.toggle("hidden", individual || !isAutoAddEditable());
+      autoAddItemsAddBtn.disabled = false;
+    }
+    if (individual) {
+      autoAddItemsList.replaceChildren();
+      if (!slots.length) autoAddItemsList.innerHTML = '<div class="empty-hint">Нет дат, соответствующих условиям.</div>';
+      slots.forEach(([key, label]) => {
+        const section = document.createElement("section");
+        section.className = "auto-add-date-group";
+        section.innerHTML = `<div class="auto-add-date-head"><b>${escapeHtml(label)}</b><button class="btn btn-icon" type="button" data-auto-slot-add="${key}" aria-label="Добавить товар: ${escapeHtml(label)}"><i class="fas fa-plus" aria-hidden="true"></i></button></div><div class="option-items-table"></div>`;
+        renderAutoAddItems(state.autoAddDraft.items.filter(item => item.schedule_slot === key), section.lastElementChild);
+        autoAddItemsList.appendChild(section);
+      });
+      bindAutoAddItemsListEvents();
+    } else {
+      renderAutoAddItems(getAutoAddItemsSource());
+    }
+    persistAutoAddEditState();
+  }
+
+  function renderAutoAddSchedule() {
+    if (!state.autoAddDraft) return;
+    const schedule = state.autoAddDraft.schedule ||= {
+      mode: "always", assignment: "shared", basis: "created", slot: null,
+      settings: { receipt: { mode: "any", start: null, end: null, dates: [], weekdays: [] } },
+    };
+    const tabs = $("#autoAddModeTabs");
+    tabs.querySelectorAll("[data-auto-mode]").forEach(button => {
+      const active = button.dataset.autoMode === schedule.mode;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", String(active));
+    });
+    $("#autoAddSchedule").classList.toggle("hidden", schedule.mode !== "schedule");
+    autoAddScheduleEditor?.closeSelect();
+    const host = $("#autoAddScheduleCalendar");
+    host.replaceChildren();
+    if (schedule.mode === "schedule") {
+      const block = document.getElementById("tplProductEditor").content.querySelector("#pePreorderConditions").cloneNode(true);
+      block.classList.remove("hidden", "info-card");
+      block.querySelector(".product-preorder-head").remove();
+      block.querySelector("#pePreorderAcceptance").parentElement.remove();
+      block.querySelector("#pePreorderReceipt").previousElementSibling.textContent = "Даты действия";
+      block.querySelector(".product-preorder-weekdays > b").textContent = "Дни недели";
+      host.append(block);
+      autoAddScheduleEditor = bindProductPreorderConditions($("#autoAddSchedule"), {
+        product: { preorder_settings_json: schedule.settings }, scheduleOnly: true,
+        onScheduleChange: settings => {
+          schedule.settings = settings;
+          renderAutoAddScheduleSlots();
+        },
+      });
+      autoAddScheduleEditor.bindSelect("#autoAddScheduleBasis", "Дата срабатывания",
+        [["created", "Оформление заказа"], ["receipt", "Получение заказа"]],
+        value => { schedule.basis = value; persistAutoAddEditState(); }, schedule.basis);
+      autoAddScheduleEditor.bindSelect("#autoAddScheduleAssignment", "Товары по дням",
+        [["shared", "Общий список"], ["individual", "Список по дням"]],
+        value => { schedule.assignment = value; renderAutoAddScheduleSlots(); }, schedule.assignment);
+    }
+    tabs.onclick = event => {
+      const button = event.target.closest("[data-auto-mode]");
+      if (!button || button.dataset.autoMode === schedule.mode) return;
+      schedule.mode = button.dataset.autoMode;
+      renderAutoAddSchedule();
+    };
+    renderAutoAddScheduleSlots();
+  }
+
   function renderAutoAddGroupLevel() {
     const editable = isAutoAddEditable();
     const data = editable ? state.autoAddDraft : state.autoAddGroupDetails;
@@ -5133,10 +5430,15 @@ function buildAutoAddGroupDetails(groupId) {
     if (autoAddLevelPicker) autoAddLevelPicker.classList.add("hidden");
 
     fillAutoAddGroupForm(data.group);
+    if (state.autoAddDraft) state.autoAddDraft.giftModelVersion = 1;
+    $("#autoAddTotalIssueLimit").value = state.autoAddDraft?.totalIssueLimit ?? "";
+    $("#autoAddFirstFree").checked = state.autoAddDraft?.firstFree ?? false;
+    $("#autoAddAutomatically").checked = Number(data.group.add_automatically ?? 1) === 1;
+    $('#autoAddAvailableToGuests').checked = Number(data.group.available_to_guests ?? 1) === 1;
     setAutoAddGroupFormDisabled(!editable);
 
     if (autoAddItemsAddBtn) autoAddItemsAddBtn.classList.toggle("hidden", !editable);
-    renderAutoAddItems(getAutoAddItemsSource());
+    renderAutoAddSchedule();
     renderAutoAddHeader();
 
     if (state.autoAddPanel.mode === "view") {
@@ -5152,8 +5454,15 @@ function buildAutoAddGroupDetails(groupId) {
     state.autoAddPanel.mode = mode || "view";
     state.autoAddPanel.itemsDirty = false;
     if (state.autoAddPanel.mode === "view") {
-      state.autoAddDraft = null;
-      state.autoAddPanel.snapshotData = null;
+      const editingState = editingAutoAdds.get(state.selectedAutoAddGroupId);
+      if (editingState) {
+        state.autoAddPanel.mode = "edit";
+        state.autoAddDraft = deepClone(editingState.autoAddDraft);
+        state.autoAddPanel.snapshotData = deepClone(editingState.snapshotData);
+      } else {
+        state.autoAddGroupDetails = details;
+        startAutoAddEdit({ silent: true });
+      }
     }
 
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
@@ -5194,6 +5503,7 @@ function buildAutoAddGroupDetails(groupId) {
       title: title || "Автодобавление",
       onActivate: async () => {
         await loadAutoAddManagement();
+        if (tabsState.activeKey !== buildTabKey("auto-add", groupId)) return;
         state.selectedAutoAddGroupId = groupId;
         state.autoAddGroupDetails = buildAutoAddGroupDetails(groupId);
         renderAutoAddGroupsList();
@@ -5231,7 +5541,7 @@ function buildAutoAddGroupDetails(groupId) {
         allow_customer_qty: 1,
         allow_customer_remove: 1,
       },
-      items: [createAutoAddDraftItem()],
+      items: [],
       removedItemIds: [],
     };
 
@@ -5262,6 +5572,10 @@ function buildAutoAddGroupDetails(groupId) {
       group: state.autoAddGroupDetails.group,
       items: state.autoAddGroupDetails.items || [],
       removedItemIds: [],
+      totalIssueLimit: state.autoAddGroupDetails.group.total_issue_limit != null ? Number(state.autoAddGroupDetails.group.total_issue_limit) : null,
+      firstFree: Number(state.autoAddGroupDetails.group.first_free || 0) === 1,
+      schedule: typeof state.autoAddGroupDetails.group.schedule_json === "string"
+        ? JSON.parse(state.autoAddGroupDetails.group.schedule_json) : state.autoAddGroupDetails.group.schedule_json || undefined,
     });
     state.autoAddPanel.mode = "edit";
 
@@ -5278,34 +5592,30 @@ function buildAutoAddGroupDetails(groupId) {
   }
 
   function cancelAutoAddEdit() {
-    if (state.autoAddPanel.mode === "create") {
-      if (state.autoAddPanel.tabKey) {
-        closeTab(state.autoAddPanel.tabKey);
-      }
-      state.autoAddDraft = null;
-      state.autoAddPanel.mode = "view";
-      state.autoAddPanel.tabKey = null;
-      state.selectedAutoAddGroupId = null;
-      hideProductFooter();
-      showDetailsEmpty();
-      return;
-    }
-    if (state.autoAddPanel.mode === "edit" && state.selectedAutoAddGroupId) {
-      editingAutoAdds.delete(state.selectedAutoAddGroupId);
-      (async () => {
-        state.autoAddPanel.mode = "view";
-        state.autoAddDraft = null;
-        state.autoAddPanel.snapshotData = null;
-        await loadAutoAddManagement();
-        state.autoAddGroupDetails = buildAutoAddGroupDetails(state.selectedAutoAddGroupId);
-        showAutoAddDetails(state.autoAddGroupDetails, { mode: "view" });
-      })();
-    }
+    const key = state.autoAddPanel.mode === "create"
+      ? state.autoAddPanel.tabKey
+      : buildTabKey("auto-add", state.selectedAutoAddGroupId);
+    if (key) closeTab(key);
   }
 
   async function saveAutoAddGroup() {
     if (!autoAddGroupForm || !state.autoAddDraft) return;
-    const groupValues = getAutoAddGroupFormValues();
+    syncAutoAddDraftGroupFromForm();
+    const groupValues = {
+      ...getAutoAddGroupFormValues(), rule_version: 1,
+      add_automatically: state.autoAddDraft.group.add_automatically ?? 1,
+      available_to_guests: state.autoAddDraft.group.available_to_guests ?? 1,
+      first_free: state.autoAddDraft.firstFree ? 1 : 0,
+      total_issue_limit: state.autoAddDraft.totalIssueLimit ?? null,
+      schedule: state.autoAddDraft.schedule,
+      items: (state.autoAddDraft.items || []).map((item, index) => ({
+        configuration: readSelectedProductConfiguration(item),
+        product_id: Number(item.product_id), schedule_slot: item.schedule_slot || "shared",
+        free_per_amount: item.free_per_amount == null || item.free_per_amount === "" ? null : Number(item.free_per_amount),
+        max_free_qty: item.max_free_qty == null || item.max_free_qty === "" ? null : Number(item.max_free_qty),
+        sort_order: Number(item.sort_order ?? index * 10),
+      })),
+    };
 
     if (!groupValues.title) {
       autoAddGroupTitleInput?.focus();
@@ -5324,7 +5634,6 @@ function buildAutoAddGroupDetails(groupId) {
     if (state.autoAddPanel.mode === "create") {
       const res = await apiCreateAutoAddGroup(groupValues);
       const groupId = res.id;
-      await Promise.all(items.map((item, idx) => apiCreateAutoAddItem(groupId, buildAutoAddItemPayload(item, idx))));
 
       await loadAutoAddManagement();
       state.selectedAutoAddGroupId = groupId;
@@ -5357,16 +5666,6 @@ function buildAutoAddGroupDetails(groupId) {
     if (state.selectedAutoAddGroupId) {
       const groupId = state.selectedAutoAddGroupId;
       await apiPatchAutoAddGroup(groupId, groupValues);
-
-      const removedIds = Array.isArray(state.autoAddDraft.removedItemIds) ? state.autoAddDraft.removedItemIds : [];
-      const createItems = items.filter((item) => !item.id);
-      const updateItems = items.filter((item) => item.id);
-
-      await Promise.all([
-        ...removedIds.map((id) => apiDeleteAutoAddItem(id)),
-        ...createItems.map((item, idx) => apiCreateAutoAddItem(groupId, buildAutoAddItemPayload(item, idx))),
-        ...updateItems.map((item, idx) => apiPatchAutoAddItem(item.id, buildAutoAddItemPayload(item, idx))),
-      ]);
 
       await loadAutoAddManagement();
       state.autoAddGroupDetails = buildAutoAddGroupDetails(groupId);
@@ -5768,15 +6067,251 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return Array.isArray(photos) && photos.length ? String(photos[0] || "") : "";
   }
 
-  function renderOptionProductCard(item, { selected = false, editable = false, itemKey = "", allowVariants = true, checkboxKind = "default", showCheckbox = true, styledCheckbox = false } = {}) {
+  function readSelectedProductConfiguration(item) {
+    const value = item?.configuration_json;
+    return typeof value === 'string' ? JSON.parse(value) : value || null;
+  }
+
+  const selectionProductRequests = new Map();
+  const selectionProductsToLoad = new Set();
+  let selectionProductsScheduled = false;
+  let selectionRounding = null;
+  let selectionRoundingPromise = null;
+
+  async function ensureSelectionRounding() {
+    if (selectionRounding) return;
+    if (!selectionRoundingPromise) selectionRoundingPromise = (async () => {
+      const stored = JSON.parse(localStorage.getItem('tenant') || 'null');
+      const tenant = stored && typeof stored.price_rounding_mode === 'string' && stored.price_rounding_precision != null
+        ? stored : (await api('/api/admin/tenant')).tenant;
+      if (!tenant) throw new Error('TENANT_ROUNDING_UNAVAILABLE');
+      selectionRounding = window.SharedProductDetails.normalizePriceRoundingSettings(tenant);
+    })().finally(() => { selectionRoundingPromise = null; });
+    await selectionRoundingPromise;
+  }
+
+  function configureSelectionSource() {
+    window.SharedProductDetails.configure({
+      getRounding: () => selectionRounding,
+      getUnitConversions: () => window.CatalogRepository.getEditorReferences().unitConversions,
+      getPassport: id => {
+        const passport = window.CatalogRepository.getProductPassport(id);
+        return window.CatalogRepository.isOrderReadyPassport(passport) && passport.editor?.variants_visibility_respected === true ? passport : null;
+      },
+      request: (url, options = {}) => api(url, { ...options, body: options.body && typeof options.body !== 'string' ? JSON.stringify(options.body) : options.body }),
+      ensurePassports: async ids => {
+        await window.CatalogRepository.loadPassports(ids);
+        const staleIds = ids.filter(id => {
+          const passport = window.CatalogRepository.getProductPassport(id);
+          return passport && passport.editor?.variants_visibility_respected !== true;
+        });
+        if (staleIds.length) {
+          await window.CatalogRepository.ensureProducts(staleIds, {
+            requiredCompleteness: 'order-ready', loader: loadProductsCatalogPassports, force: true, awaitPersistence: true,
+          });
+        }
+        await window.CatalogRepository.ensureProducts(ids, {
+          requiredCompleteness: 'order-ready', loader: loadProductsCatalogPassports, awaitPersistence: true,
+        });
+        const passports = Object.fromEntries(ids.map(id => [id, window.CatalogRepository.getProductPassport(id)]));
+        window.SharedProductDetails.prepare(passports);
+      },
+    });
+  }
+
+  async function ensureSelectionProducts(ids) {
+    await ensureSelectionRounding();
+    configureSelectionSource();
+    const missing = [...new Set(ids.map(Number))].filter(id => id > 0 && !selectionProductRequests.has(id));
+    if (missing.length) {
+      const promise = window.SharedProductDetails.prepareSelections(missing).finally(() => missing.forEach(id => selectionProductRequests.delete(id)));
+      missing.forEach(id => selectionProductRequests.set(id, promise));
+    }
+    await Promise.all([...new Set(ids.map(id => selectionProductRequests.get(Number(id))).filter(Boolean))]);
+  }
+
+  function getSelectionTarget(element) {
+    const row = element.closest('.option-product-line[data-selection-product-id]');
+    if (!row) return null;
+    const key = row.dataset.selectionKey;
+    const inPicker = Boolean(row.closest('#optionLevelPicker'));
+    const editing = row.dataset.selectionEditable === '1';
+    const autoItem = editing && !inPicker && row.closest('#autoAddGroupInfo') ? state.autoAddDraft?.items?.find(item => String(getAutoAddItemKey(item)) === key) : null;
+    const comboItem = editing && !inPicker && row.closest('#comboBlockProductsList') ? state.comboBlockProducts?.find(item => String(item.product_id) === key) : null;
+    const item = row.__productOptionSelection?.item || autoItem || comboItem || (editing && !inPicker ? state.optionDraft?.items?.find(item => String(item.tempId ?? item.id ?? item.target_product_id) === key) : null);
+    const productId = Number(row.dataset.selectionProductId);
+    const configuration = (inPicker ? state.optionPanel.pickerConfigurationSelection?.get(productId) : readSelectedProductConfiguration(item))
+      || (row.dataset.selectionConfiguration ? JSON.parse(row.dataset.selectionConfiguration) : null);
+    const variant = inPicker ? state.optionPanel.pickerVariantSelection?.get(productId) : item && { groupId: item.default_variant_group_id, valueIndex: item.default_variant_value_index };
+    let selection = window.SharedProductDetails.getSelection(productId, configuration);
+    if (selection && variant?.groupId != null) {
+      selection.configuration.variant_group_id = variant.groupId;
+      selection.configuration.variant_value_index = variant.valueIndex;
+      selection = window.SharedProductDetails.getSelection(productId, selection.configuration);
+    }
+    return { row, key, inPicker, item, autoItem, comboItem, productId, selection, onApply: row.__productOptionSelection?.onApply };
+  }
+
+  function renderSelectionRows(productId, configuration, editable) {
+    const selection = window.SharedProductDetails.getSelection(productId, configuration);
+    if (!selection) return '';
+    const rows = editable ? selection.rows : selection.rows.map(row => ({
+      ...row, ingredients: row.ingredients.filter(ingredient => Number(ingredient.qty) !== 0),
+    })).filter(row => row.rowKind === 'option' || row.unitLabel || row.ingredients.length || row.hasOptions);
+    return rows.map(row => window.SharedProductDetails.renderCompositionRow(row, {
+      item: { type: 'product' }, active: null, isGiftReward: !editable, fixedGiftComposition: !editable,
+      getCartItemCheckoutRequireAll: () => true, escapeHtml, selectionMode: true, hideOptionConfiguration: true,
+    })).join('');
+  }
+
+  function refreshSelectionRows(row) {
+    const target = getSelectionTarget(row);
+    if (!target?.selection) return;
+    const host = row.querySelector('.product-selection-rows');
+    if (host) host.innerHTML = renderSelectionRows(target.productId, target.selection.configuration, row.dataset.selectionEditable === '1');
+    const presentation = window.SharedProductDetails.getSelectionPresentation(target.productId, target.selection.configuration);
+    const head = row.querySelector('.product-selection-head');
+    if (head && presentation) {
+      head.querySelector('strong').textContent = presentation.title;
+      head.querySelector('span').innerHTML = renderSelectionPrice(presentation);
+    }
+  }
+
+  function renderSelectionPrice(presentation) {
+    if (!presentation) return '—';
+    return `${presentation.oldPriceText ? `<s>${escapeHtml(presentation.oldPriceText)}</s>` : ''}<b>${escapeHtml(presentation.priceText)}</b>`;
+  }
+
+  function queueSelectionProduct(productId) {
+    selectionProductsToLoad.add(productId);
+    if (selectionProductsScheduled) return;
+    selectionProductsScheduled = true;
+    queueMicrotask(async () => {
+      selectionProductsScheduled = false;
+      const ids = [...selectionProductsToLoad];
+      selectionProductsToLoad.clear();
+      try {
+        await ensureSelectionProducts(ids);
+        document.querySelectorAll('.option-product-line[data-selection-product-id]').forEach(row => {
+          if (ids.includes(Number(row.dataset.selectionProductId))) refreshSelectionRows(row);
+        });
+      } catch (error) { console.error('Product selection loading failed', error); showToast(error.message); }
+    });
+  }
+
+  function applySelectionConfiguration(target, configuration) {
+    configuration.option_items ||= [];
+    configuration.option_item_ids = configuration.option_items.map(item => Number(item.id));
+    target.row.dataset.selectionConfiguration = JSON.stringify(configuration);
+    if (target.onApply) {
+      target.item.configuration_json = configuration;
+      target.item.default_variant_group_id = configuration.variant_group_id;
+      target.item.default_variant_value_index = configuration.variant_value_index;
+      target.onApply(configuration);
+    } else if (target.inPicker) {
+      state.optionPanel.pickerConfigurationSelection.set(target.productId, configuration);
+      state.optionPanel.pickerSelection.add(target.productId);
+      if (configuration.variant_group_id != null) state.optionPanel.pickerVariantSelection.set(target.productId, {
+        groupId: configuration.variant_group_id, valueIndex: configuration.variant_value_index,
+      });
+      const checkbox = target.row.querySelector('[data-option-member]');
+      if (checkbox) checkbox.checked = true;
+      target.row.classList.add('is-selected');
+      updateOptionPickerSelectAllState();
+      renderOptionHeader();
+    } else if (target.item) {
+      target.item.configuration_json = configuration;
+      target.item.default_variant_group_id = configuration.variant_group_id;
+      target.item.default_variant_value_index = configuration.variant_value_index;
+      if (target.autoItem) { state.autoAddPanel.itemsDirty = true; persistAutoAddEditState(); }
+      else if (!target.comboItem) state.optionPanel.itemsDirty = true;
+    }
+    refreshSelectionRows(target.row);
+  }
+
+  async function configureSelectedProduct(element) {
+    let target = getSelectionTarget(element);
+    if (!target || target.row.dataset.selectionEditable !== '1') return;
+    await ensureSelectionProducts([target.productId]);
+    if (!target.row.isConnected) return;
+    target = getSelectionTarget(element);
+    await window.SharedProductDetails.open({ productId: target.productId, mode: 'selection',
+      initialValue: { ...target.selection.configuration, qty: 1 },
+      onSave: value => applySelectionConfiguration(target, { variant_group_id: value.variant_group_id,
+        variant_value_index: value.variant_value_index, variant_label: value.variant_label,
+        ingredients: value.ingredients || [], option_items: value.option_items || [], option_item_ids: value.option_item_ids || [] }),
+    });
+  }
+
+  document.addEventListener('click', event => {
+    const row = event.target.closest('.option-product-line[data-selection-product-id]');
+    if (!row || row.dataset.selectionEditable !== '1') return;
+    const control = event.target.closest('[data-action]');
+    if (control && row.contains(control)) {
+      event.preventDefault();
+      const target = getSelectionTarget(row);
+      if (!target?.selection) return;
+      const configuration = target.selection.configuration;
+      const action = control.dataset.action.replace(/^selection-/, 'right-cart-');
+      const optionIndex = Number(control.dataset.optionIndex || 0);
+      const option = configuration.option_items?.[optionIndex];
+      const rows = target.selection.rows;
+      const selectedRow = rows.find(value => value.rowKind === (control.dataset.rowKind || 'option') && (value.rowKind !== 'option' || value.optionIndex === optionIndex));
+      if (action === 'right-cart-open-product') {
+        configureSelectedProduct(row).catch(error => { console.error(error); showToast(error.message); });
+        return;
+      }
+      if (action === 'right-cart-variant-select') {
+        const index = Number(control.dataset.variantIndex);
+        const group = selectedRow?.variantGroup;
+        if (!group || !Number.isInteger(index) || index < 0 || index >= group.values.length) return;
+        const value = { variant_group_id: Number(group.id || group.variant_group_id), variant_value_index: index,
+          variant_label: selectedRow.variantValues[index] };
+        if (control.dataset.rowKind === 'option' && option) Object.assign(option, value);
+        else Object.assign(configuration, value);
+      } else if (action === 'right-cart-ingredient-minus' || action === 'right-cart-ingredient-plus') {
+        const ingredient = selectedRow?.ingredients?.[Number(control.dataset.ingredientIndex)];
+        if (!ingredient || control.classList.contains('is-disabled')) return;
+        const delta = action.endsWith('plus') ? ingredient.qty_step : -ingredient.qty_step;
+        const quantity = Math.round((ingredient.qty + delta) * 1000000) / 1000000;
+        if (quantity < ingredient.qty_min || quantity > ingredient.qty_max) return;
+        const list = control.dataset.rowKind === 'option' ? option?.ingredients : configuration.ingredients;
+        const existing = list?.find(value => Number(value.ingredient_id) === ingredient.ingredient_id);
+        if (existing) { existing.quantity = quantity; existing.qty = quantity; }
+        else { configuration.ingredients ||= []; configuration.ingredients.push({ ingredient_id: ingredient.ingredient_id, quantity }); }
+      } else if (action === 'right-cart-option-remove' && option) configuration.option_items.splice(optionIndex, 1);
+      else if ((action === 'right-cart-option-qty-minus' || action === 'right-cart-option-qty-plus') && option) {
+        const quantity = Number(option.qty ?? option.quantity ?? 1) + (action.endsWith('plus') ? 1 : -1);
+        if (!selectedRow || quantity < selectedRow.minimum || quantity > selectedRow.maximum) return;
+        option.qty = quantity; option.quantity = quantity;
+      } else return;
+      applySelectionConfiguration(target, configuration);
+      return;
+    }
+    if (event.target.closest('button,input,label,select,a')) return;
+    if (!event.target.closest('.option-product-photo,.option-product-text > strong,.option-product-card')) return;
+    if (row.closest('#autoAddGroupInfo')) {
+      configureSelectedProduct(row).catch(error => { console.error(error); showToast(error.message); });
+      return;
+    }
+    const productId = Number(row.dataset.selectionProductId);
+    openProductById(productId).catch(error => { console.error(error); showToast(error.message); });
+  });
+
+  function renderOptionProductCard(item, { selected = false, editable = false, itemKey = "", allowVariants = true, allowConfiguration = false, checkboxKind = "default", showCheckbox = true, styledCheckbox = false, badgesHtml = "" } = {}) {
     const photo = getOptionProductPhoto(item);
-    const displayPrice = item.price_mode === "fixed" && item.price_value != null
+    let displayPrice = item.price_mode === "fixed" && item.price_value != null
       ? item.price_value
       : item.product_price ?? item.price;
     const variantGroups = allowVariants && Array.isArray(item.available_variants) ? item.available_variants : [];
     const productDefault = getOptionProductDefaultVariant(item);
     const activeGroupId = item.default_variant_group_id ?? item.effective_default_variant_group_id ?? productDefault?.groupId;
     const activeValueIndex = item.default_variant_value_index ?? item.effective_default_variant_value_index ?? productDefault?.valueIndex;
+    if (item.target_product_id && selectionRounding) {
+      displayPrice = window.SharedProductDetails.getOptionItemDisplayPricing({ ...item,
+        variants: item.available_variants || item.variants || [],
+      }, { variant_group_id: activeGroupId, variant_value_index: activeValueIndex }).currentPrice;
+    }
     const chips = variantGroups.flatMap((group) => {
       const groupId = Number(group.group_id);
       return (Array.isArray(group.values) ? group.values : []).map((value, index) => {
@@ -5788,8 +6323,13 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           data-option-variant-index="${index}" ${editable ? "" : "disabled"}>${escapeHtml(label)}</button>`;
       });
     }).join("");
+    const configuration = readSelectedProductConfiguration(item);
+    const productId = Number(item.target_product_id || item.product_id || item.id);
+    const selectedConfiguration = configuration || (activeGroupId != null ? { variant_group_id: Number(activeGroupId), variant_value_index: Number(activeValueIndex) } : null);
+    const presentation = allowConfiguration && selectionRounding ? window.SharedProductDetails.getSelectionPresentation(productId, selectedConfiguration) : null;
+    if (allowConfiguration && productId > 0) queueSelectionProduct(productId);
     return `
-      <div class="option-product-line ${selected ? "is-selected" : ""}">
+      <div class="option-product-line ${selected ? "is-selected" : ""}" ${allowConfiguration ? `data-selection-product-id="${productId}" data-selection-key="${escapeHtml(String(itemKey))}" data-selection-editable="${editable ? '1' : '0'}" data-selection-configuration="${escapeHtml(JSON.stringify(selectedConfiguration))}"` : ''}>
         ${showCheckbox ? `${checkboxKind === "member" || styledCheckbox ? '<label class="option-picker-check-control">' : ""}<input class="option-product-default ${checkboxKind === "member" || styledCheckbox ? "product-row-select-input" : ""}" type="checkbox" aria-label="${checkboxKind === "member" ? "Показывать пункт" : "Выбрать пункт по умолчанию для товаров с этой опцией"}"
           title="${checkboxKind === "member" ? "Выбрать товар" : "Выбрать пункт по умолчанию для товаров с этой опцией"}"
           ${checkboxKind === "member" ? "data-option-member" : "data-option-default"}="${escapeHtml(String(itemKey))}"
@@ -5799,9 +6339,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
             ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" />`
             : '<span>Нет фото</span>'}</div>
           <div class="option-product-text">
-            <strong>${escapeHtml(item.product_name || item.name || "")}</strong>
-            <span>${displayPrice != null ? formatMoney(displayPrice) : "—"}</span>
-            ${chips ? `<div class="option-product-variants">${chips}</div>` : ""}
+            ${allowConfiguration ? `<div class="product-selection-head"><strong>${escapeHtml(presentation?.title || item.product_name || item.name || "")}</strong><span class="product-selection-price">${renderSelectionPrice(presentation)}</span></div>` : `<strong>${escapeHtml(item.product_name || item.name || "")}</strong><span>${displayPrice != null ? formatMoney(displayPrice) : "—"}</span>`}
+            ${!allowConfiguration && chips ? `<div class="option-product-variants">${chips}</div>` : ""}
+            ${badgesHtml}
+            ${allowConfiguration ? `<div class="product-selection-rows">${renderSelectionRows(productId, selectedConfiguration, editable)}</div>` : ''}
           </div>
         </div>
       </div>`;
@@ -5862,7 +6403,17 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     `;
   }
 
-  function renderProductScopedOptionItemsSummary(items, { groupId = null, settingDraft = null, allowVariants = true } = {}) {
+  function closeProductOptionActionMenus() {
+    document.querySelectorAll('.product-option-actions-menu').forEach(menu => menu.classList.add('hidden'));
+    document.querySelectorAll('[data-option-menu-open]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+  }
+
+  function renderProductOptionItemFlags(key, selected, locked, prefix = "option") {
+    const flag = (name, title, checked, disabled = false) => `<label class="option-picker-default"><span class="option-item-flag-control"><input class="product-row-select-input" type="checkbox" data-${prefix}-${name}="${key}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} /><span class="product-row-select-box" aria-hidden="true"></span></span>${title}</label>`;
+    return `<span class="option-item-flags">${flag('default', 'По умолчанию', selected, locked)}${flag('locked', 'Закреплён', locked)}</span>`;
+  }
+
+  function renderProductScopedOptionItemsSummary(items, { groupId = null, settingDraft = null, allowVariants = true, editable = false } = {}) {
     const visibleItems = getVisibleOptionItems(items);
     if (!visibleItems.length) {
       return `<div class="empty-hint">\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u043f\u0443\u043d\u043a\u0442\u043e\u0432...</div>`;
@@ -5876,6 +6427,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
             : Boolean(setting.default_selected);
           const cardItem = {
             ...item,
+            configuration_json: setting?.configuration ?? item.configuration_json,
             default_variant_group_id: setting?.variant_override_enabled
               ? (setting.default_variant_group_id ?? -1)
               : (item.effective_default_variant_group_id ?? item.default_variant_group_id),
@@ -5887,10 +6439,12 @@ function openAutoAddGroupModal({ mode, group } = {}) {
             <div class="option-product-entry">
               ${renderOptionProductCard(cardItem, {
                 selected: settingDraft ? selected : Boolean(item.effective_default_selected ?? item.default_selected),
-                editable: false,
+                editable,
                 itemKey: `${groupId}:${item.id}`,
                 allowVariants,
+                allowConfiguration: true,
                 showCheckbox: false,
+                badgesHtml: editable ? renderProductOptionItemFlags(`${groupId}:${item.id}`, selected, Boolean(setting?.is_locked)) : '',
               })}
             </div>
           `;
@@ -6964,9 +7518,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const cid = Number(state.currentCategoryId || 0);
     if (!(cid > 0)) return false;
     if (Number(state.allCategoryId || 0) === cid) return true;
+    const included = new Set(window.CatalogRepository?.getDescendantCategoryIds(cid) || [cid]);
     return (Array.isArray(categoryIds) ? categoryIds : [])
       .map((id) => Number(id || 0))
-      .some((id) => id === cid);
+      .some((id) => included.has(id));
   }
 
   function upsertSavedProductInList(product, categoryIds, options = {}) {
@@ -6979,7 +7534,9 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     const existingIndex = (state.products || []).findIndex((p) => Number(p.id) === productId);
     const previous = existingIndex >= 0 ? state.products[existingIndex] : null;
     const merged = { ...(previous || {}), ...product };
-    const shouldKeepInCategory = productBelongsToCurrentCategory(categoryIds);
+    const shouldKeepInCategory = options.preserveCategoryMembership === true
+      ? existingIndex >= 0
+      : productBelongsToCurrentCategory(categoryIds);
     const shouldShow = shouldKeepInCategory && filterProductsCollection([merged]).length > 0;
     const existingRow = productsList.querySelector(`.order-row.product-row[data-id="${productId}"]`);
 
@@ -8260,10 +8817,10 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     clearNavigationStack();
 
     state.optionPanel.returnTo = null;
+    hideAllDetailPanels();
     openProductModal({
-      mode: "view",
+      mode: "edit",
       product: p,
-      host: productInfo || null,
       advancedLoading: options.advancedLoading === true,
       advancedReadyPromise: options.advancedReadyPromise || null,
     });
@@ -8282,14 +8839,14 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     productEmpty && productEmpty.classList.add("hidden");
     categoryEmpty && categoryEmpty.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
-    hideAllDetailPanels();
     productInfo && productInfo.classList.remove("hidden");
     if (productInfoBody) productInfoBody.classList.remove("hidden");
     if (productInfoHeader) productInfoHeader.classList.remove("hidden");
     setHeaderMode("product");
     
-    // Show footer in view mode
-    showProductFooterView();
+    // Product cards stay editable after opening and saving.
+    showProductFooterEdit();
+    if (editProductBtn) editProductBtn.classList.add("hidden");
 
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
     if (isMobile && document.body.classList.contains("admin-mobile-pages") && window.__adminMobilePages) {
@@ -8784,6 +9341,11 @@ function updateOptionGroupSelectionUi() {
   }
 
   function renderOptionHeader() {
+    if (optionPickerContext) {
+      if (optionPickerContext.kind === "auto-add") renderAutoAddHeader();
+      if (productSku) productSku.textContent = `Выбрано: ${state.optionPanel.pickerSelection.size}`;
+      return;
+    }
     if (state.optionPanel.level === "empty") {
       if (productInfoHeader) productInfoHeader.classList.add("hidden");
       return;
@@ -8907,6 +9469,7 @@ function updateOptionGroupSelectionUi() {
               editable,
               itemKey,
               styledCheckbox: true,
+              allowConfiguration: true,
               allowVariants: Boolean(document.getElementById("optionGroupAllowVariants")?.checked ?? state.optionDraft?.group?.allow_variants ?? state.optionGroupDetails?.group?.allow_variants),
             })}
           </div>
@@ -8973,6 +9536,9 @@ function updateOptionGroupSelectionUi() {
         if (!item) return;
         item.default_variant_group_id = Number(chip.dataset.optionVariantGroup);
         item.default_variant_value_index = Number(chip.dataset.optionVariantIndex);
+        const configuration = readSelectedProductConfiguration(item);
+        if (configuration) item.configuration_json = { ...configuration, variant_group_id: item.default_variant_group_id,
+          variant_value_index: item.default_variant_value_index, variant_label: chip.textContent.trim() };
         state.optionPanel.itemsDirty = true;
         renderOptionItems(getOptionItemsSource());
       });
@@ -9835,8 +10401,56 @@ function updateOptionGroupSelectionUi() {
     });
   }
 
+  let closeAutoAddPickerBadges = null;
+
+  function buildAutoAddPickerAssignments() {
+    const assignments = new Map();
+    if (optionPickerContext?.kind !== "auto-add" || !state.autoAddDraft) return assignments;
+    const schedule = state.autoAddDraft.schedule;
+    const receipt = schedule?.settings.receipt;
+    const individual = schedule?.mode === "schedule" && schedule.assignment === "individual";
+    const current = individual ? schedule.slot : "shared";
+    const add = (productId, slot) => {
+      if (!assignments.has(productId)) assignments.set(productId, new Set());
+      assignments.get(productId).add(slot);
+    };
+    state.autoAddDraft.items.forEach(item => {
+      const slot = item.schedule_slot || "shared";
+      if (slot === current || (individual && slot === "shared") || (!individual && slot !== "shared")) return;
+      if (individual && slot.startsWith("weekday:")) {
+        const day = Number(slot.slice(8));
+        if (receipt.mode !== "any" || (receipt.weekdays.length && !receipt.weekdays.includes(day))) return;
+      } else if (individual) {
+        const weekday = (new Date(`${slot}T12:00:00`).getDay() + 6) % 7;
+        if (receipt.mode === "any" || (receipt.weekdays.length && !receipt.weekdays.includes(weekday))) return;
+        if (receipt.mode === "dates" && !receipt.dates.includes(slot)) return;
+        if (receipt.mode === "period" && (!receipt.start || !receipt.end || slot < receipt.start || slot > receipt.end)) return;
+      }
+      add(Number(item.product_id), slot);
+    });
+    state.optionPanel.pickerSelection.forEach(id => add(Number(id), current));
+    return assignments;
+  }
+
+  function renderAutoAddPickerBadges(slots) {
+    if (!slots?.size) return "";
+    const schedule = state.autoAddDraft.schedule;
+    const days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    const labels = [...slots].sort().map(slot => {
+      let label = slot === "shared" ? "Все дни расписания"
+        : slot.startsWith("weekday:") ? days[Number(slot.slice(8))]
+        : slot.split("-").reverse().join(".");
+      if (slot === schedule?.slot && schedule.assignment === "individual") label += " · текущий день";
+      return label;
+    });
+    return `<div class="auto-add-picker-badges">${labels.slice(0, 2).map(label => `<span class="chip">${escapeHtml(label)}</span>`).join("")}${labels.length > 2
+      ? `<details class="auto-add-picker-badge-info"><summary aria-label="Все назначения товара">+${labels.length - 2} <i class="fas fa-info-circle" aria-hidden="true"></i></summary><ul>${labels.map(label => `<li>${escapeHtml(label)}</li>`).join("")}</ul></details>` : ""}</div>`;
+  }
+
   function renderOptionPickerList() {
     if (!optionPickerList) return;
+    closeAutoAddPickerBadges?.();
+    const assignments = buildAutoAddPickerAssignments();
     optionPickerList.innerHTML = state.optionPanel.pickerProducts.map((product) => {
       const productId = Number(product.id);
       const checked = state.optionPanel.pickerSelection.has(productId);
@@ -9846,6 +10460,7 @@ function updateOptionGroupSelectionUi() {
           ${renderOptionProductCard({
             ...product,
             product_price: product.price,
+            configuration_json: state.optionPanel.pickerConfigurationSelection?.get(productId) || null,
             default_variant_group_id: variant?.groupId ?? null,
             default_variant_value_index: variant?.valueIndex ?? null,
           }, {
@@ -9853,12 +10468,31 @@ function updateOptionGroupSelectionUi() {
             editable: true,
             itemKey: productId,
             checkboxKind: "member",
-            allowVariants: state.optionPanel.pickerMode === "items" &&
-              Boolean(document.getElementById("optionGroupAllowVariants")?.checked),
+            badgesHtml: optionPickerContext ? renderAutoAddPickerBadges(assignments.get(productId)) : "",
+            allowConfiguration: Boolean(optionPickerContext) || state.optionPanel.pickerMode === 'items',
+            allowVariants: Boolean(optionPickerContext) || (state.optionPanel.pickerMode === "items" &&
+              Boolean(document.getElementById("optionGroupAllowVariants")?.checked)),
           })}
         </div>
       `;
     }).join("");
+    optionPickerList.querySelectorAll(".auto-add-picker-badge-info").forEach(info => {
+      const close = () => {
+        info.open = false;
+        document.removeEventListener("pointerdown", outside, true);
+        document.removeEventListener("keydown", keydown);
+        if (closeAutoAddPickerBadges === close) closeAutoAddPickerBadges = null;
+      };
+      const outside = event => { if (!info.contains(event.target)) close(); };
+      const keydown = event => { if (event.key === "Escape") close(); };
+      info.addEventListener("toggle", () => {
+        if (!info.isConnected || !info.open) { close(); return; }
+        if (closeAutoAddPickerBadges !== close) closeAutoAddPickerBadges?.();
+        closeAutoAddPickerBadges = close;
+        document.addEventListener("pointerdown", outside, true);
+        document.addEventListener("keydown", keydown);
+      });
+    });
     if (state.optionPanel.pickerHasMore) {
       const more = document.createElement("button");
       more.type = "button";
@@ -9884,6 +10518,9 @@ function updateOptionGroupSelectionUi() {
           groupId: Number(chip.dataset.optionVariantGroup),
           valueIndex: Number(chip.dataset.optionVariantIndex),
         });
+        const configuration = state.optionPanel.pickerConfigurationSelection.get(productId) || { ingredients: [] };
+        state.optionPanel.pickerConfigurationSelection.set(productId, { ...configuration,
+          variant_group_id: Number(chip.dataset.optionVariantGroup), variant_value_index: Number(chip.dataset.optionVariantIndex), variant_label: chip.textContent.trim() });
         state.optionPanel.pickerSelection.add(productId);
         renderOptionPickerList();
         renderOptionHeader();
@@ -9909,6 +10546,7 @@ function updateOptionGroupSelectionUi() {
   }
 
   async function refreshOptionPickerProducts(append = false) {
+    const panel = state.optionPanel;
     const requestId = (state.optionPanel.pickerRequestId || 0) + 1;
     state.optionPanel.pickerRequestId = requestId;
     const isParent = Number(state.optionPanel.pickerCategoryId) === Number(state.optionPanel.pickerParentId);
@@ -9919,13 +10557,13 @@ function updateOptionGroupSelectionUi() {
       includeOptionVariants: state.optionPanel.pickerMode === "items",
       offset: append ? state.optionPanel.pickerProducts.length : 0,
     });
-    if (requestId !== state.optionPanel.pickerRequestId || state.optionPanel.level !== "picker") return;
+    if (state.optionPanel !== panel || requestId !== panel.pickerRequestId || panel.level !== "picker") return;
     const page = Array.isArray(res.data) ? res.data : [];
     state.optionPanel.pickerProducts = append ? state.optionPanel.pickerProducts.concat(page) : page;
     state.optionPanel.pickerHasMore = page.length === 200;
     state.optionPanel.pickerProducts.forEach((product) => {
       state.optionPanel.pickerProductMap?.set(Number(product.id), product);
-      if (state.optionPanel.pickerMode === "items" &&
+      if ((optionPickerContext || state.optionPanel.pickerMode === "items") &&
           !state.optionPanel.pickerVariantSelection.has(Number(product.id))) {
         const variant = getOptionProductDefaultVariant(product);
         if (variant) state.optionPanel.pickerVariantSelection.set(Number(product.id), variant);
@@ -9934,15 +10572,92 @@ function updateOptionGroupSelectionUi() {
     renderOptionPickerList();
   }
 
-  async function openOptionPicker(mode) {
-    syncOptionDraftGroupFromForm();
+  let optionPickerContext = null;
+
+  function finishAutoAddCatalogSelection(apply = false) {
+    if (!optionPickerContext) return;
+    closeAutoAddPickerBadges?.();
+    if (apply && optionPickerContext.kind === "combo-block") {
+      const panel = state.optionPanel;
+      const existing = new Map((state.comboBlockProducts || []).map(item => [Number(item.product_id), item]));
+      state.comboBlockProducts = [...panel.pickerSelection].map((id, index) => {
+        const product = panel.pickerProductMap.get(Number(id));
+        return { ...(existing.get(Number(id)) || { product_id: Number(id), name: product.name,
+          price: product.price, photo: (product.photos || product.photos_json || [])[0] || null, is_default: 0 }),
+          sort_order: index, configuration_json: panel.pickerConfigurationSelection.get(Number(id)) };
+      });
+      if (!state.comboBlockProducts.some(item => item.is_default) && state.comboBlockProducts.length) state.comboBlockProducts[0].is_default = 1;
+    }
+    if (apply && optionPickerContext.kind === "auto-add") {
+      const currentItems = getAutoAddItemsSource();
+      const removed = currentItems.filter(item => !state.optionPanel.pickerSelection.has(Number(item.product_id)));
+      state.autoAddDraft.removedItemIds ||= [];
+      removed.forEach(item => { if (item.id) state.autoAddDraft.removedItemIds.push(item.id); });
+      state.autoAddDraft.items = state.autoAddDraft.items.filter(item => !removed.includes(item) && Number(item.product_id) > 0);
+      const existing = new Set(getAutoAddItemsSource().map(item => Number(item.product_id)));
+      state.optionPanel.pickerProductMap.forEach((product, id) => {
+        if (!state.optionPanel.pickerSelection.has(id) || existing.has(id)) return;
+        state.autoAddDraft.items.push({ ...createAutoAddDraftItem(), product_id: id,
+          product_name: product.name, product_price: product.price,
+          product_photos_json: product.photos || product.photos_json || [] });
+      });
+      getAutoAddItemsSource().forEach(item => {
+        const id = Number(item.product_id);
+        const configuration = state.optionPanel.pickerConfigurationSelection.get(id) || readSelectedProductConfiguration(item);
+        const variant = state.optionPanel.pickerVariantSelection.get(id);
+        if (configuration || variant) item.configuration_json = { ...(configuration || { ingredients: [] }),
+          variant_group_id: variant?.groupId ?? configuration?.variant_group_id ?? null,
+          variant_value_index: variant?.valueIndex ?? configuration?.variant_value_index ?? null };
+      });
+      state.autoAddPanel.itemsDirty = true;
+      persistAutoAddEditState();
+    }
+    state.optionPanel.pickerRequestId += 1;
+    optionLevelPicker.classList.add("hidden");
+    optionPickerContext.parent.insertBefore(optionLevelPicker, optionPickerContext.nextSibling);
+    const kind = optionPickerContext.kind;
+    state.optionPanel = optionPickerContext.panel;
+    optionPickerContext = null;
+    restoreOptionPanelPickerFooter();
+    const footerCancelBtn = $("#productFooterCancelBtn");
+    const footerSaveBtn = $("#productFooterSaveBtn");
+    if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
+    if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
+    delete window._closeOptionPickerFn;
+    delete window._saveOptionPickerFn;
+    if (kind === "combo-block") {
+      state.comboPanel.level = "group";
+      comboBlockLevelGroup.classList.remove("hidden");
+      renderComboBlockProductsList();
+    } else renderAutoAddGroupLevel();
+  }
+
+  async function openOptionPicker(mode, { context } = {}) {
     if (!state.catalogCategories.length) {
       await loadCatalogCategories();
+    }
+    if (context === "auto-add" || context === "combo-block") {
+      if (context === "auto-add") syncAutoAddDraftGroupFromForm();
+      optionPickerContext = { kind: context, panel: state.optionPanel, parent: optionLevelPicker.parentElement, nextSibling: optionLevelPicker.nextSibling };
+      state.optionPanel = { ...state.optionPanel };
+      if (context === "combo-block") {
+        state.comboPanel.level = "picker";
+        comboBlockLevelGroup.classList.add("hidden");
+        comboInfo.appendChild(optionLevelPicker);
+      } else {
+        state.autoAddPanel.level = "picker";
+        autoAddLevelGroup.classList.add("hidden");
+        autoAddGroupInfo.appendChild(optionLevelPicker);
+      }
+    } else {
+      syncOptionDraftGroupFromForm();
     }
     state.optionPanel.level = "picker";
     state.optionPanel.pickerMode = mode;
     const existingSelection = new Set();
-    if (mode === "items") {
+    if (optionPickerContext) {
+      (optionPickerContext.kind === "combo-block" ? state.comboBlockProducts : getAutoAddItemsSource()).forEach(item => { if (Number(item.product_id) > 0) existingSelection.add(Number(item.product_id)); });
+    } else if (mode === "items") {
       getOptionItemsSource().forEach((item) => {
         const id = Number(item.target_product_id ?? item.id);
         if (Number.isFinite(id)) existingSelection.add(id);
@@ -9958,7 +10673,14 @@ function updateOptionGroupSelectionUi() {
     state.optionPanel.pickerInitialSelection = new Set(existingSelection);
     state.optionPanel.pickerProductMap = new Map();
     state.optionPanel.pickerVariantSelection = new Map();
-    if (mode === "items") {
+    state.optionPanel.pickerConfigurationSelection = new Map();
+    (optionPickerContext ? (optionPickerContext.kind === "combo-block" ? state.comboBlockProducts : getAutoAddItemsSource()) : getOptionItemsSource()).forEach(item => {
+      const id = Number(item.product_id || item.target_product_id || item.id);
+      const configuration = readSelectedProductConfiguration(item);
+      if (configuration) state.optionPanel.pickerConfigurationSelection.set(id, configuration);
+      if (configuration?.variant_group_id != null) state.optionPanel.pickerVariantSelection.set(id, { groupId: configuration.variant_group_id, valueIndex: configuration.variant_value_index });
+    });
+    if (mode === "items" && !optionPickerContext) {
       getOptionItemsSource().forEach((item) => {
         const productId = Number(item.target_product_id ?? item.id);
         if (item.default_variant_group_id != null && item.default_variant_value_index != null) {
@@ -9977,8 +10699,13 @@ function updateOptionGroupSelectionUi() {
     state.optionPanel.pickerCategoryId = state.optionPanel.pickerParentId;
     state.optionPanel.pickerQuery = "";
     if (optionPickerSearch) optionPickerSearch.value = "";
-    await refreshOptionPickerProducts();
-    renderOptionPickerLevel();
+    try {
+      await refreshOptionPickerProducts();
+      renderOptionPickerLevel();
+    } catch (error) {
+      if (optionPickerContext) finishAutoAddCatalogSelection();
+      throw error;
+    }
   }
 
   function isSameSelection(a, b) {
@@ -9990,6 +10717,23 @@ function updateOptionGroupSelectionUi() {
   }
 
   async function applyOptionPickerSelection() {
+    if (optionPickerContext || state.optionPanel.pickerMode === 'items') {
+      const panel = state.optionPanel;
+      const ids = [...panel.pickerSelection].map(Number);
+      await ensureSelectionProducts(ids);
+      if (state.optionPanel !== panel || panel.level !== 'picker') return;
+      ids.forEach(id => {
+        const configuration = window.SharedProductDetails.getSelection(id, panel.pickerConfigurationSelection.get(id))?.configuration;
+        if (!configuration) throw new Error('PRODUCT_CONFIGURATION_UNAVAILABLE');
+        const variant = panel.pickerVariantSelection.get(id);
+        if (variant) { configuration.variant_group_id = variant.groupId; configuration.variant_value_index = variant.valueIndex; }
+        panel.pickerConfigurationSelection.set(id, configuration);
+      });
+    }
+    if (optionPickerContext) {
+      finishAutoAddCatalogSelection(true);
+      return;
+    }
     // Clear picker footer data attributes before closing
     const footerCancelBtn = $("#productFooterCancelBtn");
     const footerSaveBtn = $("#productFooterSaveBtn");
@@ -10074,6 +10818,10 @@ function updateOptionGroupSelectionUi() {
         });
         state.optionPanel.itemsDirty = true;
       }
+      state.optionDraft.items.forEach(item => {
+        const configuration = state.optionPanel.pickerConfigurationSelection.get(Number(item.target_product_id ?? item.id));
+        if (configuration) item.configuration_json = configuration;
+      });
     } else {
       if (state.optionPanel.mode === "create") {
         const existing = new Set(state.optionDraft.assignments.map((x) => x.id));
@@ -10174,6 +10922,10 @@ function updateOptionGroupSelectionUi() {
       footerSaveBtn.dataset.pickerType = "option";
     }
     window._closeOptionPickerFn = () => {
+      if (optionPickerContext) {
+        finishAutoAddCatalogSelection();
+        return;
+      }
       // Clear picker footer data attributes
       if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
       if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
@@ -10360,31 +11112,14 @@ function updateOptionGroupSelectionUi() {
     }
 const isViewMode = state.comboPanel.mode === "view";
     comboBlockProductsList.classList.toggle("is-view-mode", isViewMode);
-    comboBlockProductsList.innerHTML = items.map((item, idx) => {
-      const name = item.name || `Товар #${item.product_id}`;
-      const defaultBadge = item.is_default ? " <span class=\"muted\">(по умолчанию)</span>" : "";
-      const photoUrl = item.photo || "";
-      const thumb = photoUrl ? `<img class="combo-block-product-thumb" src="${escapeHtml(photoUrl)}" alt="" />` : "<span class=\"combo-block-product-thumb combo-block-product-thumb-placeholder\"><i class=\"fas fa-image\"></i></span>";
-      const priceNum = Number(item.price);
-      const priceStr = Number.isFinite(priceNum) ? formatPriceInteger(priceNum) + " Р" : "";
-      const starBtn = isViewMode ? "" : `<button class="btn btn-icon btn-ghost combo-block-product-star" type="button" data-set-default title="${item.is_default ? "По умолчанию" : "Сделать по умолчанию"}"><i class="${item.is_default ? "fas" : "far"} fa-star"></i></button>`;
-      const removeBtn = isViewMode ? "" : `<button class="option-row-remove" type="button" data-remove title="Удалить" aria-label="Удалить"><i class="fas fa-times"></i></button>`;
-      return `
-        <div class="combo-block-product-row-wrapper" data-idx="${idx}">
-          <div class="option-item-row combo-block-product-row" data-product-id="${item.product_id}" data-idx="${idx}">
-            <button class="combo-block-product-chevron" type="button" data-combo-chevron aria-expanded="false" title="Подробнее"><i class="fas fa-chevron-down"></i></button>
-            ${thumb}
-            <span class="option-item-title">${escapeHtml(name)}${defaultBadge}</span>
-            <span class="combo-block-product-price" data-product-id="${item.product_id}">${priceStr ? escapeHtml(priceStr) : ""}</span>
-            ${starBtn}
-            ${removeBtn}
-          </div>
-          <div class="combo-block-product-details" hidden data-product-id="${item.product_id}">
-            <div class="combo-block-product-details-inner"></div>
-          </div>
-        </div>
-      `;
-    }).join("");
+    comboBlockProductsList.innerHTML = items.map((item, idx) => `
+      <div class="combo-block-product-row-wrapper" data-idx="${idx}">
+        ${renderOptionProductCard({ ...item, product_name: item.name, product_price: item.price,
+          product_photos_json: item.photo ? [item.photo] : [] }, {
+          editable: !isViewMode, itemKey: String(item.product_id), showCheckbox: false, allowConfiguration: true,
+        })}
+        ${isViewMode ? '' : `<button type="button" class="option-row-remove" data-remove aria-label="Удалить товар"><i class="fas fa-times"></i></button>`}
+      </div>`).join("");
     comboBlockProductsList.querySelectorAll("[data-remove]").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -10394,44 +11129,6 @@ const isViewMode = state.comboPanel.mode === "view";
         state.comboBlockProducts.splice(idx, 1);
         renderComboBlockProductsList();
       });
-    });
-    comboBlockProductsList.querySelectorAll("[data-set-default]").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const row = btn.closest(".combo-block-product-row-wrapper");
-        const idx = parseInt(row?.dataset?.idx, 10);
-        if (!Number.isFinite(idx)) return;
-        state.comboBlockProducts.forEach((p, i) => { p.is_default = i === idx ? 1 : 0; });
-        renderComboBlockProductsList();
-      });
-    });
-    comboBlockProductsList.querySelectorAll("[data-combo-chevron]").forEach((btn) => {
-      btn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        const wrapper = btn.closest(".combo-block-product-row-wrapper");
-        const details = wrapper?.querySelector(".combo-block-product-details");
-        const wasExpanded = details?.getAttribute("hidden") == null;
-        if (details) details.hidden = wasExpanded;
-        if (btn) {
-          btn.setAttribute("aria-expanded", wasExpanded ? "false" : "true");
-          const icon = btn.querySelector("i");
-          if (icon) icon.className = wasExpanded ? "fas fa-chevron-down" : "fas fa-chevron-up";
-        }
-        if (!wasExpanded) {
-          await loadComboBlockProductDetails(wrapper, { scrollIntoView: true });
-        }
-      });
-    });
-
-    // Предзагружаем состав и пересчёт цены для товаров с настраиваемым составом,
-    // чтобы сразу показывать корректную цену без раскрытия.
-    comboBlockProductsList.querySelectorAll(".combo-block-product-row-wrapper").forEach((wrapper) => {
-      const idx = parseInt(wrapper.dataset.idx ?? "-1", 10);
-      if (!Number.isFinite(idx) || idx < 0) return;
-      const item = (state.comboBlockProducts || [])[idx];
-      if (item && item.has_changeable_composition) {
-        loadComboBlockProductDetails(wrapper, { scrollIntoView: false });
-      }
     });
   }
 
@@ -10789,77 +11486,7 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   async function openComboBlockProductPicker() {
-    if (!state.catalogCategories.length) {
-      await loadCatalogCategories();
-    }
-    state.comboPanel.level = "picker";
-    // Предзаполняем выбор уже добавленными товарами блока,
-    // чтобы в списке они сразу были выделены
-    const existingSelection = new Set();
-    (state.comboBlockProducts || []).forEach((p) => {
-      const id = Number(p.product_id);
-      if (Number.isFinite(id)) existingSelection.add(id);
-    });
-    const list = state.catalogCategories || [];
-    const hasAllCategory = list.some((c) => c.code === "all" || (c.title || "").trim() === "Все товары");
-    state.comboPanel.pickerCategoryId = hasAllCategory && list[0] ? Number(list[0].id) : null;
-    state.comboPanel.pickerQuery = "";
-    // хранить текущее и начальное состояние выбора — как в вариантах/опциях
-    state.comboPanel.pickerSelection = existingSelection;
-    state.comboPanel.pickerInitialSelection = new Set(existingSelection);
-    if (comboBlockPickerSearch) comboBlockPickerSearch.value = "";
-    await refreshComboBlockPickerProducts();
-    if (comboBlockLevelGroup) comboBlockLevelGroup.classList.add("hidden");
-    if (comboBlockLevelPicker) comboBlockLevelPicker.classList.remove("hidden");
-    renderComboBlockPickerTabs();
-    renderComboBlockPickerList();
-    showProductFooterEdit();
-    const footer = $("#productInfoFooter");
-    const footerView = $("#productFooterView");
-    const footerEditMode = $("#productFooterEditMode");
-    const footerCancelBtn = $("#productFooterCancelBtn");
-    const footerSaveBtn = $("#productFooterSaveBtn");
-    const footerDeleteBtn = $("#productFooterDeleteEditBtn");
-    const footerMoreBtn = $("#productFooterMoreEditBtn");
-    if (footer && footerView && footerEditMode && footerCancelBtn && footerSaveBtn) {
-      if (!comboBlockPickerSavedFooterState) {
-        comboBlockPickerSavedFooterState = {
-          footerHidden: footer.classList.contains("hidden"),
-          viewHidden: footerView.classList.contains("hidden"),
-          editHidden: footerEditMode.classList.contains("hidden"),
-          deleteBtnHidden: footerDeleteBtn ? footerDeleteBtn.classList.contains("hidden") : false,
-          moreBtnHidden: footerMoreBtn ? footerMoreBtn.classList.contains("hidden") : false,
-          cancelBtnIsConfirm: footerCancelBtn.classList.contains("is-confirm"),
-          cancelBtnIsFullwidth: footerCancelBtn.classList.contains("is-fullwidth"),
-        };
-        comboBlockPickerSavedHandlers = { cancel: footerCancelBtn.onclick, save: footerSaveBtn.onclick };
-      }
-      footer.classList.remove("hidden");
-      footerView.classList.add("hidden");
-      footerEditMode.classList.remove("hidden");
-      if (footerDeleteBtn) footerDeleteBtn.classList.add("hidden");
-      if (footerMoreBtn) footerMoreBtn.classList.add("hidden");
-      footerCancelBtn.classList.remove("is-confirm");
-      footerCancelBtn.classList.add("is-fullwidth");
-      if (!footerCancelBtn.dataset.pickerOriginalHtml) footerCancelBtn.dataset.pickerOriginalHtml = footerCancelBtn.innerHTML;
-      footerCancelBtn.textContent = "Отменить";
-      footerSaveBtn.textContent = "Сохранить";
-      footerCancelBtn.dataset.pickerType = "combo";
-      footerSaveBtn.dataset.pickerType = "combo";
-      window._closeComboBlockPickerFn = () => {
-        if (footerCancelBtn) delete footerCancelBtn.dataset.pickerType;
-        if (footerSaveBtn) delete footerSaveBtn.dataset.pickerType;
-        delete window._closeComboBlockPickerFn;
-        delete window._saveComboBlockPickerFn;
-        restoreComboBlockPickerFooter();
-        state.comboPanel.level = "group";
-        if (comboBlockLevelGroup) comboBlockLevelGroup.classList.remove("hidden");
-        if (comboBlockLevelPicker) comboBlockLevelPicker.classList.add("hidden");
-      };
-      window._saveComboBlockPickerFn = applyComboBlockPickerSelection;
-      footerCancelBtn.onclick = window._closeComboBlockPickerFn;
-      footerSaveBtn.onclick = async () => { await window._saveComboBlockPickerFn(); };
-    }
+    await openOptionPicker("items", { context: "combo-block" });
   }
 
   function restoreComboBlockPickerFooter() {
@@ -11767,6 +12394,7 @@ const isViewMode = state.comboPanel.mode === "view";
           default_selected: item.default_selected ? 1 : 0,
           default_variant_group_id: payload.allow_variants ? (item.default_variant_group_id ?? null) : null,
           default_variant_value_index: payload.allow_variants ? (item.default_variant_value_index ?? null) : null,
+          configuration: readSelectedProductConfiguration(item),
           sort_order: idx * 10,
         };
       });
@@ -11839,6 +12467,7 @@ const isViewMode = state.comboPanel.mode === "view";
         default_selected: item.default_selected ? 1 : 0,
         default_variant_group_id: payload.allow_variants ? (item.default_variant_group_id ?? null) : null,
         default_variant_value_index: payload.allow_variants ? (item.default_variant_value_index ?? null) : null,
+        configuration: readSelectedProductConfiguration(item),
         sort_order: item.sort_order ?? index * 10,
       }));
       const assignments = (state.optionDraft?.assignments || []).map((assignment, index) => ({
@@ -12072,6 +12701,10 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   function closeOptionPicker() {
+    if (optionPickerContext) {
+      finishAutoAddCatalogSelection();
+      return;
+    }
     state.optionPanel.level = "group";
     state.optionPanel.pickerSelection = new Set();
     renderOptionGroupLevel();
@@ -12105,6 +12738,12 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   function hideAllDetailPanels() {
+    closeProductOptionActionMenus();
+    productInfoBody?.querySelectorAll(".product-editor-wrapper").forEach((wrapper) => wrapper.classList.add("hidden"));
+    [productEmpty, categoryEmpty, optionEmpty, autoAddEmpty, comboEmpty, stockDocEmpty]
+      .forEach((panel) => panel?.classList.add("hidden"));
+    $("#badgeDetails")?.classList.add("hidden");
+    $("#badgeEmpty")?.classList.add("hidden");
     productInfo && productInfo.classList.add("hidden");
     categoryInfo && categoryInfo.classList.add("hidden");
     optionGroupInfo && optionGroupInfo.classList.add("hidden");
@@ -12131,7 +12770,8 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     if (productInfoHeader) productInfoHeader.classList.add("hidden");
     setHeaderMode("product");
-    if (productEmpty) productEmpty.classList.toggle("hidden", showCategory || showOption || showAutoAdd || showUnit || showCombo || showStock);
+    $("#badgeEmpty")?.classList.toggle("hidden", state.mode !== "badges");
+    if (productEmpty) productEmpty.classList.toggle("hidden", state.mode === "badges" || showCategory || showOption || showAutoAdd || showUnit || showCombo || showStock);
     if (categoryEmpty) categoryEmpty.classList.toggle("hidden", !showCategory);
     if (optionEmpty) optionEmpty.classList.toggle("hidden", !showOption);
     if (autoAddEmpty) autoAddEmpty.classList.toggle("hidden", !showAutoAdd);
@@ -13240,7 +13880,7 @@ const isViewMode = state.comboPanel.mode === "view";
       photo: p.product_photo || null,
       price: p.product_price ?? 0,
       has_variants: p.has_variants ? 1 : 0,
-      has_changeable_composition: p.has_changeable_composition ? 1 : 0,
+      configuration_json: p.configuration_json ?? null, has_changeable_composition: p.has_changeable_composition ? 1 : 0,
     }));
     if (items.length === 0) {
       panelInner.innerHTML = "<div class=\"muted\" style=\"padding:8px;\">В блоке пока нет товаров</div>";
@@ -13923,9 +14563,11 @@ const isViewMode = state.comboPanel.mode === "view";
     const deleteEditBtn = $("#productFooterDeleteEditBtn");
     if (deleteEditBtn) deleteEditBtn.classList.remove("hidden");
     const moreBtn = $("#productFooterMoreBtn");
-    if (moreBtn) moreBtn.classList.remove("hidden");
     const moreEditBtn = $("#productFooterMoreEditBtn");
-    if (moreEditBtn) moreEditBtn.classList.remove("hidden");
+    const autoAddVisible = autoAddGroupInfo && !autoAddGroupInfo.classList.contains("hidden");
+    const productEditorVisible = currentNavigationState?.type === 'product-edit';
+    if (moreBtn) moreBtn.classList.toggle("hidden", !!autoAddVisible || productEditorVisible);
+    if (moreEditBtn) moreEditBtn.classList.toggle("hidden", !!autoAddVisible || productEditorVisible);
   }
 
   // ---------------- Tabs ----------------
@@ -13965,8 +14607,10 @@ const isViewMode = state.comboPanel.mode === "view";
     window.__adminMobilePages?.rememberRightView('products:' + key, () => setActiveTabKey(key));
     if (tabsState.activeKey === key) {
       renderTabs();
+      if (activate && typeof tab.onActivate === "function") await tab.onActivate();
       return;
     }
+    if (optionPickerContext) finishAutoAddCatalogSelection();
     
     // Сохраняем состояние редактирования и футера текущего активного таба перед переключением
     if (tabsState.activeKey && tabsState.activeKey !== key) {
@@ -13993,7 +14637,7 @@ const isViewMode = state.comboPanel.mode === "view";
         await result;
       }
       // После onActivate обновляем состояние футера в табе (на случай если onActivate изменил его)
-      updateActiveTabFooterState();
+      if (tabsState.activeKey === key) updateActiveTabFooterState();
     }
   }
 
@@ -14023,10 +14667,24 @@ const isViewMode = state.comboPanel.mode === "view";
   }
 
   async function closeTab(key) {
+    if (optionPickerContext && tabsState.activeKey === key) finishAutoAddCatalogSelection();
     const idx = tabsState.tabs.findIndex((t) => t.key === key);
     if (idx === -1) return;
     const tab = tabsState.tabs[idx];
     const wasActive = tabsState.activeKey === key;
+    if (tab.type === "product") {
+      state.productOpenInflight?.delete(`${Number(tab.id)}:0`);
+      state.productOpenInflight?.delete(`${Number(tab.id)}:1`);
+    }
+    if (tab.type === 'product' && !wasActive) {
+      const editor = editingProducts.get(Number(tab.id));
+      editor?.navigationState?.onClose?.();
+      editor?.navigationState?.content?.remove();
+      editingProducts.delete(Number(tab.id));
+    }
+    if (!wasActive && key.startsWith("auto-add:")) {
+      editingAutoAdds.delete(Number(key.slice("auto-add:".length)));
+    }
     
     // Сохраняем состояние футера перед закрытием активного таба
     if (wasActive) {
@@ -14108,6 +14766,7 @@ const isViewMode = state.comboPanel.mode === "view";
       }
 
       if (shouldCleanup) {
+        const closingContent = currentNavigationState?.content;
         // Call onClose if exists (for products and categories)
         if (currentNavigationState?.onClose) {
           currentNavigationState.onClose();
@@ -14190,8 +14849,7 @@ const isViewMode = state.comboPanel.mode === "view";
         // Remove only dynamic content (product editor wrapper), keep static panels so combo-set tab can still show
         const productInfoBody = $("#productInfoBody");
         if (productInfoBody && type !== "combo-set") {
-          const wrapper = productInfoBody.querySelector(".product-editor-wrapper");
-          if (wrapper) wrapper.remove();
+          if (closingContent?.classList.contains("product-editor-wrapper")) closingContent.remove();
         }
       }
     }
@@ -14241,20 +14899,6 @@ const isViewMode = state.comboPanel.mode === "view";
       clearCachedProductView(id);
       clearCachedProductDetails(id);
     }
-    const activeProductTabKey = buildTabKey("product", id);
-    if (
-      !forceReload &&
-      Number(state.selectedProductId) === id &&
-      tabsState.activeKey === activeProductTabKey &&
-      !editingProducts.has(id)
-    ) {
-      if (productsList) {
-        $$(".order-row", productsList).forEach((x) =>
-          x.classList.toggle("is-active", Number(x.dataset.id) === id)
-        );
-      }
-      return;
-    }
     const cachedDetails = !forceReload ? getCachedProductDetails(id) : null;
     const repository = window.CatalogRepository || null;
     const runtimePassport = !forceReload && repository ? getEditorReadyProductPassport(id) : null;
@@ -14270,46 +14914,36 @@ const isViewMode = state.comboPanel.mode === "view";
       );
     }
 
-    if (runtimePassport) {
-      let releaseAdvancedHydration;
-      const advancedReadyPromise = new Promise((resolve) => { releaseAdvancedHydration = resolve; });
-      showProductDetails(p, {
-        advancedLoading: true,
-        advancedReadyPromise,
-      });
-      await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
-      applyEditorPassportToProductsState(id, runtimePassport);
-      releaseAdvancedHydration(runtimePassport);
+    if (editingProducts.has(id)) {
+      showProductDetails(p);
       return;
     }
-
     let releaseAdvancedHydration;
-    const advancedReadyPromise = new Promise((resolve) => { releaseAdvancedHydration = resolve; });
-    state.selectedProductCategories = Array.isArray(cachedDetails?.categories) ? cachedDetails.categories : [];
-    state.selectedProductOptionAssignments = Array.isArray(cachedDetails?.optionAssignments) ? cachedDetails.optionAssignments : [];
-    showProductDetails(p, {
-      advancedLoading: true,
-      advancedReadyPromise,
-    });
-
-    if (!forceReload && repository) {
-      await repository.loadPassports([id]);
-      const localPassport = getEditorReadyProductPassport(id);
-      if (localPassport) {
-        applyEditorPassportToProductsState(id, localPassport);
-        releaseAdvancedHydration(localPassport);
-        return;
+    const advancedReadyPromise = new Promise(resolve => { releaseAdvancedHydration = resolve; });
+    showProductDetails(p, { advancedLoading: true, advancedReadyPromise });
+    try {
+      let passport = runtimePassport;
+      if (!passport && repository) {
+        await repository.loadPassports([id]);
+        passport = getEditorReadyProductPassport(id);
+        if (!passport && navigator.onLine) {
+          await repository.ensureProducts([id], { requiredCompleteness: 'editor-ready', loader: loadProductsCatalogPassports, force: forceReload });
+          passport = getEditorReadyProductPassport(id);
+        }
       }
+      if (!passport) throw new Error('PRODUCT_EDITOR_DATA_UNAVAILABLE');
+      if (Number(state.selectedProductId) === id) applyEditorPassportToProductsState(id, passport);
+      releaseAdvancedHydration(passport);
+    } catch (error) {
+      releaseAdvancedHydration(error);
+      console.error('Product editor loading failed', id, error);
+      showToast(error.message);
     }
 
-    if (!navigator.onLine) {
-      releaseAdvancedHydration(false);
-      showToast("Полные данные товара не сохранены на устройстве.");
-      return;
-    }
-    releaseAdvancedHydration(null);
     })().finally(() => {
-      state.productOpenInflight.delete(inflightKey);
+      if (state.productOpenInflight.get(inflightKey) === task) {
+        state.productOpenInflight.delete(inflightKey);
+      }
     });
     state.productOpenInflight.set(inflightKey, task);
     return task;
@@ -14326,7 +14960,6 @@ const isViewMode = state.comboPanel.mode === "view";
     if (!product) return;
     const productId = product.id;
     if (productId == null) return;
-    window.CatalogRepository?.markProductSummary(product);
     ensureTab({
       type: "product",
       id: productId,
@@ -15143,6 +15776,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
         state.selectedOptionGroupId = groupId;
         await loadOptionGroupDetails(groupId);
+        if (tabsState.activeKey !== buildTabKey("option", groupId)) return;
         renderAllOptionGroupsLists();
 
         // Restore edit state when switching back to an option tab that was being edited
@@ -15179,6 +15813,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
         state.selectedVariantGroupId = groupId;
         await loadVariantGroupDetails(groupId);
+        if (tabsState.activeKey !== buildTabKey("variant", groupId)) return;
         renderVariantGroupsList();
 
         // Restore edit state when switching back to a variant tab that was being edited
@@ -15205,6 +15840,7 @@ const isViewMode = state.comboPanel.mode === "view";
       onActivate: async () => {
         state.selectedUnitId = unitId;
         await loadUnitDetails(unitId);
+        if (tabsState.activeKey !== buildTabKey("unit", unitId)) return;
         renderUnitsList();
         showUnitDetails(state.unitDetails, { mode: state.unitPanel.mode || "view" });
       },
@@ -15281,7 +15917,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     btn.addEventListener("click", () => {
       // If picker is open, bypass two-step and call onConfirm immediately
-      if (btn.dataset.pickerType) {
+      if (btn.dataset.pickerType || (btn.id === 'productFooterCancelBtn' && currentNavigationState?.type === 'product-edit')) {
         if (onConfirm) onConfirm();
         return;
       }
@@ -15343,7 +15979,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
   // ---------------- Modal: product (chips + photos) ----------------
 
-  function bindProductPreorderConditions(wrapper, { product, isView = false, onOpenSelect } = {}) {
+  function bindProductPreorderConditions(wrapper, { product, isView = false, onOpenSelect, scheduleOnly = false, onScheduleChange } = {}) {
     const preorderBlock = $("#pePreorderConditions", wrapper);
     let savedPreorder = product?.preorder_settings_json;
     let preorderLoadError = false;
@@ -15366,6 +16002,13 @@ const isViewMode = state.comboPanel.mode === "view";
     if (acceptanceDate) preorderDraft.acceptanceMonth = new Date(`${acceptanceDate.slice(0, 7)}-01T00:00:00`);
     if (receiptDate) preorderDraft.receiptMonth = new Date(`${receiptDate.slice(0, 7)}-01T00:00:00`);
     const weekLabels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    let scheduleCalendarOpen = false;
+    function notifyScheduleChange() {
+      onScheduleChange?.({ receipt: {
+        mode: preorderDraft.receipt, start: preorderDraft.start || null, end: preorderDraft.end || null,
+        dates: [...preorderDraft.dates].sort(), weekdays: [...preorderDraft.weekdays].sort(),
+      } });
+    }
     let closePreorderSelect = null;
     function bindPreorderSelect(hostId, label, choices, onChange, initialValue = choices[0][0]) {
       const host = $(hostId, wrapper);
@@ -15404,6 +16047,7 @@ const isViewMode = state.comboPanel.mode === "view";
         trigger.querySelector("span").textContent = option.textContent;
         menu.querySelectorAll("[data-value]").forEach((item) => item.classList.toggle("is-selected", item === option));
         onChange(option.dataset.value);
+        notifyScheduleChange();
         close();
       });
     }
@@ -15411,6 +16055,9 @@ const isViewMode = state.comboPanel.mode === "view";
       const host = $(kind === "acceptance" ? "#pePreorderAcceptanceCalendar" : "#pePreorderReceiptCalendar", wrapper);
       if (!host) return;
       const mode = preorderDraft[kind];
+      if (scheduleOnly && kind === "receipt") {
+        host.classList.toggle("hidden", !scheduleCalendarOpen || mode === "any");
+      }
       if (mode === "any") { host.innerHTML = ""; return; }
       const month = preorderDraft[`${kind}Month`];
       const year = month.getFullYear();
@@ -15433,6 +16080,7 @@ const isViewMode = state.comboPanel.mode === "view";
         <div class="new-order-right-calendar-grid">${cells.join("")}</div><small aria-live="polite">${summary}</small></div>`;
     }
     if (preorderBlock) {
+      if (!scheduleOnly) {
       const customHours = $("#pePreorderCustomHours", wrapper);
       customHours.disabled = isView;
       bindPreorderSelect("#pePreorderLead", "Минимальное время до получения", [["48", "До получения: 48 ч"], ["1", "До получения: 1 ч"], ["3", "До получения: 3 ч"], ["6", "До получения: 6 ч"], ["12", "До получения: 12 ч"], ["24", "До получения: 24 ч"], ["72", "До получения: 72 ч"], ["custom", "Другой интервал"]], (value) => {
@@ -15467,7 +16115,40 @@ const isViewMode = state.comboPanel.mode === "view";
         }
       });
       bindPreorderSelect("#pePreorderAcceptance", "Приём предзаказов", [["any", "Без ограничений"], ["period", "Период"]], (value) => { preorderDraft.acceptance = value; renderPreorderCalendar("acceptance"); }, preorderDraft.acceptance);
-      bindPreorderSelect("#pePreorderReceipt", "Даты получения", [["any", "Любые даты"], ["period", "Период"], ["dates", "Отдельные даты"]], (value) => { preorderDraft.receipt = value; renderPreorderCalendar("receipt"); }, preorderDraft.receipt);
+      }
+      bindPreorderSelect("#pePreorderReceipt", "Даты получения", [["any", "Любые даты"], ["period", "Период"], ["dates", "Отдельные даты"]], (value) => {
+        preorderDraft.receipt = value;
+        if (scheduleOnly) {
+          scheduleCalendarOpen = false;
+          const button = wrapper.querySelector("[data-auto-calendar-toggle]");
+          if (button) {
+            button.disabled = value === "any";
+            button.setAttribute("aria-expanded", "false");
+          }
+        }
+        renderPreorderCalendar("receipt");
+      }, preorderDraft.receipt);
+      if (scheduleOnly) {
+        const select = $("#pePreorderReceipt", wrapper);
+        const row = document.createElement("div");
+        row.className = "auto-add-calendar-controls";
+        select.before(row);
+        row.append(select);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn btn-icon";
+        button.dataset.autoCalendarToggle = "1";
+        button.setAttribute("aria-label", "Открыть или скрыть календарь");
+        button.setAttribute("aria-expanded", "false");
+        button.disabled = preorderDraft.receipt === "any";
+        button.innerHTML = '<i class="fas fa-calendar-alt" aria-hidden="true"></i>';
+        button.addEventListener("click", () => {
+          scheduleCalendarOpen = !scheduleCalendarOpen;
+          button.setAttribute("aria-expanded", String(scheduleCalendarOpen));
+          renderPreorderCalendar("receipt");
+        });
+        row.append(button);
+      }
       renderPreorderCalendar("acceptance");
       renderPreorderCalendar("receipt");
       const weekdays = $("#pePreorderWeekdays", wrapper);
@@ -15478,8 +16159,9 @@ const isViewMode = state.comboPanel.mode === "view";
         const day = Number(button.dataset.preorderWeekday);
         if (preorderDraft.weekdays.has(day)) preorderDraft.weekdays.delete(day); else preorderDraft.weekdays.add(day);
         button.setAttribute("aria-pressed", String(preorderDraft.weekdays.has(day)));
+        notifyScheduleChange();
       });
-      $("#pePreorderToggle", wrapper).addEventListener("click", (event) => {
+      $("#pePreorderToggle", wrapper)?.addEventListener("click", (event) => {
         const toggle = event.currentTarget;
         const open = toggle.getAttribute("aria-expanded") !== "true";
         toggle.setAttribute("aria-expanded", String(open));
@@ -15490,6 +16172,7 @@ const isViewMode = state.comboPanel.mode === "view";
       });
       ["acceptance", "receipt"].forEach((kind) => {
         const host = $(kind === "acceptance" ? "#pePreorderAcceptanceCalendar" : "#pePreorderReceiptCalendar", wrapper);
+        if (!host) return;
         host.addEventListener("click", (event) => {
           const nav = event.target.closest("[data-preorder-month]");
           if (nav) {
@@ -15515,6 +16198,7 @@ const isViewMode = state.comboPanel.mode === "view";
             }
           }
           renderPreorderCalendar(kind);
+          notifyScheduleChange();
         });
       });
     }
@@ -15527,7 +16211,7 @@ const isViewMode = state.comboPanel.mode === "view";
       }, saleMode);
       preorderBlock.classList.toggle('hidden', saleMode !== 'preorder');
     }
-    return { getSaleMode: () => saleMode, closeSelect: () => closePreorderSelect?.(), loadError: preorderLoadError,
+    return { bindSelect: bindPreorderSelect, getSaleMode: () => saleMode, closeSelect: () => closePreorderSelect?.(), loadError: preorderLoadError,
       hasUnconfirmedInterval: () => Boolean($(".product-preorder-lead.is-editing", wrapper)),
       getSettings: () => ({
         version: 1, lead_hours: preorderDraft.leadHours,
@@ -15572,18 +16256,29 @@ const isViewMode = state.comboPanel.mode === "view";
       ? cachedProductDetails.passport
       : null;
     let advancedHydrationDecision = null;
-    let advancedHydrationDecisionReady = false;
+    let advancedHydrationPromise = null;
     let advancedHydrationFailed = false;
-    const waitForAdvancedHydration = async () => {
-      if (!advancedHydrationDecisionReady) {
+    let editorDataReady = Promise.resolve();
+    let optionPricingReady = false;
+    const waitForAdvancedHydration = () => {
+      if (!advancedHydrationPromise) advancedHydrationPromise = (async () => {
         advancedHydrationDecision = advancedReadyPromise ? await advancedReadyPromise : null;
-        advancedHydrationDecisionReady = true;
         if (advancedHydrationDecision?.editor?.schema_version === "product-editor-v1") {
           editorPassport = advancedHydrationDecision;
+          Object.values(editorPassport.editor.option_details || {}).forEach(details => {
+            const groupId = Number(details.group?.id);
+            const key = makeOptionGroupCacheKey(groupId, Number(product.id));
+            state.optionGroupCache.set(key, details);
+            const index = state.optionGroups.findIndex(group => Number(group.id) === groupId);
+            if (index >= 0) state.optionGroups[index] = { ...state.optionGroups[index], ...details.group };
+            else state.optionGroups.push({ ...details.group });
+          });
           cachedProductDetails = getCachedProductDetails(product.id) || cachedProductDetails;
         }
-      }
-      return advancedHydrationDecision !== false;
+        if (advancedHydrationDecision instanceof Error) throw advancedHydrationDecision;
+        return advancedHydrationDecision !== false;
+      })();
+      return advancedHydrationPromise;
     };
     const initialSelectedCategories = (
       Number(state.selectedProductId) === Number(product?.id)
@@ -15638,7 +16333,7 @@ const isViewMode = state.comboPanel.mode === "view";
       if (!(await waitForAdvancedHydration())) return false;
       if ((!isEdit && !isView) || !product) return;
       if (editorPassport) {
-        (cachedProductDetails.categories || []).forEach((c) => draft.categories.add(Number(c.id)));
+        (editorPassport.editor.categories || []).forEach((c) => draft.categories.add(Number(c.id)));
         return;
       }
       const res = await api(`/api/prod_products/${product.id}/categories?tenant_id=${TENANT_ID}`);
@@ -15648,7 +16343,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     const loadOptionsPromise = (async () => {
       if (!(await waitForAdvancedHydration())) return false;
-      if (!editorPassport) await ensureEditorOptionGroups();
+      if (!editorPassport?.editor?.option_details) await ensureEditorOptionGroups();
       if ((!isEdit && !isView) || !product) return;
       const res = editorPassport ? { data: editorPassport.optionAssignments || [] } : await apiGetProductOptionAssignments(product.id);
       const arr = Array.isArray(res.data) ? res.data : [];
@@ -15664,8 +16359,13 @@ const isViewMode = state.comboPanel.mode === "view";
       if (!(await waitForAdvancedHydration())) return false;
       if (!editorPassport) await ensureEditorVariantGroups();
       if ((!isEdit && !isView) || !product) return;
-      const res = editorPassport ? { data: editorPassport.variants || [] } : await apiGetProductVariants(product.id);
+      const res = editorPassport && normalizeProductBlocksConfig(product.blocks_config).variants
+        ? { data: editorPassport.variants || [] }
+        : await apiGetProductVariants(product.id);
       const arr = Array.isArray(res.data) ? res.data : [];
+      if (arr.some((variant) => !state.variantGroups.some((group) => Number(group.id) === Number(variant.id)))) {
+        await loadVariantGroups();
+      }
       // Store variant data with default_value_index for later use (per-product override aware)
       draft.productVariants = arr.map((v) => ({
         id: Number(v.id),
@@ -15751,6 +16451,11 @@ const isViewMode = state.comboPanel.mode === "view";
       tabKey: tabKey,
       onSave: isEditable ? async () => {
         try {
+          await editorDataReady;
+          if (advancedHydrationFailed) {
+            showToast('Не удалось загрузить полные данные товара. Повторно откройте карточку перед сохранением.');
+            return false;
+          }
           // Find form in the wrapper (which is now in DOM) or in document
           const form = $("#productEditorForm", wrapper) || document.querySelector("#productEditorForm");
           if (!form) {
@@ -15799,9 +16504,13 @@ const isViewMode = state.comboPanel.mode === "view";
           const baseUnitId = form.base_unit_id?.value === "" ? null : Number(form.base_unit_id?.value);
           
           // Сохраняем себестоимость и цену как введено в форме (пересчёт только через меню «три точки»)
-          const costPriceValue = parseNumberFromInput(form.cost_price.value) ?? 0;
+          const costPriceValue = isCompositionPriceMode()
+            ? (calcTotalCostFromIngredientsGlobal() ?? 0)
+            : (parseNumberFromInput(form.cost_price.value) ?? 0);
           const marginPercentValue = parseNumberFromInput(form.margin_percent?.value);
-          const priceValue = parseNumberFromInput(form.price.value) ?? 0;
+          const priceValue = isCompositionPriceMode()
+            ? (calcTotalPriceFromIngredientsGlobal() ?? 0)
+            : (parseNumberFromInput(form.price.value) ?? 0);
           const payload = {
             tenant_id: TENANT_ID,
             name: String(form.name.value || "").trim(),
@@ -15818,7 +16527,7 @@ const isViewMode = state.comboPanel.mode === "view";
             show_client_composition: form.show_client_composition?.checked ? 1 : 0,
             show_tech_process: form.show_tech_process?.checked ? 1 : 0,
             price: priceValue,
-            old_price: parseNumberFromInput(form.old_price.value),
+            old_price: isCompositionPriceMode() ? calcTotalOldPriceFromIngredientsGlobal() : parseNumberFromInput(form.old_price.value),
             promo_enabled: form.promo_enabled?.checked ? 1 : 0,
             promo_title: String(form.promo_title?.value || "").trim(),
             promo_discount_percent: parseNumberFromInput(form.promo_discount_percent?.value),
@@ -15954,8 +16663,17 @@ const isViewMode = state.comboPanel.mode === "view";
                   itemSettings.some((setting) => {
                     const item = savedItems.get(Number(setting.option_item_id));
                     if (!item) return true;
+                    if (setting.configuration) {
+                      const savedConfiguration = typeof item.product_configuration_json === 'string'
+                        ? JSON.parse(item.product_configuration_json) : item.product_configuration_json;
+                      if (!savedConfiguration || (setting.configuration.ingredients || []).some(ingredient =>
+                        !(savedConfiguration.ingredients || []).some(saved =>
+                          Number(saved.ingredient_id) === Number(ingredient.ingredient_id) &&
+                          Number(saved.quantity ?? saved.qty) === Number(ingredient.quantity ?? ingredient.qty)))) return true;
+                    }
                     if (setting.default_selected != null &&
                         Number(item.product_default_selected) !== Number(setting.default_selected)) return true;
+                    if (Boolean(item.product_is_locked) !== Boolean(setting.is_locked)) return true;
                     return Boolean(item.product_variant_override_enabled) !== Boolean(setting.variant_override_enabled) ||
                       (setting.variant_override_enabled && (
                         Number(item.product_default_variant_group_id) !== Number(setting.default_variant_group_id) ||
@@ -15996,9 +16714,19 @@ const isViewMode = state.comboPanel.mode === "view";
             } else if (hasSelectedVariant) {
               await apiAddVariantGroupAssignments(selectedVariantId, [productId]);
             }
+            for (const [groupId, indexes] of draftVariantExclusions) {
+              if (Number(draft.variantGroupId) === groupId) await apiSetProductVariantValueExclusions(productId, groupId, indexes);
+            }
+            if (hasSelectedVariant && draftVariantDefaultChanges.has(selectedVariantId)) {
+              const assignments = (await apiGetProductVariants(productId)).data || [];
+              const assignment = assignments.find(row => Number(row.id) === selectedVariantId);
+              if (!assignment?.assignment_id) throw new Error('Не удалось найти назначенный вариант товара');
+              await apiPatchVariantAssignment(assignment.assignment_id, { default_value_index: draftVariantDefaultChanges.get(selectedVariantId) });
+            }
           } catch (e) {
             console.error('Failed to save variants', e);
-            // Не критично, продолжаем
+            alert('Не удалось сохранить варианты товара: ' + e.message);
+            return false;
           }
 
           // Save ingredients from draft
@@ -16167,17 +16895,18 @@ const isViewMode = state.comboPanel.mode === "view";
                 force: true,
                 priority: optionAssignmentsChanged || optionSettingsChanged,
               });
-            const applyRefreshedPassport = () => {
+            {
+              await refreshPassport;
               const refreshedPassport = getEditorReadyProductPassport(productId);
-              if (refreshedPassport && !editingProducts.has(Number(productId))) {
-                applyEditorPassportToProductsState(productId, refreshedPassport);
+              if (!refreshedPassport) throw new Error('Не удалось загрузить сохранённые опции товара');
+              const refreshedGroupIds = new Set((refreshedPassport.optionAssignments || [])
+                .filter(assignment => Number(assignment.is_active) === 1)
+                .map(assignment => Number(assignment.group_id)));
+              if ([...draft.optionGroups].some(groupId => !refreshedGroupIds.has(Number(groupId)))) {
+                throw new Error('Паспорт товара не содержит сохранённые опции');
               }
-              return refreshedPassport;
-            };
-            const logPassportRefreshError = (error) => {
-              console.error("Failed to refresh saved product passport", error);
-            };
-            void refreshPassport.then(applyRefreshedPassport).catch(logPassportRefreshError);
+              applyEditorPassportToProductsState(productId, refreshedPassport);
+            }
           }
           clearCachedProductView(productId);
 
@@ -16237,8 +16966,9 @@ const isViewMode = state.comboPanel.mode === "view";
                 activate: false,
               });
               clearCachedProductView(updatedProduct.id);
+              navigationState.onClose();
               showProductDetails(updatedProduct);
-              showProductFooterView();
+              showProductFooterEdit();
             } else {
               // Product not found - show empty state
               showDetailsEmpty();
@@ -16265,8 +16995,9 @@ const isViewMode = state.comboPanel.mode === "view";
                   openProductById(newProduct.id);
                 },
               });
+              navigationState.onClose();
               showProductDetails(newProduct);
-              showProductFooterView();
+              showProductFooterEdit();
             } else {
               clearNavigationStack();
             }
@@ -16298,8 +17029,6 @@ const isViewMode = state.comboPanel.mode === "view";
             openProductDependentRecalcModal(dependentItems);
           }
           
-          if (window.__productEditorRecalc) window.__productEditorRecalc = null;
-          if (window.__productEditorBlocks) window.__productEditorBlocks = null;
           return true;
         } catch (e) {
           console.error('Unexpected error in onSave', e);
@@ -16308,6 +17037,13 @@ const isViewMode = state.comboPanel.mode === "view";
         }
       } : null,
       onClose: () => {
+        optionDetailsCache.forEach((_, key) => state.optionGroupCache.delete(key));
+        if (currentNavigationState === navigationState) {
+          closeOptionPicker();
+          closeProductOptionItemsPicker();
+          closeProductVariantValuesPicker();
+          closeProductVariantPicker();
+        }
         // Remove from editing state when canceling
         if (product && product.id && editingProducts.has(product.id)) {
           editingProducts.delete(product.id);
@@ -16832,6 +17568,7 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     function applyProductPromoPrice({ preserveExistingOldPrice = true } = {}) {
+      if (isCompositionPriceMode()) { applyCompositionPriceValues(); return; }
       if (!ui.priceInput || !ui.oldPriceInput || !isProductPromoEnabled()) return;
       let basePrice = parseNumberFromInput(ui.oldPriceInput.value);
       if (!preserveExistingOldPrice || basePrice == null || basePrice <= 0) {
@@ -16846,6 +17583,7 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     function disableProductPromoPrice() {
+      if (isCompositionPriceMode()) { applyCompositionPriceValues(); return; }
       if (!ui.priceInput || !ui.oldPriceInput) return;
       const oldPrice = parseNumberFromInput(ui.oldPriceInput.value);
       if (oldPrice != null && oldPrice > 0) {
@@ -16855,11 +17593,70 @@ const isViewMode = state.comboPanel.mode === "view";
       updateMarginFromCostAndPrice();
     }
 
+    function getDefaultOptionTotals() {
+      const totals = { price: 0, oldPrice: 0, cost: 0 };
+      if (!optionPricingReady || !draft.blocksConfig.options) return totals;
+      for (const groupId of draft.optionGroups) {
+        const details = getCachedProductScopedOptionDetails(groupId);
+        if (!details) throw new Error('OPTION_CONFIGURATION_UNAVAILABLE');
+        const group = details.group || state.optionGroups.find(row => Number(row.id) === Number(groupId));
+        const settings = getOptionSettingDraft(groupId, details);
+        const items = (details.items || []).filter(item => !item.is_excluded_for_product);
+        const locked = items.find(item => settings.get(Number(item.id))?.is_locked);
+        let selected = locked ? [locked] : items.filter(item => {
+          const own = settings.get(Number(item.id))?.default_selected;
+          return own == null ? Boolean(item.default_selected) : Boolean(own);
+        });
+        const single = locked || group.selection_type === 'single';
+        const minimum = locked ? 1 : Math.max(Number(group.min_select || 0), group.is_required ? 1 : 0);
+        for (const item of items) {
+          if (selected.length >= minimum) break;
+          if (!selected.includes(item)) selected.push(item);
+        }
+        if (single) selected = selected.slice(0, 1);
+        for (const item of selected) {
+          const setting = settings.get(Number(item.id));
+          const configuration = setting?.configuration ?? readSelectedProductConfiguration(item) ?? {};
+          const choice = { ...configuration };
+          if (setting?.variant_override_enabled) {
+            choice.variant_group_id = setting.default_variant_group_id;
+            choice.variant_value_index = setting.default_variant_value_index;
+          }
+          const targetId = Number(item.target_product_id || item.product_id);
+          const presentation = window.SharedProductDetails.getSelectionPresentation(targetId, choice);
+          if (!presentation) throw new Error('PRODUCT_EDITOR_DATA_UNAVAILABLE');
+          const pricing = window.SharedProductDetails.getOptionItemDisplayPricing({ ...item,
+            variants: item.available_variants || item.variants || [], configuration_json: choice,
+          }, choice);
+          const price = item.price_mode === 'from_target' ? presentation.price : pricing.currentPrice;
+          const oldPrice = item.price_mode === 'from_target' ? presentation.oldPrice : pricing.originalPrice;
+          const qty = single || Number(item.qty_max ?? 1) <= 1 ? 1 : Math.max(1, Number(item.qty_min || 1));
+          totals.price += Number(price) * qty;
+          totals.oldPrice += Math.max(Number(price), Number(oldPrice || 0)) * qty;
+          totals.cost += window.SharedProductDetails.getSelectionCost(targetId, choice) * qty;
+        }
+      }
+      return totals;
+    }
+
     function applyCompositionPriceValues() {
-      if (!isCompositionPriceMode()) return;
-      const cost = calcTotalCostFromIngredientsGlobal();
-      const price = calcTotalPriceFromIngredientsGlobal();
-      const compositionOldPrice = calcTotalOldPriceFromIngredientsGlobal();
+      if (!isCompositionPriceMode() || !optionPricingReady) return;
+      const options = getDefaultOptionTotals();
+      const groupId = Number(draft.variantGroupId);
+      const group = draft.blocksConfig.variants ? state.variantGroups.find(row => Number(row.id) === groupId) : null;
+      const details = group ? getCachedProductScopedVariantDetails(groupId) : null;
+      const variant = group ? { ...group, ...details?.group, discount_tiers: details?.tiers || group.discount_tiers || [] } : null;
+      const index = draft.productVariants?.find(row => Number(row.id) === groupId)?.default_value_index ?? variant?.default_value_index ?? 0;
+      const base = { ...product, base_unit_id: Number(ui.baseUnitSelect?.value), base_qty: parseNumberFromInput(ui.baseQtyInput?.value) || 1 };
+      const scale = (value, discounts = true) => window.SharedProductDetails.getConfiguredBasePrice(
+        { ...base, price: value ?? 0 }, variant ? { ...variant, discount_tiers: discounts ? variant.discount_tiers : [] } : null, index);
+      const cost = scale(calcTotalCostFromIngredientsGlobal(), false) + options.cost;
+      const current = scale(calcTotalPriceFromIngredientsGlobal()) + options.price;
+      const original = scale(calcTotalOldPriceFromIngredientsGlobal() ?? calcTotalPriceFromIngredientsGlobal()) + options.oldPrice;
+      const price = window.SharedProductDetails.applyProductPromoPricing({
+        promo_enabled: isProductPromoEnabled() ? 1 : 0, promo_discount_percent: getProductPromoDiscountPercent(),
+      }, current, original);
+      const compositionOldPrice = original > price ? original : null;
       if (cost != null && ui.costPriceInput) {
         ui.costPriceInput.value = formatNumberForInput(Math.round(cost * 100) / 100);
       }
@@ -16869,7 +17666,6 @@ const isViewMode = state.comboPanel.mode === "view";
           ui.oldPriceInput.value = formatNumberForInputFixed(compositionOldPrice, 2);
         } else if (ui.oldPriceInput && isProductPromoEnabled()) {
           ui.oldPriceInput.value = formatNumberForInputFixed(price, 2);
-          applyProductPromoPrice({ preserveExistingOldPrice: true });
         } else if (ui.oldPriceInput) {
           ui.oldPriceInput.value = "";
         }
@@ -16901,6 +17697,12 @@ const isViewMode = state.comboPanel.mode === "view";
 
     function setPriceSourceMode(mode) {
       const isAuto = mode === "auto";
+      if (!isAuto && isCompositionPriceMode()) {
+        ui.priceInput.value = formatNumberForInputFixed(calcTotalPriceFromIngredientsGlobal() ?? 0, 2);
+        ui.costPriceInput.value = formatNumberForInput(calcTotalCostFromIngredientsGlobal() ?? 0);
+        const oldPrice = calcTotalOldPriceFromIngredientsGlobal();
+        ui.oldPriceInput.value = oldPrice == null ? '' : formatNumberForInputFixed(oldPrice, 2);
+      }
       draft.valueSources.cost_price = isAuto ? "auto" : "manual";
       draft.valueSources.price = isAuto ? "auto" : "manual";
       syncPriceSourceMode({ applyValues: isAuto });
@@ -16974,38 +17776,83 @@ const isViewMode = state.comboPanel.mode === "view";
       bindAccordionContainer(descriptionAccordion);
     }
 
-    function syncProductFooterBlockChips() {
-      const chips = $("#productFooterBlockChips");
-      if (!chips) return;
-      if (isView) {
-        chips.classList.add("hidden");
-        chips.innerHTML = "";
-        return;
-      }
-      const blocksConfig = normalizeProductBlocksConfig(draft.blocksConfig);
-      chips.classList.remove("hidden");
-      chips.innerHTML = PRODUCT_FOOTER_BLOCK_CHIP_DEFINITIONS.map(({ key, label }) => {
-        const isActive = Boolean(blocksConfig[key]);
-        const hasWarning = key === "nutrition" && draft.nutritionIncomplete;
-        return `<button class="product-footer-block-chip ${isActive ? "is-active" : ""} ${hasWarning ? "has-warning" : ""}" type="button" data-product-footer-block-chip="${key}">${escapeHtml(label)}${hasWarning ? '<span class="product-footer-block-chip-warning">!</span>' : ''}</button>`;
-      }).join("");
-      chips.querySelectorAll("[data-product-footer-block-chip]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const key = String(button.dataset.productFooterBlockChip || "");
-          if (Object.prototype.hasOwnProperty.call(draft.blocksConfig, key)) {
-            draft.blocksConfig[key] = !Boolean(draft.blocksConfig[key]);
-          }
+    const editorSections = [
+      { key: 'sale', label: '\u041f\u0440\u043e\u0434\u0430\u0436\u0430', icon: 'fa-shopping-cart' },
+      { key: 'composition', label: '\u0421\u043e\u0441\u0442\u0430\u0432 \u0438 \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b', icon: 'fa-layer-group' },
+      { key: 'options', label: '\u041e\u043f\u0446\u0438\u0438', icon: 'fa-sliders-h' },
+      { key: 'information', label: '\u0418\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f', icon: 'fa-info-circle' },
+    ];
+    const sectionByBlock = { ingredients: 'composition', variants: 'composition', nutrition: 'composition', options: 'options', description: 'information', promotions: 'information' };
+    const sectionPanels = new Map();
+    const blockSwitches = new Map();
+    let activeEditorSection = 'sale';
+    const editorTabs = document.createElement('div');
+    editorTabs.className = 'product-editor-section-tabs';
+    editorTabs.setAttribute('role', 'tablist');
+    const priceBlock = wrapper.querySelector('#pePriceBlock');
+    const nutritionBlock = ui.nutritionBlock;
+    if (priceBlock && nutritionBlock) {
+      const saleNodes = [];
+      for (let node = priceBlock.nextElementSibling; node && node !== nutritionBlock; node = node.nextElementSibling) saleNodes.push(node);
+      const statusRow = wrapper.querySelector('input[name="is_active"]')?.closest('.form-row-2');
+      if (statusRow) priceBlock.before(statusRow);
+      priceBlock.after(editorTabs);
+      editorSections.forEach(section => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.editorSection = section.key;
+        button.setAttribute('role', 'tab');
+        button.innerHTML = `<i class="fas ${section.icon}" aria-hidden="true"></i><span>${escapeHtml(section.label)}</span>`;
+        editorTabs.appendChild(button);
+        const panel = document.createElement('div');
+        panel.className = 'product-editor-section-panel';
+        panel.setAttribute('role', 'tabpanel');
+        editorTabs.parentNode.insertBefore(panel, editorTabs.nextSibling);
+        sectionPanels.set(section.key, panel);
+      });
+      saleNodes.filter(node => node !== statusRow).forEach(node => sectionPanels.get('sale').appendChild(node));
+      const blocks = { description: ui.descriptionBlock, variants: ui.variantBlock, options: ui.optionBlock, ingredients: ui.ingredientBlock, promotions: ui.promotionsBlock, nutrition: ui.nutritionBlock };
+      ['ingredients', 'variants', 'nutrition', 'options', 'description', 'promotions'].forEach(key => {
+        const block = blocks[key];
+        if (!block) return;
+        sectionPanels.get(sectionByBlock[key]).appendChild(block);
+        const label = document.createElement('label');
+        label.className = 'switch product-editor-block-switch';
+        const text = ['options', 'variants', 'promotions'].includes(key)
+          ? '\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u043d\u0430 \u0441\u0430\u0439\u0442\u0435' : '\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c \u043d\u0430 \u0441\u0430\u0439\u0442\u0435';
+        label.innerHTML = `<input type="checkbox" class="switch-input"><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">${text}</span>`;
+        const input = label.querySelector('input');
+        input.disabled = isView;
+        input.addEventListener('change', () => {
+          draft.blocksConfig[key] = input.checked;
           syncProductBlocksVisibility();
         });
+        label.addEventListener('click', event => event.stopPropagation());
+        const header = block.querySelector('.product-nutrition-head,.option-section-header');
+        if (header) header.appendChild(label);
+        else block.prepend(label);
+        blockSwitches.set(key, input);
       });
-      if (!chips.dataset.wheelBound) {
-        chips.dataset.wheelBound = "1";
-        chips.addEventListener("wheel", (event) => {
-          if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-          event.preventDefault();
-          chips.scrollLeft += event.deltaY;
-        }, { passive: false });
-      }
+      editorTabs.addEventListener('click', event => {
+        const button = event.target.closest('[data-editor-section]');
+        if (!button) return;
+        activeEditorSection = button.dataset.editorSection;
+        syncEditorSections();
+        refreshOpenAccordions();
+      });
+    }
+    function syncEditorSections() {
+      sectionPanels.forEach((panel, key) => panel.classList.toggle('hidden', key !== activeEditorSection));
+      editorTabs.querySelectorAll('[data-editor-section]').forEach(button => {
+        const selected = button.dataset.editorSection === activeEditorSection;
+        button.classList.toggle('is-active', selected);
+        button.setAttribute('aria-selected', String(selected));
+      });
+    }
+    function syncProductFooterBlockChips() {
+      if (!useHost && currentNavigationState !== navigationState) return;
+      const chips = $('#productFooterBlockChips');
+      if (chips) { chips.classList.add('hidden'); chips.replaceChildren(); }
     }
 
     function syncProductBlocksVisibility() {
@@ -17021,7 +17868,9 @@ const isViewMode = state.comboPanel.mode === "view";
       };
       Object.entries(blocksMap).forEach(([key, element]) => {
         if (!element) return;
-        element.classList.toggle("hidden", !blocksConfig[key]);
+        element.classList.remove("hidden");
+        const input = blockSwitches.get(key);
+        if (input) input.checked = Boolean(blocksConfig[key]);
       });
       if (!isView) {
         window.__productEditorBlocks = {
@@ -17035,7 +17884,10 @@ const isViewMode = state.comboPanel.mode === "view";
         };
       }
       syncProductFooterBlockChips();
+      syncEditorSections();
+      if (optionPricingReady) applyCompositionPriceValues();
     }
+    if (navigationState) navigationState.syncBlockChips = syncProductBlocksVisibility;
     syncProductBlocksVisibility();
 
     if (ui.generateCompositionBtn && !isView) {
@@ -17054,7 +17906,6 @@ const isViewMode = state.comboPanel.mode === "view";
             ui.clientCompositionInput.value = text;
             ui.clientCompositionInput.dispatchEvent(new Event("input", { bubbles: true }));
           }
-          if (product) product.client_composition = text;
           clearCachedProductDetails(productId);
           clearCachedProductView(productId);
           showToast("Состав сгенерирован", "success");
@@ -17089,14 +17940,21 @@ const isViewMode = state.comboPanel.mode === "view";
       document.querySelectorAll(".product-nutrition-popover").forEach((el) => el.remove());
     }
 
-    function showNutritionProblemPopover(anchor, problems) {
+    $("#pePromoInfo", wrapper)?.addEventListener("click", event => {
+      event.stopPropagation();
+      showNutritionProblemPopover(event.currentTarget, [{ message:
+        "Скидки компонентов и скидка блюда не суммируются. Сравниваем сумму текущих цен выбранных компонентов с их обычной стоимостью по акции блюда и выбираем меньшую сумму. Учитываются выбранные порции, состав и опции. Себестоимость не меняется."
+      }], "Как рассчитывается скидка");
+    });
+
+    function showNutritionProblemPopover(anchor, problems, title = "Не заполнено КБЖУ") {
       closeNutritionProblemPopover();
       const list = Array.isArray(problems) ? problems : [];
       const popover = document.createElement("div");
       popover.className = "product-nutrition-popover";
       const items = list.length ? list : [{ message: "Не заполнено КБЖУ" }];
       popover.innerHTML = `
-        <div class="product-nutrition-popover-title">Не заполнено КБЖУ</div>
+        <div class="product-nutrition-popover-title">${escapeHtml(title)}</div>
         <div class="product-nutrition-popover-list">
           ${items.map((problem) => {
             const path = Array.isArray(problem.path) ? problem.path.filter(Boolean).join(" > ") : "";
@@ -17673,35 +18531,11 @@ const isViewMode = state.comboPanel.mode === "view";
             closeOptionPicker();
           };
           window._saveOptionPickerFn = async () => {
-            const oldSelection = new Set(draft.optionGroups);
             const newSelection = new Set(optionPickerSelection || []);
-            
-            // Find options to add and remove
-            const toAdd = Array.from(newSelection).filter(id => !oldSelection.has(id));
-            const toRemove = Array.from(oldSelection).filter(id => !newSelection.has(id));
-            
-            if (isEdit && product) {
-              // For existing products: save to database immediately
-              try {
-                // Add new options
-                if (toAdd.length > 0) {
-                  await apiAddProductOptionAssignments(product.id, toAdd);
-                }
-                
-                // Remove options
-                for (const groupId of toRemove) {
-                  await apiDisableProductOptionAssignment(product.id, groupId);
-                }
-              } catch (e) {
-                console.error('Failed to save options', e);
-                alert('Ошибка при сохранении опций');
-                return;
-              }
-            }
-            
+
             // Update draft
             draft.optionGroups = newSelection;
-            renderOptionAccordion();
+            await renderOptionAccordion();
             closeOptionPicker();
           };
         }
@@ -17813,6 +18647,8 @@ const isViewMode = state.comboPanel.mode === "view";
     let productVariantValuesPickerSavedFooterState = null;
     let productVariantValuesPickerSavedHandlers = null;
     const variantDetailsCache = new Map();
+    const draftVariantExclusions = new Map();
+    const draftVariantDefaultChanges = new Map();
 
     function getProductScopedOptionDetailsCacheKey(groupId) {
       const safeGroupId = Number(groupId) || 0;
@@ -17839,9 +18675,11 @@ const isViewMode = state.comboPanel.mode === "view";
           settings.set(Number(item.id), {
             option_item_id: Number(item.id),
             default_selected: item.product_default_selected ?? null,
+            is_locked: Boolean(item.product_is_locked),
             variant_override_enabled: Boolean(item.product_variant_override_enabled),
             default_variant_group_id: item.product_default_variant_group_id ?? null,
             default_variant_value_index: item.product_default_variant_value_index ?? null,
+            configuration: typeof item.product_configuration_json === 'string' ? JSON.parse(item.product_configuration_json) : item.product_configuration_json ?? null,
           });
         });
         optionSettingDrafts.set(id, settings);
@@ -17910,9 +18748,8 @@ const isViewMode = state.comboPanel.mode === "view";
               itemKey: itemId,
               checkboxKind: "member",
               allowVariants: Boolean(productOptionItemsPickerState.allowVariants),
+              badgesHtml: checked ? renderProductOptionItemFlags(itemId, defaultSelected, Boolean(setting?.is_locked), "product-option") : "",
             })}
-            <label class="option-picker-default"><input class="product-row-select-input" type="checkbox" data-product-option-default="${itemId}"
-              ${defaultSelected ? "checked" : ""} ${checked ? "" : "disabled"} /><span class="product-row-select-box" aria-hidden="true"></span> Выбран</label>
           </div>
         `;
       }).join("");
@@ -17930,6 +18767,10 @@ const isViewMode = state.comboPanel.mode === "view";
           const itemId = Number(input.dataset.productOptionDefault);
           const picker = productOptionItemsPickerState;
           if (!picker.selection.has(itemId)) return;
+          if (Array.from(picker.settings.values()).some(setting => setting.is_locked)) {
+            renderProductOptionPickerList(overlay);
+            return;
+          }
           if (input.checked && picker.selectionType === "single") {
             picker.settings.forEach((setting, id) => { setting.default_selected = id === itemId ? 1 : 0; });
           } else {
@@ -17948,6 +18789,19 @@ const isViewMode = state.comboPanel.mode === "view";
           renderProductOptionPickerList(overlay);
         });
       });
+      listEl.querySelectorAll("[data-product-option-locked]").forEach(input => {
+        input.addEventListener("change", () => {
+          const itemId = Number(input.dataset.productOptionLocked);
+          const settings = productOptionItemsPickerState.settings;
+          settings.forEach((setting, id) => {
+            if (input.checked) {
+              setting.is_locked = id === itemId;
+              setting.default_selected = id === itemId ? 1 : 0;
+            } else if (id === itemId) setting.is_locked = false;
+          });
+          renderProductOptionPickerList(overlay);
+        });
+      });
       listEl.querySelectorAll("[data-option-variant-key]").forEach((chip) => {
         chip.addEventListener("click", () => {
           const itemId = Number(chip.dataset.optionVariantKey);
@@ -17957,6 +18811,10 @@ const isViewMode = state.comboPanel.mode === "view";
           setting.default_variant_group_id = Number(chip.dataset.optionVariantGroup);
           setting.default_variant_value_index = Number(chip.dataset.optionVariantIndex);
           productOptionItemsPickerState.selection.add(itemId);
+          if (setting.configuration) {
+            setting.configuration.variant_group_id = setting.default_variant_group_id;
+            setting.configuration.variant_value_index = setting.default_variant_value_index;
+          }
           renderProductOptionPickerList(overlay);
         });
       });
@@ -18060,6 +18918,7 @@ const isViewMode = state.comboPanel.mode === "view";
       }
       setCachedProductScopedOptionDetails(numericGroupId, details);
       const items = Array.isArray(details.items) ? details.items : [];
+      await ensureSelectionProducts(items.map(item => Number(item.target_product_id)).filter(id => id > 0));
       const selection = new Set(
         items
           .filter((item) => item?.is_excluded_for_product !== true)
@@ -18103,6 +18962,7 @@ const isViewMode = state.comboPanel.mode === "view";
         picker.selection = new Set(picker.items.map((item) => Number(item.id)));
         picker.settings.forEach((setting) => {
           setting.default_selected = null;
+          setting.is_locked = false;
           setting.variant_override_enabled = false;
           setting.default_variant_group_id = null;
           setting.default_variant_value_index = null;
@@ -18382,10 +19242,21 @@ const isViewMode = state.comboPanel.mode === "view";
             .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
         : [];
       const excludedValueIndexes = allIndexes.filter((valueIndex) => !selection.has(valueIndex));
-      await apiSetProductVariantValueExclusions(product.id, numericGroupId, excludedValueIndexes);
-      clearCachedProductScopedVariantDetails(numericGroupId);
-      const refreshed = await ensureProductScopedVariantGroupDetails(numericGroupId);
-      if (refreshed) syncDraftProductVariantDefault(numericGroupId, refreshed);
+      if (!selection.size) throw new Error('AT_LEAST_ONE_VALUE_REQUIRED');
+      draftVariantExclusions.set(numericGroupId, excludedValueIndexes);
+      const visibleIndexes = allIndexes.filter(index => selection.has(index));
+      const previousDefault = details.product_scope?.resolved_default_value_index;
+      const defaultIndex = selection.has(previousDefault) ? previousDefault : visibleIndexes[0];
+      const nextDetails = { ...details, product_scope: { ...details.product_scope,
+        excluded_value_indexes: excludedValueIndexes, visible_value_indexes: visibleIndexes,
+        visible_values: visibleIndexes.map(index => details.values_meta.find(value => Number(value.index) === index)?.value),
+        visible_tiers: visibleIndexes.flatMap((index, visibleIndex) =>
+          (details.values_meta.find(value => Number(value.index) === index)?.tier_rows || [])
+            .map(tier => ({ ...tier, sort_order: visibleIndex }))),
+        resolved_default_value_index: defaultIndex, resolved_default_visible_index: visibleIndexes.indexOf(defaultIndex),
+      } };
+      setCachedProductScopedVariantDetails(numericGroupId, nextDetails);
+      syncDraftProductVariantDefault(numericGroupId, nextDetails);
     }
 
     async function applyProductVariantValuesPickerSelection() {
@@ -18567,16 +19438,8 @@ const isViewMode = state.comboPanel.mode === "view";
         newBtn.addEventListener("click", async (e) => {
           e.stopPropagation();
           
-          // Find assignment_id for this variant group
-          const assignment = draft.initialVariantAssignments.find(a => Number(a.group_id) === groupId);
-          if (!assignment || !Number.isFinite(assignment.assignment_id)) {
-            console.error("Assignment not found for variant group", groupId);
-            return;
-          }
-          
           try {
-            // Update assignment with new default_value_index
-            await apiPatchVariantAssignment(assignment.assignment_id, { default_value_index: variantIndex });
+            draftVariantDefaultChanges.set(groupId, variantIndex);
             
             // Update draft.productVariants
             if (!draft.productVariants) draft.productVariants = [];
@@ -18589,15 +19452,19 @@ const isViewMode = state.comboPanel.mode === "view";
                 default_value_index: variantIndex
               });
             }
-            
-            // Reload variant data to ensure consistency
-            await refreshProductVariants(product.id);
+            applyCompositionPriceValues();
             
             // Re-render the accordion content
             const details = getCachedProductScopedVariantDetails(groupId) || await ensureProductScopedVariantGroupDetails(groupId);
             if (details) {
+              if (details.product_scope) {
+                setCachedProductScopedVariantDetails(groupId, { ...details, product_scope: { ...details.product_scope,
+                  resolved_default_value_index: variantIndex,
+                  resolved_default_visible_index: details.product_scope.visible_value_indexes?.indexOf(variantIndex),
+                } });
+              }
               const group = state.variantGroups.find((item) => Number(item.id) === groupId);
-              const summaryPayload = getProductScopedVariantSummaryPayload(groupId, group, details);
+              const summaryPayload = getProductScopedVariantSummaryPayload(groupId, group, getCachedProductScopedVariantDetails(groupId) || details);
               container.innerHTML = renderVariantValuesSummary(summaryPayload.values, summaryPayload.tiers, summaryPayload.defaultIdx, {
                 isEditable: isEdit,
                 groupId,
@@ -18847,24 +19714,7 @@ const isViewMode = state.comboPanel.mode === "view";
         window._saveVariantPickerFn = async () => {
           const selectedId = Number(productVariantPickerSelection);
           const hasSelected = Number.isFinite(selectedId) && selectedId > 0;
-          if (isEdit && product && product.id) {
-            const shouldChange = hasSelected && selectedId !== Number(draft.initialVariantGroupId);
-            const shouldClear = !hasSelected && draft.initialVariantAssignments.length > 0;
-            if (shouldChange || shouldClear) {
-              for (const assignment of draft.initialVariantAssignments) {
-                if (Number.isFinite(assignment.assignment_id)) {
-                  await apiDeleteVariantAssignment(assignment.assignment_id);
-                }
-              }
-              if (hasSelected) {
-                await apiAddVariantGroupAssignments(selectedId, [product.id]);
-              }
-              await refreshProductVariants(product.id);
-            }
-          } else {
-            draft.variantGroupId = hasSelected ? selectedId : null;
-            draft.initialVariantGroupId = null;
-          }
+          draft.variantGroupId = hasSelected ? selectedId : null;
           renderVariantAccordion();
           closeProductVariantPicker();
         };
@@ -18945,18 +19795,7 @@ const isViewMode = state.comboPanel.mode === "view";
         ui.variantAccordion.querySelectorAll("[data-variant-delete]").forEach((btn) => {
           btn.addEventListener("click", async (e) => {
             e.stopPropagation();
-            if (isEdit && product && product.id) {
-              for (const assignment of draft.initialVariantAssignments) {
-                if (Number.isFinite(assignment.assignment_id)) {
-                  await apiDeleteVariantAssignment(assignment.assignment_id);
-                }
-              }
-              await refreshProductVariants(product.id);
-            } else {
-              draft.variantGroupId = null;
-              draft.initialVariantGroupId = null;
-              draft.initialVariantAssignments = [];
-            }
+            draft.variantGroupId = null;
             variantDetailsCache.delete(groupId);
             renderVariantAccordion();
           });
@@ -19027,18 +19866,14 @@ const isViewMode = state.comboPanel.mode === "view";
           })
         : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f.</div>`;
 
-      const actionsHtml = isView
-        ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
-        : `
-          ${isEdit && product && product.id ? `<button class="btn btn-icon btn-sm" type="button" data-product-variant-values-open="${groupId}" title="\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c/\u0441\u043a\u0440\u044b\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f" onclick="event.stopPropagation();"><i class="fas fa-plus"></i></button>` : ""}
-          <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-edit="${groupId}" title="\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c" onclick="event.stopPropagation();">
-            <i class="fas fa-pen"></i>
-          </button>
-          <button class="btn btn-icon btn-sm btn-ghost" type="button" data-variant-delete="${groupId}" title="\u0423\u0434\u0430\u043b\u0438\u0442\u044c" onclick="event.stopPropagation();">
-            <i class="fas fa-trash"></i>
-          </button>
-          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
-        `;
+      const actionsHtml = isView ? '' : `
+        <button class="btn btn-icon btn-sm" type="button" data-option-menu-open="${groupId}" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с вариантом"><i class="fas fa-ellipsis-h" aria-hidden="true"></i></button>
+        <div class="product-footer-more-dropdown product-option-actions-menu hidden" role="menu">
+          ${isEdit && product?.id ? `<button class="product-footer-more-dropdown-item" type="button" data-product-variant-values-open="${groupId}" role="menuitem"><i class="fas fa-sliders-h" aria-hidden="true"></i><span>Настройки варианта</span></button>` : ''}
+          <button class="product-footer-more-dropdown-item" type="button" data-variant-edit="${groupId}" role="menuitem"><i class="fas fa-pen" aria-hidden="true"></i><span>Изменить общий вариант</span></button>
+          <div class="product-footer-more-dropdown-sep" role="separator"></div>
+          <button class="product-footer-more-dropdown-item" type="button" data-variant-delete="${groupId}" role="menuitem"><i class="fas fa-unlink" aria-hidden="true"></i><span>Убрать вариант из товара</span></button>
+        </div>`;
 
       ui.variantAccordion.innerHTML = `
         <div class="acc-item" data-variant-group="${groupId}">
@@ -19060,6 +19895,7 @@ const isViewMode = state.comboPanel.mode === "view";
       `;
 
       bindAccordionContainer(ui.variantAccordion);
+      if (!isView) bindProductGroupActionMenus(ui.variantAccordion);
 
       if (!isView) {
         ui.variantAccordion.querySelectorAll("[data-product-variant-values-open]").forEach((btn) => {
@@ -19088,18 +19924,7 @@ const isViewMode = state.comboPanel.mode === "view";
         ui.variantAccordion.querySelectorAll("[data-variant-delete]").forEach((btn) => {
           btn.addEventListener("click", async (e) => {
             e.stopPropagation();
-            if (isEdit && product && product.id) {
-              for (const assignment of draft.initialVariantAssignments) {
-                if (Number.isFinite(assignment.assignment_id)) {
-                  await apiDeleteVariantAssignment(assignment.assignment_id);
-                }
-              }
-              await refreshProductVariants(product.id);
-            } else {
-              draft.variantGroupId = null;
-              draft.initialVariantGroupId = null;
-              draft.initialVariantAssignments = [];
-            }
+            draft.variantGroupId = null;
             clearCachedProductScopedVariantDetails(groupId);
             renderVariantAccordion();
           });
@@ -19167,6 +19992,7 @@ const isViewMode = state.comboPanel.mode === "view";
         if (inner) bindVariantStarHandlers(inner, groupId);
       }
 
+      applyCompositionPriceValues();
       refreshOpenAccordions();
     }
 
@@ -19177,9 +20003,54 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     if (ui.optionManageBtn && !isView) {
-      ui.optionManageBtn.addEventListener("click", () => {
-        optionPickerSelection = new Set(draft.optionGroups);
-        openOptionPicker();
+      ui.optionManageBtn.addEventListener("click", async () => {
+        ui.optionManageBtn.disabled = true;
+        try {
+          await ensureEditorOptionGroups();
+          if (!ui.optionManageBtn.isConnected) return;
+          optionPickerSelection = new Set(draft.optionGroups);
+          openOptionPicker();
+        } catch (error) {
+          console.error("Failed to load product option groups", error);
+          alert("Не удалось загрузить опции: " + error.message);
+        } finally {
+          ui.optionManageBtn.disabled = false;
+        }
+      });
+    }
+
+    function bindProductGroupActionMenus(container) {
+      container.querySelectorAll('[data-option-menu-open]').forEach(button => {
+        const row = button.closest('.acc-item');
+          const trigger = row.querySelector('[data-acc-trigger]');
+          const menu = row.querySelector('.product-option-actions-menu');
+          // Keep the fixed menu outside the trigger's hover transform.
+          row.appendChild(menu);
+          const openMenu = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const wasOpen = !menu.classList.contains('hidden');
+            closeProductOptionActionMenus();
+            if (wasOpen && event.type !== 'contextmenu') return;
+            syncOptionOrderControls();
+            menu.classList.remove('hidden');
+            button.setAttribute('aria-expanded', 'true');
+            const rect = button.getBoundingClientRect();
+            const x = event.type === 'contextmenu' ? event.clientX : rect.right - menu.offsetWidth;
+            const y = event.type === 'contextmenu' ? event.clientY : rect.bottom + 6;
+            menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+            menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+          };
+          button.addEventListener('click', openMenu);
+          row.addEventListener('contextmenu', openMenu);
+          trigger.addEventListener('keydown', event => {
+            if (event.target !== trigger || !['Enter', ' '].includes(event.key)) return;
+            event.preventDefault();
+            trigger.click();
+          });
+          menu.addEventListener('click', event => {
+            if (event.target.closest('button:not(:disabled)')) closeProductOptionActionMenus();
+          }, true);
       });
     }
 
@@ -19263,7 +20134,41 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     function bindOptionSettingControls(container, { includeRemove = false } = {}) {
+      container.querySelectorAll("[data-option-locked]").forEach(input => {
+        input.addEventListener("change", () => {
+          const [groupId, itemId] = input.dataset.optionLocked.split(":").map(Number);
+          const settings = getOptionSettingDraft(groupId, getCachedProductScopedOptionDetails(groupId));
+          settings.forEach((setting, id) => {
+            if (input.checked) {
+              setting.is_locked = id === itemId;
+              setting.default_selected = id === itemId ? 1 : 0;
+            } else if (id === itemId) setting.is_locked = false;
+          });
+          dirtyOptionSettingGroups.add(groupId);
+          renderOptionAccordion();
+        });
+      });
       if (!container || !isEdit || !product?.id) return;
+      container.querySelectorAll('.option-product-line[data-selection-key]').forEach(row => {
+        const [groupId, itemId] = row.dataset.selectionKey.split(':').map(Number);
+        const details = getCachedProductScopedOptionDetails(groupId);
+        const sourceItem = details?.items?.find(item => Number(item.id) === itemId);
+        const setting = getOptionSettingDraft(groupId, details).get(itemId);
+        if (!sourceItem || !setting) return;
+        row.__productOptionSelection = {
+          item: { ...sourceItem, configuration_json: setting.configuration ?? sourceItem.configuration_json,
+            default_variant_group_id: setting.variant_override_enabled ? setting.default_variant_group_id : sourceItem.effective_default_variant_group_id,
+            default_variant_value_index: setting.variant_override_enabled ? setting.default_variant_value_index : sourceItem.effective_default_variant_value_index },
+          onApply: configuration => {
+            setting.configuration = configuration;
+            setting.variant_override_enabled = Boolean(details.group?.allow_variants);
+            setting.default_variant_group_id = setting.variant_override_enabled ? configuration.variant_group_id : null;
+            setting.default_variant_value_index = setting.variant_override_enabled ? configuration.variant_value_index : null;
+            dirtyOptionSettingGroups.add(groupId);
+            applyCompositionPriceValues();
+          },
+        };
+      });
       container.querySelectorAll("[data-option-default]").forEach((input) => {
         input.addEventListener("change", () => {
           const [groupId, itemId] = String(input.dataset.optionDefault || "").split(":").map(Number);
@@ -19271,6 +20176,10 @@ const isViewMode = state.comboPanel.mode === "view";
           const settings = getOptionSettingDraft(groupId, details);
           const group = state.optionGroups.find((row) => Number(row.id) === groupId);
           if (!settings?.has(itemId) || !group) return;
+          if (Array.from(settings.values()).some(setting => setting.is_locked)) {
+            renderOptionAccordion();
+            return;
+          }
           if (input.checked && group.selection_type === "multiple" && group.max_select != null) {
             const max = Number(group.max_select);
             const selectedCount = (details?.items || []).filter((item) => {
@@ -19351,6 +20260,15 @@ const isViewMode = state.comboPanel.mode === "view";
         return;
       }
 
+      await Promise.all(selected.map(async group => {
+        const cachedDetails = getCachedProductScopedOptionDetails(group.id);
+        if (cachedDetails && !cachedDetails.passport_snapshot) return;
+        const details = await ensureOptionGroupDetails(group.id, { productId: product?.id || null });
+        if (details) setCachedProductScopedOptionDetails(group.id, details);
+      }));
+      await ensureSelectionProducts(selected.flatMap(group =>
+        (getCachedProductScopedOptionDetails(group.id)?.items || []).map(item => Number(item.target_product_id))
+      ).filter(id => id > 0));
       ui.optionAccordion.innerHTML = selected.map((g) => {
         const details = getCachedProductScopedOptionDetails(g.id);
         const settingDraft = details && isEdit && product?.id ? getOptionSettingDraft(g.id, details) : null;
@@ -19359,26 +20277,18 @@ const isViewMode = state.comboPanel.mode === "view";
           groupId: g.id,
           settingDraft,
           allowVariants: Boolean(g.allow_variants),
+          editable: Boolean(isEdit && product?.id),
         }) : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043f\u0443\u043d\u043a\u0442\u044b.</div>`;
-        const actionsHtml = isView
-          ? `<span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>`
-          : `
-            <span class="option-order-buttons">
-              <button class="btn btn-icon btn-sm" type="button" data-option-move-up="${g.id}" title="Выше" aria-label="Переместить ${escapeHtml(g.title || "опцию")} выше" onclick="event.stopPropagation();">
-                <i class="fas fa-chevron-up"></i>
-              </button>
-              <button class="btn btn-icon btn-sm" type="button" data-option-move-down="${g.id}" title="Ниже" aria-label="Переместить ${escapeHtml(g.title || "опцию")} ниже" onclick="event.stopPropagation();">
-                <i class="fas fa-chevron-down"></i>
-              </button>
-            </span>
-            <button class="btn btn-icon btn-sm" type="button" data-option-edit="${g.id}" title="Изменить" onclick="event.stopPropagation();">
-              <i class="fas fa-pen"></i>
-            </button>
-            <button class="btn btn-icon btn-sm" type="button" data-option-delete="${g.id}" title="Удалить" onclick="event.stopPropagation();">
-              <i class="fas fa-trash"></i>
-            </button>
-            <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
-          `;
+        const actionsHtml = isView ? '' : `
+          <button class="btn btn-icon btn-sm" type="button" data-option-menu-open="${g.id}" aria-label="Действия с опцией" aria-haspopup="menu" aria-expanded="false"><i class="fas fa-ellipsis-h" aria-hidden="true"></i></button>
+          <div class="product-footer-more-dropdown product-option-actions-menu hidden" role="menu">
+            <button class="product-footer-more-dropdown-item" type="button" data-option-items-picker-open="${g.id}" role="menuitem"><i class="fas fa-sliders-h" aria-hidden="true"></i><span>Настройки опции</span></button>
+            <button class="product-footer-more-dropdown-item" type="button" data-option-move-up="${g.id}" role="menuitem"><i class="fas fa-arrow-up" aria-hidden="true"></i><span>Переместить выше</span></button>
+            <button class="product-footer-more-dropdown-item" type="button" data-option-move-down="${g.id}" role="menuitem"><i class="fas fa-arrow-down" aria-hidden="true"></i><span>Переместить ниже</span></button>
+            <button class="product-footer-more-dropdown-item" type="button" data-option-edit="${g.id}" role="menuitem"><i class="fas fa-pen" aria-hidden="true"></i><span>Изменить общую опцию</span></button>
+            <div class="product-footer-more-dropdown-sep" role="separator"></div>
+            <button class="product-footer-more-dropdown-item" type="button" data-option-delete="${g.id}" role="menuitem"><i class="fas fa-unlink" aria-hidden="true"></i><span>Убрать опцию из товара</span></button>
+          </div>`;
         return `
           <div class="acc-item" data-option-group="${g.id}">
             <div class="stage-item acc-trigger" role="button" tabindex="0" data-acc-trigger>
@@ -19400,7 +20310,9 @@ const isViewMode = state.comboPanel.mode === "view";
       }).join("");
 
       bindAccordionContainer(ui.optionAccordion);
+      bindOptionSettingControls(ui.optionAccordion);
       if (!isView) {
+        bindProductGroupActionMenus(ui.optionAccordion);
         ui.optionAccordion.querySelectorAll("[data-option-move-up], [data-option-move-down]").forEach((button) => {
           button.addEventListener("click", (event) => {
             event.stopPropagation();
@@ -19422,26 +20334,13 @@ const isViewMode = state.comboPanel.mode === "view";
       syncOptionOrderControls();
 
       if (!isView) {
-        if (isEdit && product && product.id) {
-          ui.optionAccordion.querySelectorAll(".acc-item").forEach((item) => {
-            const groupId = Number(item.dataset.optionGroup);
-            if (!Number.isFinite(groupId) || groupId <= 0) return;
-            const actionsEl = item.querySelector(".option-actions-inline");
-            if (!actionsEl || actionsEl.querySelector(`[data-option-items-picker-open="${groupId}"]`)) return;
-            const addBtn = document.createElement("button");
-            addBtn.className = "btn btn-icon btn-sm";
-            addBtn.type = "button";
-            addBtn.dataset.optionItemsPickerOpen = String(groupId);
-            addBtn.title = "Настройки опции";
-            addBtn.setAttribute("aria-label", "Настройки опции");
-            addBtn.innerHTML = '<i class="fas fa-plus"></i>';
-            addBtn.addEventListener("click", async (e) => {
-              e.stopPropagation();
-              await openProductOptionItemsPicker(groupId);
-            });
-            actionsEl.prepend(addBtn);
+        ui.optionAccordion.querySelectorAll('[data-option-items-picker-open]').forEach(button => {
+          button.classList.toggle('hidden', !(isEdit && product?.id));
+          button.addEventListener('click', async event => {
+            event.stopPropagation();
+            await openProductOptionItemsPicker(Number(button.dataset.optionItemsPickerOpen));
           });
-        }
+        });
 
         // Handle Edit button
         ui.optionAccordion.querySelectorAll("[data-option-edit]").forEach((btn) => {
@@ -19469,24 +20368,9 @@ const isViewMode = state.comboPanel.mode === "view";
             const id = Number(btn.dataset.optionDelete);
             if (!Number.isFinite(id)) return;
             
-            if (isEdit && product && product.id) {
-              // For existing products: delete via API
-              try {
-                await apiDisableProductOptionAssignment(product.id, id);
-                draft.optionGroups.delete(id);
-                draft.initialOptionGroups.delete(id);
-                clearCachedProductScopedOptionDetails(id);
-                renderOptionAccordion();
-              } catch (e) {
-                console.error('Failed to delete option', e);
-                alert('Ошибка при удалении опции');
-              }
-            } else {
-              // For new products: just remove from draft
-              draft.optionGroups.delete(id);
-              clearCachedProductScopedOptionDetails(id);
-              renderOptionAccordion();
-            }
+            draft.optionGroups.delete(id);
+            clearCachedProductScopedOptionDetails(id);
+            await renderOptionAccordion();
           });
         });
 
@@ -19519,6 +20403,7 @@ const isViewMode = state.comboPanel.mode === "view";
         });
       });
 
+      applyCompositionPriceValues();
       refreshOpenAccordions();
     }
 
@@ -20550,6 +21435,13 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         updatePcsLinkVisibility();
         updatePcsToUnitVisibility();
+        syncPortionUnit();
+        preorderEditor.bindSelect('#peBaseUnitSelect', 'Единица измерения', [
+          ['', '—'], ...unitsList.map(unit => [String(unit.id), unit.title || unit.short_title || unit.code]),
+        ], value => {
+          ui.baseUnitSelect.value = value;
+          ui.baseUnitSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }, String(ui.baseUnitSelect.value));
       } catch (e) {
         advancedHydrationFailed = true;
         console.error('Failed to load units', e);
@@ -20863,6 +21755,7 @@ const isViewMode = state.comboPanel.mode === "view";
           ingredientPriceTotalEl.value = displayValue;
         }
       }
+      applyCompositionPriceValues();
     }
 
     // Обновление отображения суммы веса состава
@@ -21955,12 +22848,27 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
 
+    function syncPortionUnit() {
+      const unit = unitsList.find(row => Number(row.id) === Number(ui.baseUnitSelect?.value));
+      const portion = ['portion', 'serving'].includes(String(unit?.code || '').toLowerCase())
+        || String(unit?.title || '').trim().toLowerCase() === 'порция';
+      if (ui.baseQtyInput) {
+        ui.baseQtyInput.readOnly = isView || portion;
+        if (portion) {
+          ui.baseQtyInput.value = '1';
+          draft.valueSources.base_qty = 'manual';
+        }
+      }
+    }
+
     if (ui.baseUnitSelect && !isView) {
       ui.baseUnitSelect.addEventListener("change", () => {
+        syncPortionUnit();
         updatePcsLinkVisibility();
         updatePcsToUnitVisibility();
         updateWeightTotalDisplayGlobal();
         syncDraftNutritionFromIngredients();
+        applyCompositionPriceValues();
       });
     }
     [ui.baseQtyInput, ui.pcsFactorInput, ui.pcsToUnitFactorInput, ui.pcsToUnitSelect].forEach((input) => {
@@ -21972,7 +22880,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     // init UI after categories loaded (for edit/view)
     const hydrationForegroundToken = window.CatalogRepository?.beginForegroundWork?.();
-    (async () => {
+    editorDataReady = (async () => {
       const markSectionError = (selector, message) => {
         const section = $(selector, wrapper);
         if (section) section.innerHTML = `<div class="empty-hint">${message}</div>`;
@@ -21984,7 +22892,7 @@ const isViewMode = state.comboPanel.mode === "view";
           markSectionError("#peCategoryChips", "Не удалось загрузить категории");
         });
       const optionsReady = loadOptionsPromise
-        .then((started) => { if (started !== false) renderOptionAccordion(); })
+        .then((started) => { if (started !== false) return renderOptionAccordion(); })
         .catch(() => {
           advancedHydrationFailed = true;
           markSectionError("#peOptionAccordion", "Не удалось загрузить опции");
@@ -22072,6 +22980,8 @@ const isViewMode = state.comboPanel.mode === "view";
         updatePricePlaceholderGlobal();
         updateWeightTotalDisplayGlobal();
       }
+      optionPricingReady = !advancedHydrationFailed;
+      if (optionPricingReady) applyCompositionPriceValues();
       requestAnimationFrame(refreshOpenAccordions);
     })().finally(() => {
       if (hydrationForegroundToken != null) window.CatalogRepository?.endForegroundWork?.(hydrationForegroundToken);
@@ -23178,6 +24088,15 @@ const isViewMode = state.comboPanel.mode === "view";
   // ---------------- Events ----------------
 
   function bindEvents() {
+    document.addEventListener('pointerdown', event => {
+      if (!event.target.closest('.product-option-actions-menu, [data-option-menu-open]')) closeProductOptionActionMenus();
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeProductOptionActionMenus();
+    });
+    document.addEventListener('wheel', event => {
+      if (!event.target.closest('.product-option-actions-menu')) closeProductOptionActionMenus();
+    }, { passive: true });
     if (productsCatalogMenuButton && productsCatalogMenu) {
       productsCatalogMenuButton.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -23663,6 +24582,10 @@ const isViewMode = state.comboPanel.mode === "view";
           });
           return;
         }
+        if (view === "badges") {
+          enterBadgesMode();
+          return;
+        }
         if (view === "auto-add") {
           enterAutoAddMode();
           return;
@@ -23782,41 +24705,7 @@ const isViewMode = state.comboPanel.mode === "view";
       editProductBtn.addEventListener("click", async () => {
         // Check if we're in edit mode
         if (currentNavigationState?.type === "product-edit") {
-          // Save changes
-          if (currentNavigationState?.onSave) {
-            // Get productId before clearing state
-            const productId = currentNavigationState?.product?.id;
-            
-            try {
-              const result = await currentNavigationState.onSave();
-              if (result === true) {
-                // Save successful - onSave handles navigation and clears navigation stack
-                // Clear currentNavigationState since onSave calls clearNavigationStack()
-                currentNavigationState = null;
-                
-                // Remove from editing state if it was stored
-                if (productId && editingProducts.has(productId)) {
-                  editingProducts.delete(productId);
-                }
-                
-                // Ensure button icon is updated to edit mode (pencil)
-                if (editProductBtn) {
-                  editProductBtn.innerHTML = '<i class="fas fa-pen"></i>';
-                  editProductBtn.title = "Редактировать";
-                  editProductBtn.setAttribute("aria-label", "Редактировать");
-                }
-              } else {
-                // Save failed - result is false
-                console.warn('Save returned false, check form validation or errors');
-              }
-            } catch (e) {
-              console.error('Error saving product', e);
-              alert('Ошибка при сохранении товара: ' + (e.message || 'Неизвестная ошибка'));
-            }
-          } else {
-            console.error('onSave function not found in navigationState');
-            alert('Ошибка: функция сохранения не найдена');
-          }
+          $("#productFooterSaveBtn")?.click();
         } else {
           // Open editor
           // Если сейчас открыт экран опций/вариантов (и кнопка по какой-то причине видима),
@@ -24164,7 +25053,7 @@ const isViewMode = state.comboPanel.mode === "view";
                 const block = r.data;
                 state.comboBlockDraft = { title: block.title, sort_order: block.sort_order ?? 0, min_select: block.min_select ?? 1, max_select: block.max_select ?? 1 };
                 state.comboBlockProducts = Array.isArray(block.products)
-                  ? block.products.map((p) => ({ product_id: p.product_id, name: p.product_name || p.name, sort_order: p.sort_order ?? 0, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? 0, has_variants: p.has_variants ? 1 : 0, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }))
+                  ? block.products.map((p) => ({ product_id: p.product_id, name: p.product_name || p.name, sort_order: p.sort_order ?? 0, is_default: p.is_default ? 1 : 0, photo: p.product_photo || null, price: p.product_price ?? 0, has_variants: p.has_variants ? 1 : 0, configuration_json: p.configuration_json ?? null, has_changeable_composition: p.has_changeable_composition ? 1 : 0 }))
                   : [];
                 state.comboPanel.mode = "view";
                 showComboBlockDetails({ block: state.comboBlockDraft, products: state.comboBlockProducts }, { mode: "view" });
@@ -24205,20 +25094,7 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         // Normal product edit cancel
         if (currentNavigationState?.type === "product-edit") {
-          if (currentNavigationState?.onClose) {
-            currentNavigationState.onClose();
-          }
-          const navState = currentNavigationState;
-          if (navState?.product?.id && editingProducts.has(navState.product.id)) {
-            editingProducts.delete(navState.product.id);
-          }
-          clearNavigationStack();
-          if (navState?.isEdit && navState?.product) {
-            const p = state.products.find(pr => pr.id === navState.product.id);
-            if (p) {
-              showProductDetails(p);
-            }
-          }
+          closeTab(currentNavigationState.tabKey || tabsState.activeKey);
         }
       }, "Отменить");
     }
@@ -24347,11 +25223,22 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         // Auto-add edit/create save
         if (state.mode === "auto-add" && (state.autoAddPanel.mode === "edit" || state.autoAddPanel.mode === "create")) {
+          if (footerSaveBtn.dataset.saving === "1") return;
+          const savedButtonContent = footerSaveBtn.innerHTML;
+          footerSaveBtn.dataset.saving = "1";
+          footerSaveBtn.disabled = true;
+          footerSaveBtn.setAttribute("aria-busy", "true");
+          footerSaveBtn.innerHTML = '<span class="shop-checkout-sending-spinner" aria-hidden="true" style="display:inline-block;width:16px;height:16px;border-width:2px;border-color:rgba(255,255,255,.35);border-top-color:currentColor;vertical-align:middle;margin:0 8px 0 0"></span>Сохраняем…';
           try {
             await saveAutoAddGroup();
           } catch (e) {
             console.error("Error saving auto-add", e);
             alert("Ошибка при сохранении автодобавления: " + (e.message || "Неизвестная ошибка"));
+          } finally {
+            delete footerSaveBtn.dataset.saving;
+            footerSaveBtn.disabled = false;
+            footerSaveBtn.removeAttribute("aria-busy");
+            footerSaveBtn.innerHTML = savedButtonContent;
           }
           return;
         }
@@ -24380,23 +25267,26 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         // Normal product edit save
         if (currentNavigationState?.type === "product-edit" && currentNavigationState?.onSave) {
-          const productId = currentNavigationState?.product?.id;
+          if (footerSaveBtn.disabled) return;
+          const editor = currentNavigationState;
+          footerSaveBtn.disabled = true;
+          footerSaveBtn.setAttribute('aria-busy', 'true');
+          footerSaveBtn.textContent = 'Сохранение…';
           try {
-            const result = await currentNavigationState.onSave();
+            const result = await editor.onSave();
             if (result === true) {
-              currentNavigationState = null;
-              if (productId && editingProducts.has(productId)) {
-                editingProducts.delete(productId);
-              }
-              if (editProductBtn) {
-                editProductBtn.innerHTML = '<i class="fas fa-pen"></i>';
-                editProductBtn.title = "Редактировать";
-                editProductBtn.setAttribute("aria-label", "Редактировать");
-              }
-            }
+              footerSaveBtn.textContent = 'Сохранено';
+              setTimeout(() => {
+                if (footerSaveBtn.textContent === 'Сохранено') footerSaveBtn.textContent = 'Сохранить';
+              }, 1800);
+            } else footerSaveBtn.textContent = 'Сохранить';
           } catch (e) {
             console.error('Error saving product', e);
             alert('Ошибка при сохранении товара: ' + (e.message || 'Неизвестная ошибка'));
+            footerSaveBtn.textContent = 'Сохранить';
+          } finally {
+            footerSaveBtn.disabled = false;
+            footerSaveBtn.removeAttribute('aria-busy');
           }
         }
       });
@@ -24534,9 +25424,14 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     if (autoAddItemsAddBtn) {
-      autoAddItemsAddBtn.addEventListener("click", () => {
+      autoAddItemsAddBtn.addEventListener("click", async () => {
         if (state.autoAddPanel.mode === "create" || state.autoAddPanel.mode === "edit") {
-          openAutoAddPicker();
+          try {
+            await openOptionPicker("auto-add", { context: "auto-add" });
+          } catch (error) {
+            console.error("Failed to open auto-add catalog", error);
+            showToast("Не удалось загрузить каталог товаров.");
+          }
         }
       });
     }
@@ -24659,6 +25554,41 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     if (autoAddGroupForm) {
+      autoAddGroupForm.querySelectorAll(".auto-add-limit-help").forEach(limitHelp => {
+        let closeTimer;
+        const closeHelp = () => {
+          clearTimeout(closeTimer);
+          limitHelp.open = false;
+          document.removeEventListener("pointerdown", onOutsidePress, true);
+          document.removeEventListener("keydown", onHelpKeydown);
+        };
+        const onOutsidePress = event => {
+          if (!limitHelp.contains(event.target)) closeHelp();
+        };
+        const onHelpKeydown = event => {
+          if (event.key === "Escape") closeHelp();
+        };
+        limitHelp.addEventListener("toggle", () => {
+          clearTimeout(closeTimer);
+          if (!limitHelp.open) {
+            closeHelp();
+            return;
+          }
+          const popup = limitHelp.querySelector('small');
+          const anchor = limitHelp.querySelector('summary');
+          if (popup && anchor) {
+            const rect = anchor.getBoundingClientRect();
+            popup.style.position = 'fixed';
+            popup.style.right = 'auto';
+            popup.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 12))}px`;
+            popup.style.top = `${Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - popup.offsetHeight - 12))}px`;
+            popup.style.zIndex = '10000';
+          }
+          closeTimer = setTimeout(closeHelp, 5000);
+          document.addEventListener("pointerdown", onOutsidePress, true);
+          document.addEventListener("keydown", onHelpKeydown);
+        });
+      });
       autoAddGroupForm.addEventListener("input", () => {
         syncAutoAddDraftGroupFromForm();
         persistAutoAddEditState();
@@ -26296,7 +27226,7 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     const onlineProductsLoaded = await onlineProductsStartupPromise;
     if (navigator.onLine && !onlineProductsLoaded) setProductsCatalogConnectionState("offline");
-    enterProductsMode(state.currentCategoryId);
+    if (!tabsState.activeKey && !currentNavigationState) enterProductsMode(state.currentCategoryId);
     if (window.CatalogRepository) await window.CatalogRepository.startSync();
     schedulePersistProductsCache(0);
 

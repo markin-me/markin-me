@@ -3205,7 +3205,7 @@ function buildProductDetailsContent(
   actionBtn.type = "button";
   actionBtn.className = "shop-checkout-btn shop-pd-action";
 
-  footer.appendChild(qtyWrap);
+  if (qtyPill?.pill) footer.appendChild(qtyWrap);
   footer.appendChild(actionBtn);
   wrap.appendChild(footer);
 

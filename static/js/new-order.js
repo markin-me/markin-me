@@ -914,7 +914,7 @@
     const noAutofillReadonly = window.matchMedia("(max-width: 768px)").matches ? "" : "readonly";
     const renderCartThumb = (item) => {
       const photos = Array.isArray(item?.photos) ? item.photos.filter(Boolean).slice(0, 4) : [];
-      const bogoBadgeText = getNewOrderBuyXGetYBadgeText(item);
+      const bogoBadgeText = Number(item?.auto_add) === 1 ? '' : getNewOrderBuyXGetYBadgeText(item);
       const badgeHtml = bogoBadgeText
         ? `<span class="shop-sheet-discount-badge new-order-cart-bogo-badge">${escapeHtml(bogoBadgeText)}</span>`
         : "";
@@ -1016,6 +1016,7 @@
               const type = String(item?.type || "product");
               const qty = Math.max(1, Number(item?.qty || 1));
               const isGiftReward = isGiftRewardCartItem(item);
+              const fixedGiftComposition = isGiftReward || (Number(item?.auto_add) === 1 && Number(item?.auto_add_rule_version) === 1);
               const qtyEditable = !isGiftReward && isRightOrderAutoQtyEditable(item);
               const autoFreeQty = getRightOrderAutoFreeQty(item);
               const lineState = cartLineStates[itemIndex] || null;
@@ -1064,7 +1065,7 @@
                         const variantValues = values.map((_, idx) => String(formatOptionVariantLabel(detailItem, idx) || "").trim()).filter(Boolean);
                         const variantLabel = values.length
                           ? String(formatOptionVariantLabel(detailItem, selectedVariantIndex) || "").trim()
-                          : "";
+                          : String(opt.variant_label || '').trim();
                         return {
                           key: `opt-${optIndex}`,
                           rowKind: "option",
@@ -1109,150 +1110,9 @@
                     return (Array.isArray(groups) && groups.length > 0) || selectedOptionItems.length > 0;
                   })(),
                 }];
-              const renderCompositionRowHtml = (row) => {
-                const comboLineText = row.rowKind === "combo"
-                  ? [String(row.unitLabel || "").trim(), String(row.productName || "").trim()].filter(Boolean).join(" ").trim()
-                  : "";
-                const baseLineRaw = row.rowKind === "combo"
-                  ? (comboLineText ? `1 x ${comboLineText}` : `1 x ${String(row.productName || "—").trim() || "—"}`)
-                  : (row.unitLabel
-                    ? `${String(row.unitLabel || "").trim()} ${String(row.productName || "").trim()}`.trim()
-                    : (row.rowKind === "option" ? String(row.productName || "").trim() : ""));
-                const baseLine = baseLineRaw ? escapeHtml(baseLineRaw) : "";
-                const cartItemIsCombo = String(item?.type || "") === "combo";
-                const isCheckoutComposedCombo = cartItemIsCombo && Number(item?.combo_id || 0) <= 0;
-                const comboRequireAll = getCartItemCheckoutRequireAll(item);
-                const canRemoveComboSection = row.rowKind === "combo"
-                  && isCheckoutComposedCombo
-                  && comboRequireAll === false
-                  && Number.isFinite(Number(row.sectionIndex))
-                  && Number(row.sectionIndex) >= 0;
-                const canRemoveProductRow = row.rowKind === "product" && row.variantValues.length > 1;
-                const removeBtn = !isGiftReward && (canRemoveProductRow || canRemoveComboSection)
-                  ? `
-                    <button
-                      type="button"
-                      class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
-                      data-action="right-cart-row-remove"
-                      data-order-id="${Number(active?.id || 0)}"
-                      data-cart-item-id="${Number(item?.id || 0)}"
-                      data-row-kind="${row.rowKind}"
-                      data-section-index="${row.sectionIndex}"
-                      aria-label="РЈРґР°Р»РёС‚СЊ РїРѕР·РёС†РёСЋ"
-                      title="РЈРґР°Р»РёС‚СЊ РїРѕР·РёС†РёСЋ"
-                    >×</button>
-                  `
-                  : "";
-                const optionIcon = row.rowKind === "option" && !isGiftReward
-                  ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="РћРїС†РёРё С‚РѕРІР°СЂР°"><i class="fas fa-sliders-h"></i></button>`
-                  : "";
-                const productOptionIcon = row.rowKind === "product" && row.hasOptions && !isGiftReward
-                  ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="РћРїС†РёРё С‚РѕРІР°СЂР°"><i class="fas fa-sliders-h"></i></button>`
-                  : "";
-                const chips = row.variantValues.length > 1 && !isGiftReward
-                  ? `
-                    <div class="new-order-right-cart-variant-scroll no-scrollbar">
-                      <div class="new-order-right-cart-variant-row">
-                        ${row.rowKind === "option" ? "" : `${removeBtn}${productOptionIcon}`}
-                        ${row.variantValues.map((label, variantIndex) => `
-                          <button
-                            type="button"
-                            class="new-order-right-cart-variant-chip ${variantIndex === row.selectedVariantIndex ? "is-selected" : ""}"
-                            data-action="right-cart-variant-select"
-                            data-order-id="${Number(active?.id || 0)}"
-                            data-cart-item-id="${Number(item?.id || 0)}"
-                            data-row-kind="${row.rowKind}"
-                            data-section-index="${row.sectionIndex}"
-                            data-option-index="${Number(row.optionIndex || 0)}"
-                            data-variant-index="${variantIndex}"
-                          >${escapeHtml(label)}</button>
-                        `).join("")}
-                      </div>
-                    </div>
-                  `
-                  : "";
-                const optionQtyControls = row.rowKind === "option" && row.showQtyControls && !isGiftReward
-                  ? `
-                    <div class="new-order-right-cart-ing-controls">
-                      <button type="button" class="new-order-right-cart-ing-btn${row.canMinus ? "" : " is-disabled"}" data-action="right-cart-option-qty-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">−</button>
-                      <span class="new-order-right-cart-ing-qty">${Number(row.optionQty || 0)}</span>
-                      <button type="button" class="new-order-right-cart-ing-btn${row.canPlus ? "" : " is-disabled"}" data-action="right-cart-option-qty-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">+</button>
-                    </div>
-                  `
-                  : "";
-                const optionRemoveBtn = row.rowKind === "option" && !isGiftReward
-                  ? `
-                    <button
-                      type="button"
-                      class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
-                      data-action="right-cart-option-remove"
-                      data-order-id="${Number(active?.id || 0)}"
-                      data-cart-item-id="${Number(item?.id || 0)}"
-                      data-option-index="${Number(row.optionIndex || 0)}"
-                      aria-label="РЈРґР°Р»РёС‚СЊ РѕРїС†РёСЋ"
-                      title="РЈРґР°Р»РёС‚СЊ РѕРїС†РёСЋ"
-                    >×</button>
-                  `
-                  : "";
-                const ingredientRows = Array.isArray(row.ingredients) ? row.ingredients : [];
-                const ingredientsHtml = ingredientRows.length
-                  ? `
-                    <div class="new-order-right-cart-ingredients">
-                      ${ingredientRows.map((ing, ingIndex) => {
-                        const ingName = String(ing?.ingredient_name || "").trim();
-                        const qty = Number(ing?.qty || 0);
-                        const unitLabel = String(ing?.unit_label || "").trim();
-                        if (isGiftReward) {
-                          return `
-                            <div class="new-order-right-cart-ing-row">
-                              <div class="new-order-right-cart-ing-qty">${escapeHtml(String(qty))}${unitLabel ? ` ${escapeHtml(unitLabel)}` : ""}</div>
-                              <div class="new-order-right-cart-ing-name" title="${escapeHtml(ingName)}">${escapeHtml(ingName)}</div>
-                            </div>
-                          `;
-                        }
-                        const min = Number(ing?.qty_min ?? 0);
-                        const max = Number(ing?.qty_max ?? qty);
-                        const canMinus = qty > min;
-                        const canPlus = qty < max;
-                        return `
-                          <div class="new-order-right-cart-ing-row">
-                            <div class="new-order-right-cart-ing-controls">
-                              <button type="button" class="new-order-right-cart-ing-btn${canMinus ? "" : " is-disabled"}" data-action="right-cart-ingredient-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">−</button>
-                              <span class="new-order-right-cart-ing-qty">${escapeHtml(String(qty))}${unitLabel ? ` ${escapeHtml(unitLabel)}` : ""}</span>
-                              <button type="button" class="new-order-right-cart-ing-btn${canPlus ? "" : " is-disabled"}" data-action="right-cart-ingredient-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">+</button>
-                            </div>
-                            <div class="new-order-right-cart-ing-name" title="${escapeHtml(ingName)}">${escapeHtml(ingName)}</div>
-                          </div>
-                        `;
-                      }).join("")}
-                    </div>
-                  `
-                  : "";
-                const optionTitle = row.rowKind === "option"
-                  ? `<div class="new-order-right-cart-option-title">${
-                      row.showQtyControls
-                        ? `${escapeHtml(String(Number(row.optionQty || 0)))} ${baseLine || escapeHtml(row.productName || "")}`
-                        : (baseLine || escapeHtml(row.productName || ""))
-                    }</div>`
-                  : "";
-                const optionControlsRow = row.rowKind === "option"
-                  ? `
-                    <div class="new-order-right-cart-option-controls-row">
-                      ${optionRemoveBtn}
-                      ${optionIcon}
-                      ${row.showQtyControls ? optionQtyControls : chips}
-                    </div>
-                  `
-                  : "";
-                const productControlsRow = row.rowKind !== "option" && row.variantValues.length <= 1 && !isGiftReward && (removeBtn || productOptionIcon)
-                  ? `<div class="new-order-right-cart-option-controls-row">${removeBtn}${productOptionIcon}</div>`
-                  : "";
-                const rowClass = row.rowKind === "combo"
-                  ? "new-order-right-cart-composition-row new-order-right-cart-combo-row"
-                  : "new-order-right-cart-composition-row";
-                const comboTitleClass = row.rowKind === "combo" ? "new-order-right-cart-combo-title" : "";
-                return `<div class="${rowClass}">${row.rowKind === "option" ? `${optionTitle}${optionControlsRow}` : (baseLine ? `<div class="${comboTitleClass}">${baseLine}</div>` : "")}${row.rowKind === "option" ? "" : `${chips}${productControlsRow}`}${ingredientsHtml}</div>`;
-              };
+              const renderCompositionRowHtml = row => window.SharedProductDetails.renderCompositionRow(row, {
+                item, active, isGiftReward, fixedGiftComposition, getCartItemCheckoutRequireAll, escapeHtml,
+              });
               const compositionBodyHtml = type === "combo" && compositionRows.length
                 ? `
                   ${compositionRows.map((row, idx) => `
@@ -1344,12 +1204,12 @@
                     ` : `
                     <div class="qty-pill qty-pill--muted new-order-right-cart-qty" data-qty-wrap>
                       <button
-                        class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable) ? " is-disabled" : ""}"
+                        class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable || Number(item?.auto_add_rule_version) === 1) ? " is-disabled" : ""}"
                         type="button"
                         data-action="right-cart-qty-minus"
                         data-order-id="${Number(active?.id || 0)}"
                         data-cart-item-id="${Number(item?.id || 0)}"
-                        ${qtyEditable ? "" : "disabled aria-disabled=\"true\""}
+                        ${qtyEditable && Number(item?.auto_add_rule_version) !== 1 ? "" : "disabled aria-disabled=\"true\""}
                       >−</button>
                       <span class="qty-pill__center" data-qty-value>${qty}</span>
                       <button
@@ -1364,7 +1224,7 @@
                     `}
                   </div>
                   <div class="new-order-right-cart-item-main">
-                    <div class="new-order-right-cart-item-title">${qty} × ${escapeHtml(title)}</div>
+                    <div class="new-order-right-cart-item-title">${Number(item?.auto_add) === 1 && Number(item?.auto_add_rule_version) === 1 ? '<i class="fas fa-gift" aria-label="Подарок"></i> ' : ''}${qty} × ${escapeHtml(title)}</div>
                     ${(() => {
                       const preorder = item.type === 'combo'
                         ? preorderAvailability?.data?.combos?.find(combo => Number(combo.combo_id) === Number(item.combo_id))
@@ -1699,16 +1559,20 @@
 
   async function loadRightAutoAdd(opts = {}) {
     const force = opts?.force === true;
-    if (state.autoAddLoaded && !force) return;
+    const order = opts.order || state.rightOrders.find(row => Number(row.id) === Number(state.rightActiveOrderId));
+    const storeId = order ? getRightPreorderRequest(order).storeId : getStoreIdFromStorage();
+    if (state.autoAddLoaded && !force && state.autoAdd.storeId === storeId) return;
     if (state.autoAddLoadPromise) return state.autoAddLoadPromise;
     state.autoAddLoadPromise = (async () => {
       try {
-        const json = await apiJson("/api/public/auto-add");
+        const json = opts.data ? { data: opts.data } : await apiJson(`/api/public/auto-add?fulfillment_store_id=${storeId}`);
         const groups = Array.isArray(json?.data?.groups) ? json.data.groups : [];
         const items = Array.isArray(json?.data?.items) ? json.data.items : [];
 
         state.autoAdd.groups = groups;
         state.autoAdd.items = items;
+        state.autoAdd.timezone = Number(json.data?.timezone || 0);
+        state.autoAdd.storeId = Number(json.data?.store_id || storeId);
         state.autoAdd.byGroupId = new Map(
           groups
             .map((g) => [Number(g?.id || 0), g])
@@ -1761,7 +1625,8 @@
           await ensureNewOrderProductDetails(preloadProducts.map((product) => product.id));
         }
         state.autoAddLoaded = true;
-      } catch {
+      } catch (error) {
+        if (force) throw error;
         const hasCachedRules = Array.isArray(state.autoAdd?.groups) && state.autoAdd.groups.length
           || (Array.isArray(state.autoAdd?.items) && state.autoAdd.items.length);
         if (!hasCachedRules) {
@@ -2993,6 +2858,7 @@
 
   function calcRightAutoFreeQty(rule, baseTotal) {
     if (!rule) return 0;
+    if (Number(rule.group?.rule_version) === 1) return window.SharedProductRuntime.autoAddFreeQty(rule, baseTotal);
     let freeQty = Math.max(0, parseRightAutoRuleAmount(rule.free_first_qty));
     const amountStep = parseRightAutoRuleAmount(rule.free_per_amount);
     const stepQty = Math.max(0, parseRightAutoRuleAmount(rule.free_per_amount_qty));
@@ -3057,12 +2923,12 @@
     });
   }
 
-  function buildPlainAutoAddCartItem(productId, qty) {
+  function buildPlainAutoAddCartItem(productId, qty, configurationAvailable = false) {
     const pid = Number(productId || 0);
     if (!(pid > 0)) return null;
     const product = getProductById(pid);
     if (!product) return null;
-    if (!isProductAvailableFlag(product)) return null;
+    if (!configurationAvailable && !isProductAvailableFlag(product)) return null;
     const safeQty = Math.max(1, Number(qty || 1));
     const productVariants = state.productVariants.get(pid) || [];
     const primaryVariantGroup = productVariants[0] || null;
@@ -3177,6 +3043,7 @@
         return sum + roundPrice(unitBefore * qty);
       }
       if (Number(item?.auto_add || 0) === 1) return sum;
+      if (Number(getRightAutoRuleByProductId(item?.product_id)?.group?.rule_version) === 1) return sum;
       const parts = getRightAutoItemUnitParts(item);
       return sum + roundPrice(parts.baseUnit * qty);
     }, 0);
@@ -3234,7 +3101,7 @@
     const paidQty = Math.max(0, qty - freeQty);
     next.auto_add = 1;
     next.auto_add_group_id = Number(next?.auto_add_group_id || rule.group_id || 0) || null;
-    next.auto_add_free_qty = Math.max(0, freeQty);
+    next.auto_add_free_qty = Math.max(0, Math.min(qty, freeQty));
     next.auto_add_paid_qty = paidQty;
     next.unit_price_before_discount = unitPrice;
     next.unit_price = unitPrice;
@@ -3300,7 +3167,15 @@
       .filter((item) => item && Math.max(0, Number(item?.qty || 0)) > 0);
 
     const groups = Array.isArray(state.autoAdd?.groups) ? state.autoAdd.groups : [];
-    const rules = Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [];
+    const order = state.rightOrders.find(row => Number(row.id) === orderNum);
+    const form = order?.form;
+    const rules = window.SharedProductRuntime.resolveAutoAddRules(groups, state.autoAdd?.items || [], {
+      timezone: state.autoAdd.timezone,
+      scheduledAt: getCookWhenKind(form?.cookWhen) === 'on_date' ? form?.scheduledDate : null,
+      createdAt: order?.autoAddCreatedAt || null,
+    });
+    state.autoAdd.byProductId = new Map(rules.map(rule => [Number(rule.product_id), rule]));
+    cartItems = cartItems.filter(item => Number(item.auto_add_rule_version) !== 1 || state.autoAdd.byProductId.has(Number(item.product_id)));
     if (!groups.length || !rules.length) {
       clearRightAutoAddDismissedIfCartEmpty(orderNum, cartItems);
       return cartItems.map((item) => applyRightAutoPricingToCartItem(item, null));
@@ -3311,6 +3186,7 @@
       if (!qty) return false;
       if (isGiftRewardCartItem(item)) return false;
       if (String(item?.type || "") === "combo") return true;
+      if (rules.some(rule => Number(rule.group?.rule_version) === 1 && Number(rule.product_id) === Number(item.product_id))) return false;
       return Number(item?.auto_add || 0) !== 1;
     });
 
@@ -3369,20 +3245,25 @@
       }
 
       const allowQty = Number(group?.allow_customer_qty ?? 1) === 1;
+      let freeBudget = group.remaining_qty == null ? Infinity : Number(group.remaining_qty);
+      if (Number.isFinite(freeBudget)) freeBudget += Number(order?.autoAddIssuedByGroup?.[Number(group.id)] || 0);
       groupRules.forEach((rule) => {
         const pid = Number(rule?.product_id || 0);
         if (!(pid > 0)) return;
         const product = getProductById(pid);
-        if (product && !isProductAvailableFlag(product)) return;
+        if (product && (rule.configuration_json ? rule.configuration_available !== true : !isProductAvailableFlag(product))) {
+          if (Number(group.rule_version) === 1) cartItems = cartItems.filter(item => !(Number(item.auto_add) === 1 && Number(item.product_id) === pid));
+          return;
+        }
 
-        const matching = cartItems.filter((entry) => String(entry?.type || "") !== "combo" && Number(entry?.product_id || 0) === pid);
+        const matching = cartItems.filter((entry) => String(entry?.type || "") !== "combo" && Number(entry?.product_id || 0) === pid && (Number(group.rule_version) !== 1 || Number(entry?.auto_add) === 1));
         let selected = matching.find((entry) => Number(entry?.auto_add || 0) === 1) || null;
         if (!selected) selected = matching.find((entry) => isRightOrderPlainCartItem(entry)) || null;
         if (!selected && matching.length === 1) selected = matching[0] || null;
 
         const dismissed = isRightAutoAddDismissed(orderNum, groupId, pid);
         if (selected && dismissed) clearRightAutoAddDismissedEntry(orderNum, groupId, pid);
-        if (!selected && dismissed) return;
+        if (!selected && dismissed && Number(group.allow_customer_remove) !== 0) return;
 
         if (selected && Number(selected?.auto_add || 0) !== 1) {
           selected.auto_add = 1;
@@ -3407,10 +3288,14 @@
         const minQty = Math.max(0, Number(rule?.min_qty || 0));
         const defaultQty = Math.max(0, Number(rule?.default_qty || 0));
         const maxQty = rule?.max_qty != null ? Math.max(0, Number(rule.max_qty)) : null;
-        const desiredQty = Math.max(minQty, defaultQty);
+        const isNewRule = Number(group.rule_version) === 1;
+        rule.current_free_limit = null;
+        if (isNewRule) rule.current_free_limit = Math.min(window.SharedProductRuntime.autoAddFreeQty(rule, baseTotal), freeBudget);
+        const desiredQty = isNewRule ? rule.current_free_limit : Math.max(minQty, defaultQty);
+        if (isNewRule) freeBudget -= desiredQty;
 
         if (!selected && desiredQty > 0) {
-          const created = buildPlainAutoAddCartItem(pid, desiredQty);
+          const created = buildPlainAutoAddCartItem(pid, desiredQty, Boolean(rule.configuration_json && rule.configuration_available));
           if (created) {
             created.auto_add = 1;
             created.auto_add_group_id = groupId;
@@ -3420,9 +3305,37 @@
         }
 
         if (!selected) return;
+        if (isNewRule) {
+          selected.auto_add_rule_version = 1;
+          const configuration = typeof rule.configuration_json === 'string' ? JSON.parse(rule.configuration_json) : rule.configuration_json;
+          if (configuration) {
+            const groups = state.productVariants.get(pid) || [];
+            const group = groups.find(row => Number(row.id || row.variant_group_id) === Number(configuration.variant_group_id)) || configuration.variant_group;
+            if (configuration.variant_group_id != null && group) {
+              selected.variant = { ...selected.variant, selected_index: Number(configuration.variant_value_index),
+                label: String(group.values?.[configuration.variant_value_index] ?? ''), values: group.values || [] };
+              selected.pricing = { ...selected.pricing, variant_group: { ...group, default_value_index: Number(configuration.variant_value_index) } };
+            }
+            const defaults = new Map(buildDefaultIngredientsSnapshotForProduct(pid).map(row => [Number(row.ingredient_id), row]));
+            selected.ingredients = (configuration.ingredients || []).map(row => ({ ...defaults.get(Number(row.ingredient_id)), ...row, qty: Number(row.quantity) }));
+            selected.option_items = (configuration.option_items || []).map(row => ({ ...row, label: row.title,
+              variantIndex: row.variant_value_index, basePrice: 0, variantDiff: 0 }));
+          }
+          if (!selected.auto_add_gift) {
+            const extraQty = Math.max(0, Number(selected.qty || 0) - desiredQty);
+            if (extraQty) {
+              const regular = { ...selected, id: Date.now() + Math.floor(Math.random() * 10000), qty: extraQty, auto_add: 0, auto_add_group_id: null, auto_add_rule_version: 0 };
+              delete regular.auto_add_free_qty;
+              delete regular.auto_add_paid_qty;
+              cartItems.push(recalculateCartItemTotals(regular));
+            }
+            selected.auto_add_gift = 1;
+          }
+        }
 
         let nextQty = Math.max(0, Number(selected?.qty || 0));
-        if (!allowQty) {
+        if (isNewRule && allowQty) nextQty = Math.max(nextQty, desiredQty);
+        if (isNewRule || !allowQty) {
           nextQty = desiredQty;
         } else {
           if (minQty > 0 && nextQty < minQty) nextQty = minQty;
@@ -3500,6 +3413,23 @@
     if (index < 0) return false;
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
+    const previousItems = Array.isArray(form.cartItems) ? form.cartItems : [];
+    cartItems = (Array.isArray(cartItems) ? cartItems : []).map(item => ({ ...item }));
+    for (const item of [...cartItems]) {
+      if (Number(item.auto_add) !== 1 || Number(item.auto_add_rule_version) !== 1) continue;
+      const previous = previousItems.find(row => Number(row.id) === Number(item.id));
+      const extra = previous ? Number(item.qty) - Number(previous.qty) : 0;
+      if (!(extra > 0)) continue;
+      const regular = buildPlainAutoAddCartItem(item.product_id, extra);
+      if (!regular) return false;
+      regular.auto_add = 0;
+      regular.auto_add_group_id = null;
+      regular.auto_add_rule_version = 0;
+      const existing = cartItems.find(row => Number(row.auto_add) !== 1 && Number(row.product_id) === Number(item.product_id) && isRightOrderPlainCartItem(row));
+      if (existing) existing.qty = Number(existing.qty) + extra;
+      else cartItems.push(recalculateCartItemTotals(regular));
+      item.qty = previous.qty;
+    }
     form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, cartItems);
     const shouldMarkTouched = String(order?.mode || "").trim().toLowerCase() === "edit";
     const nextOrder = {
@@ -5916,6 +5846,7 @@
   }
 
   function isRightOrderAutoAddItem(item) {
+    if (item?.auto_add != null) return Number(item.auto_add) === 1;
     if (Number(item?.auto_add || 0) === 1) return true;
     const name = String(item?.name || item?.product_name || "").trim().toLowerCase();
     return name === "\u043f\u0440\u0438\u0431\u043e\u0440\u044b";
@@ -7146,13 +7077,13 @@
           if (!(optionId > 0) || !(optionQty > 0)) return null;
           const groupId = Number(opt?.group_id || 0);
           const variantValueIndex = Number.isFinite(Number(opt?.variantIndex)) ? Number(opt.variantIndex) : null;
-          const variantGroupId = resolveOptionItemVariantGroupId(groupId, optionId);
-          let variantLabel = "";
+          const variantGroupId = Number(opt.variant_group_id || 0) || resolveOptionItemVariantGroupId(groupId, optionId);
+          let variantLabel = String(opt.variant_label || '').trim();
           if (variantValueIndex != null) {
             const details = state.optionGroupDetails.get(groupId);
             const detailItems = Array.isArray(details?.items) ? details.items : [];
             const detailItem = detailItems.find((x) => Number(x?.id || 0) === optionId) || null;
-            variantLabel = String(formatOptionVariantLabel(detailItem, variantValueIndex) || "").trim();
+            variantLabel = String(formatOptionVariantLabel(detailItem, variantValueIndex) || variantLabel).trim();
           }
           return {
             id: optionId,
@@ -7161,6 +7092,7 @@
             variant_group_id: variantGroupId,
             variant_value_index: variantValueIndex,
             variant_label: variantLabel || null,
+            ingredients: mapCartItemIngredientsForPayload(opt.ingredients),
           };
         })
         .filter(Boolean);
@@ -7184,6 +7116,8 @@
         gift_reward_id: Number(item?.gift_reward_id || 0) > 0 ? Number(item.gift_reward_id) : null,
         auto_add: Number(item?.auto_add || 0) === 1 ? 1 : 0,
         auto_add_group_id: Number(item?.auto_add_group_id || 0) > 0 ? Number(item.auto_add_group_id) : null,
+        auto_add_rule_version: Number(item?.auto_add_rule_version || 0),
+        auto_add_free_qty: Number(item?.auto_add_free_qty || 0),
         line_total: lineTotal,
         original_line_total: originalLineTotal,
         bonus_redeem_line_amount: bonusRedeemLineAmount,
@@ -7527,6 +7461,13 @@
     const index = getRightOrderIndexById(id);
     if (index < 0) return;
     let order = state.rightOrders[index] || {};
+    try {
+      await loadRightAutoAdd({ force: true, order });
+    } catch (error) {
+      console.error('Auto-add order refresh failed', error);
+      showNewOrderAlert("Не удалось проверить условия автодобавления. Повторите сохранение.");
+      return;
+    }
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
     form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, Array.isArray(form.cartItems) ? form.cartItems : []);
     state.rightOrders[index] = { ...order, form };
@@ -7979,6 +7920,12 @@
         showNewOrderAlert(`\u0417\u0430\u043a\u0430\u0437 \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d, \u043d\u043e \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044f ${paymentStepError.stage || "payment"} \u043d\u0435 \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430: ${paymentStepError.error || paymentStepError.message || "UNKNOWN"}`);
       }
     } catch (e) {
+      if (String(e?.message || '').startsWith('AUTO_ADD_')) {
+        await loadRightAutoAdd({ force: true });
+        queueRenderRightOrderTabs();
+        showNewOrderAlert("Изменились условия или остаток автодобавления. Проверьте состав, дату и сумму заказа.");
+        return;
+      }
       if (String(e?.message || '').startsWith('PREORDER_')) {
         state.rightPreorderAvailability.delete(id);
         queueRenderRightOrderTabs();
@@ -8105,6 +8052,7 @@
         group_id: Number(row?.group_id || 0) || null,
         qty: Math.max(0, Number(row?.qty || 0)),
         variant_value_index: Number.isFinite(Number(row?.variantIndex)) ? Number(row.variantIndex) : null,
+        ingredients: (Array.isArray(row?.ingredients) ? row.ingredients : []).map(serializeDurableIngredientIntent).filter(Boolean),
       })).filter((row) => row.id > 0 && row.qty > 0),
       ingredients: (Array.isArray(item?.ingredients) ? item.ingredients : [])
         .map(serializeDurableIngredientIntent).filter(Boolean),
@@ -8350,6 +8298,8 @@
         autoAdd: {
           groups: Array.isArray(state.autoAdd?.groups) ? state.autoAdd.groups : [],
           items: Array.isArray(state.autoAdd?.items) ? state.autoAdd.items : [],
+          timezone: state.autoAdd.timezone,
+          storeId: state.autoAdd.storeId,
         },
         unitConversions: Array.isArray(state.unitConversions) ? state.unitConversions : [],
         tenantRounding: state.tenantRoundingLoaded ? state.tenantRounding : null,
@@ -8473,6 +8423,8 @@
     const autoAddItems = Array.isArray(autoAddSnapshot?.items) ? autoAddSnapshot.items : [];
     state.autoAdd.groups = autoAddGroups;
     state.autoAdd.items = autoAddItems;
+    state.autoAdd.timezone = Number(autoAddSnapshot?.timezone || 0);
+    state.autoAdd.storeId = Number(autoAddSnapshot?.storeId || 0);
     state.autoAdd.byGroupId = new Map(
       autoAddGroups
         .map((group) => [Number(group?.id || 0), group])
@@ -15528,6 +15480,8 @@
         out.push({
           id,
           group_id: Number(groupId || 0),
+          ingredients: Array.isArray(row.ingredients) ? row.ingredients.map(ingredient => ({ ...ingredient })) : [],
+          variant_group_id: row.variant_group_id ?? null,
           label: String(row?.label || "").trim(),
           qty: Math.max(0, Number(row?.qty || 0)),
           basePrice: Number(row?.basePrice || 0),
@@ -17045,27 +16999,7 @@
   }
 
   function ensureProductOverlay() {
-    if (document.getElementById("newOrderProductOverlay")) return;
-    const wrap = document.createElement("div");
-    wrap.id = "newOrderProductOverlay";
-    wrap.className = "new-order-option-overlay hidden";
-    wrap.innerHTML = `
-      <div class="new-order-option-sheet new-order-product-sheet">
-        <div class="new-order-option-sheet-head">
-          <button class="new-order-option-sheet-back" type="button" data-action="product-overlay-close"><i class="fas fa-arrow-left"></i></button>
-        </div>
-        <div class="new-order-option-sheet-list no-scrollbar new-order-product-sheet-list" id="newOrderProductOverlayList"></div>
-        <div class="new-order-product-sheet-footer shop-pd-footer">
-          <div class="qty-pill qty-pill--muted new-order-product-sheet-qty">
-            <button class="qty-pill__btn qty-pill__btn--minus" type="button" data-action="product-overlay-qty-minus">−</button>
-            <span class="qty-pill__center" id="newOrderProductOverlayQtyValue">1</span>
-            <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="product-overlay-qty-plus">+</button>
-          </div>
-          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add" type="button" id="newOrderProductOverlayAddBtn" data-action="product-overlay-add">РІ РєРѕСЂР·РёРЅСѓ</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(wrap);
+    window.SharedProductDetails.ensureOverlay();
   }
 
   let productOverlayRequestGeneration = 0;
@@ -17132,6 +17066,8 @@
       const existing = byGroup.get(groupId) || { type: "single", items: [] };
       existing.items.push({
         id: itemId,
+        ingredients: Array.isArray(row.ingredients) ? row.ingredients.map(ingredient => ({ ...ingredient })) : [],
+        variant_group_id: row.variant_group_id ?? null,
         label: String(row?.label || "").trim(),
         qty: Math.max(0, Number(row?.qty || 0)),
         basePrice: Number(row?.basePrice || 0),
@@ -18632,18 +18568,7 @@
   }
 
   function normalizePriceRoundingSettings(source) {
-    const modeRaw = source && typeof source === "object"
-      ? (typeof source.price_rounding_mode === "string" ? source.price_rounding_mode : source.mode)
-      : "none";
-    const mode = typeof modeRaw === "string" ? modeRaw : "none";
-    const allowed = new Set(["none", "down", "up", "nearest"]);
-    const safeMode = allowed.has(mode) ? mode : "none";
-    const precisionValue = source && typeof source === "object"
-      ? (Object.prototype.hasOwnProperty.call(source, "price_rounding_precision") ? source.price_rounding_precision : source.precision)
-      : null;
-    const precisionRaw = Number(precisionValue);
-    const precision = precisionRaw === 0 ? 0 : 2;
-    return { mode: safeMode, precision };
+    return window.SharedProductDetails.normalizePriceRoundingSettings(source);
   }
 
   function updateTenantRoundingStorage(nextSettings) {
@@ -18886,10 +18811,12 @@
 
   function getOptionItemBasePrice(item) {
     if (!item) return 0;
+    const configuration = typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json;
+    const ingredientDiff = Number(configuration?.ingredient_price_diff || 0);
     const direct = Number(item.price);
-    if (Number.isFinite(direct)) return direct;
-    if (item.price_mode === "fixed") return Number(item.price_value || 0);
-    return Number(item.product_price || 0);
+    if (Number.isFinite(direct)) return direct + ingredientDiff;
+    if (item.price_mode === "fixed") return Number(item.price_value || 0) + ingredientDiff;
+    return Number(item.product_price || 0) + ingredientDiff;
   }
 
   async function ensureOptionTargetProducts(items) {
@@ -23542,6 +23469,8 @@
         .filter((s) => Number(s.is_active || 0) === 1)
         .sort((a, b) => (a.id - b.id));
 
+      if (data.autoAdd) await loadRightAutoAdd({ force: true, data: data.autoAdd });
+
       const blocks = Array.isArray(data.checkout?.blocks) ? data.checkout.blocks : [];
       const normalizedBlocks = blocks.map(normalizeBlock).filter(Boolean);
       state.checkoutSavedDraft = { blocks: normalizedBlocks, enabled: data.checkout?.enabled !== false };
@@ -24039,6 +23968,8 @@
       ingredients: [],
       auto_add: autoAdd,
       auto_add_group_id: autoAddGroupId,
+      auto_add_rule_version: Number(orderItem?.auto_add_rule_version || 0),
+      auto_add_free_qty: Number(orderItem?.auto_add_free_qty || 0),
       is_gift_reward: Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0,
       gift_reward_id: Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null,
       category_id: Number(orderItem?.category_id || orderItem?._category_id || orderItem?.product_category_id || 0) || null,
@@ -24079,6 +24010,8 @@
     if (!cartItem) return buildFallbackCartProductItem(orderItem);
     cartItem.id = Date.now() + Math.floor(Math.random() * 10000);
     cartItem.auto_add = Number(orderItem?.auto_add || 0) === 1 ? 1 : 0;
+    cartItem.auto_add_rule_version = Number(orderItem?.auto_add_rule_version || 0);
+    cartItem.auto_add_free_qty = Number(orderItem?.auto_add_free_qty || 0);
     cartItem.auto_add_group_id = cartItem.auto_add === 1 && Number(orderItem?.auto_add_group_id || 0) > 0
       ? Number(orderItem.auto_add_group_id)
       : null;
@@ -24648,6 +24581,13 @@
     const hasSessionAddressDraft = sessionAddressDraft && hasRightOrderQuoteAddressData(sessionAddressDraft);
     const deliveryAddressId = Number(src?.delivery_address_id || 0);
     draft.editPricingSnapshot = buildRightOrderStoredPricingSnapshot(src);
+    draft.autoAddCreatedAt = draft.mode === 'edit' ? src.created_at : null;
+    draft.autoAddIssuedByGroup = {};
+    for (const item of orderItems) {
+      if (draft.mode !== 'edit' || ['canceled', 'cancelled'].includes(String(src.status_code || '').toLowerCase()) || Number(item.auto_add_rule_version) !== 1) continue;
+      const gid = Number(item.auto_add_group_id);
+      draft.autoAddIssuedByGroup[gid] = (draft.autoAddIssuedByGroup[gid] || 0) + Number(item.auto_add_free_qty || 0);
+    }
     draft.editPricingBaselineSignature = buildRightOrderEditPricingSignature(draft, {
       addressDraft: hasSessionAddressDraft ? sessionAddressDraft : null,
       selectedAddressId: deliveryAddressId > 0 ? deliveryAddressId : 0,
@@ -25094,6 +25034,11 @@
 
   async function refreshNewOrderData({ hydrated, bootstrapped, cachedManifest, repositoryReady }) {
     if (repositoryReady && window.CatalogRepository) {
+      if (navigator.onLine && !bootstrapped) {
+        const refreshed = await loadNewOrderBootstrapFromApi();
+        if (!refreshed) throw new Error('NEW_ORDER_BOOTSTRAP_REFRESH_FAILED');
+        renderRightOrderTabs();
+      }
       const inventoryPromise = startupInventoryPromise || (navigator.onLine && !state.inventoryReady
         ? refreshNewOrderInventory()
         : null);
@@ -25505,6 +25450,9 @@
           ].filter((id) => id > 0))];
           queueNewOrderStockRefresh(visibleIds);
           return;
+        }
+        if (payload?.type === 'catalog.changed') {
+          void loadRightAutoAdd({ force: true }).then(() => renderRightOrderTabs()).catch(console.error);
         }
         if (payload?.type !== "stock.changed") return;
         if (Array.isArray(payload.stock_levels)) applyAuthoritativeOrderStockLevels(payload.stock_levels);
