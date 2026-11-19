@@ -142,6 +142,7 @@
       productId,
       orderReady,
       editorReady,
+      editorDetailsVersion: passport?.editor?.catalog_details_version ?? null,
       dataVersion: passport?.revision?.data_version || null,
       editorSchemaVersion: passport?.editor?.schema_version || null,
       preorderFields: Object.prototype.hasOwnProperty.call(passport?.product || {}, "preorder_settings_json") && ["order", "preorder"].includes(passport?.product?.sale_mode),
@@ -267,6 +268,7 @@
       relationId: normalizeId(row.id),
       productId: normalizeId(row.product_id ?? row.id),
       sortOrder: Number(row.sort_order ?? index) || 0,
+      configuration_json: typeof row.configuration_json === "string" ? JSON.parse(row.configuration_json) : (row.configuration_json ?? null),
       isDefault: Number(row.is_default || 0) === 1,
     })).filter((row) => row.productId);
     return {
@@ -829,6 +831,8 @@
       isOrderReadyPassport(passport)
       && passport.editor && typeof passport.editor === "object"
       && passport.editor.schema_version === "product-editor-v1"
+      && passport.editor.catalog_details_version === 2
+      && passport.editor.option_details && typeof passport.editor.option_details === "object"
       && Array.isArray(passport.editor.categories)
       && Array.isArray(passport.editor.discounts)
       && ((passport.editor.relatedProductUnitLinks && typeof passport.editor.relatedProductUnitLinks === "object")
@@ -1212,10 +1216,21 @@
     }
     notifyDownloadJob();
     downloadJobPromise = (async () => {
+      await loadPassports(uniqueIds([...(downloadJob.targetIds || []), ...(downloadJob.dependencyIds || [])]));
       while (downloadJob && jobRunGeneration === downloadJobGeneration && scopeIsCurrent(targetScope, scopeRunGeneration)) {
         if (!(await waitForDownloadTurn())) return false;
         if (!downloadJob || jobRunGeneration !== downloadJobGeneration || !scopeIsCurrent(targetScope, scopeRunGeneration)) return false;
-        const missing = uniqueIds(downloadJob.targetIds).filter((id) => !durableEditorReadyProductIds.has(id));
+        const knownIds = uniqueIds([...(downloadJob.targetIds || []), ...(downloadJob.dependencyIds || [])]);
+        const dependencies = knownIds.flatMap(id => {
+          const passport = passportsByProductId.get(id);
+          return [
+            ...(passport?.ingredients || []).map(item => item.ingredient_id),
+            ...Object.values(passport?.editor?.option_details || {}).flatMap(details =>
+              (details.items || []).map(item => item.target_product_id)),
+          ];
+        });
+        downloadJob.dependencyIds = uniqueIds([...(downloadJob.dependencyIds || []), ...dependencies]);
+        const missing = uniqueIds([...knownIds, ...downloadJob.dependencyIds]).filter((id) => !durableEditorReadyProductIds.has(id));
         if (!missing.length) break;
         if (!navigator.onLine) throw new Error("CATALOG_PRELOAD_OFFLINE");
         const batch = missing.slice(0, PRELOAD_BATCH_SIZE);
@@ -1493,12 +1508,12 @@
       const passport = passportsByProductId.get(id);
       return !(requiredEditorReady ? isEditorReadyPassport(passport) : isOrderReadyPassport(passport));
     });
-    const pendingIds = missing.filter((id) => pendingByProductId.has(id) && !priority);
+    const pendingIds = missing.filter((id) => pendingByProductId.has(id) && options.force !== true);
     const waits = pendingIds.map((id) => pendingByProductId.get(id).promise);
     const upgradeAfterWait = requiredOrderReady
       ? pendingIds.filter((id) => pendingByProductId.get(id).requiredCompleteness !== (requiredEditorReady ? "editor-ready" : "order-ready"))
       : [];
-    const fresh = missing.filter((id) => priority || !pendingByProductId.has(id));
+    const fresh = missing.filter((id) => options.force === true || !pendingByProductId.has(id));
     const loader = typeof options.loader === "function" ? options.loader : configuredLoader;
     if (fresh.length && typeof loader === "function") {
       const requestMutationVersions = new Map(fresh.map((id) => [id, mutationVersions.get(id) || 0]));
@@ -1643,6 +1658,7 @@
           ...product,
           sort_order: item.sortOrder,
           is_default: item.isDefault,
+          configuration_json: item.configuration_json,
         } : null;
       }).filter(Boolean);
       return {
@@ -2285,7 +2301,7 @@
         return;
       }
       durableOrderReadyProductIds.add(id);
-      if (row.editorReady === true && editorReferencesIndexed) durableEditorReadyProductIds.add(id);
+      if (row.editorReady === true && row.editorDetailsVersion === 2 && editorReferencesIndexed) durableEditorReadyProductIds.add(id);
     });
     notify("coverage", candidateIds);
     if (missingIndexIds.length) {
@@ -2463,7 +2479,7 @@
   window.CatalogRepository = {
     init, getProduct, getProducts, getProductsForCategory, getAllProducts, getCategory, getAllCategories, loadProducts, loadPassports, loadCategories, loadEditorReferences,
     upsertProduct, upsertProducts, markProductSummary, patchProductOptimistic, commitProductPatch, rollbackProductPatch, patchProductAuthoritative, removeProduct, clearSavedProducts, isProductPersistedOrderReady, isProductPersistedEditorReady,
-    getProductPassport, getEditorReferences, upsertPassports, isOrderReadyPassport,
+    getProductPassport, getEditorReferences, upsertPassports, isOrderReadyPassport, isEditorReadyPassport,
     upsertCategory, upsertCategories, replaceCategories, ensureProducts, getCoverage, setCoverageTotal, setCoverageTarget,
     getTrackedCoverageCategoryIds, getCoverageTargetIds, startDownloadJob, resumeDownloadJob, getDownloadJob, cancelDownloadJob,
     beginForegroundWork, endForegroundWork, withForegroundWork,

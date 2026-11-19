@@ -507,6 +507,7 @@ async function buildDeductions({ db, tenantId, items, context = null }) {
 
     if (normalizeProductFulfillmentMode(product.fulfillment_mode) !== 'made_to_order') {
       addDeduction(pid, qty);
+      return;
     }
 
     const baseQty = toPositiveNumber(product.base_qty, 1);

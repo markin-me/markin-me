@@ -54,7 +54,8 @@
     if (scriptLoads.has(name)) return scriptLoads.get(name);
     const task = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = `/static/js/shared-product-${name}.js?v=components-v4-preorder`;
+      const assetKey = name === 'configurator' ? 'sharedProductConfigurator' : 'sharedProductDetailsContent';
+      script.src = window.__ADMIN_ASSET_URLS__?.[assetKey] || `/static/js/shared-product-${name}.js?v=components-v4-preorder`;
       script.onload = resolve;
       script.onerror = () => { scriptLoads.delete(name); script.remove(); reject(new Error(`PRODUCT_COMPONENT_UNAVAILABLE:${name}`)); };
       document.head.appendChild(script);
@@ -186,6 +187,375 @@
     return root;
   }
 
+  function ensureOverlay() {
+    if (document.getElementById("newOrderProductOverlay")) return document.getElementById("newOrderProductOverlay");
+    const wrap = document.createElement("div");
+    wrap.id = "newOrderProductOverlay";
+    wrap.className = "new-order-option-overlay hidden";
+    wrap.innerHTML = `
+      <div class="new-order-option-sheet new-order-product-sheet">
+        <div class="new-order-option-sheet-head">
+          <button class="new-order-option-sheet-back" type="button" data-action="product-overlay-close"><i class="fas fa-arrow-left"></i></button>
+        </div>
+        <div class="new-order-option-sheet-list no-scrollbar new-order-product-sheet-list" id="newOrderProductOverlayList"></div>
+        <div class="new-order-product-sheet-footer shop-pd-footer">
+          <div class="qty-pill qty-pill--muted new-order-product-sheet-qty">
+            <button class="qty-pill__btn qty-pill__btn--minus" type="button" data-action="product-overlay-qty-minus">−</button>
+            <span class="qty-pill__center" id="newOrderProductOverlayQtyValue">1</span>
+            <button class="qty-pill__btn qty-pill__btn--plus" type="button" data-action="product-overlay-qty-plus">+</button>
+          </div>
+          <button class="shop-checkout-btn shop-pd-action new-order-product-sheet-add" type="button" id="newOrderProductOverlayAddBtn" data-action="product-overlay-add">РІ РєРѕСЂР·РёРЅСѓ</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(wrap);
+    return wrap;
+  }
+
+  function renderCompositionRow(row, context) {
+    const { item, active, isGiftReward, fixedGiftComposition, getCartItemCheckoutRequireAll, escapeHtml, selectionMode = false, hideOptionConfiguration = false } = context;
+  const comboLineText = row.rowKind === "combo"
+    ? [String(row.unitLabel || "").trim(), String(row.productName || "").trim()].filter(Boolean).join(" ").trim()
+    : "";
+  const baseLineRaw = selectionMode && row.rowKind === 'product' ? '' : row.rowKind === "combo"
+    ? (comboLineText ? `1 x ${comboLineText}` : `1 x ${String(row.productName || "—").trim() || "—"}`)
+    : (row.unitLabel
+      ? `${String(row.unitLabel || "").trim()} ${String(row.productName || "").trim()}`.trim()
+      : (row.rowKind === "option" ? String(row.productName || "").trim() : ""));
+  const baseLine = baseLineRaw ? escapeHtml(baseLineRaw) : "";
+  const cartItemIsCombo = String(item?.type || "") === "combo";
+  const isCheckoutComposedCombo = cartItemIsCombo && Number(item?.combo_id || 0) <= 0;
+  const comboRequireAll = getCartItemCheckoutRequireAll(item);
+  const canRemoveComboSection = row.rowKind === "combo"
+    && isCheckoutComposedCombo
+    && comboRequireAll === false
+    && Number.isFinite(Number(row.sectionIndex))
+    && Number(row.sectionIndex) >= 0;
+  const canRemoveProductRow = row.rowKind === "product" && row.variantValues.length > 1;
+  const removeBtn = !selectionMode && !fixedGiftComposition && (canRemoveProductRow || canRemoveComboSection)
+    ? `
+      <button
+        type="button"
+        class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
+        data-action="right-cart-row-remove"
+        data-order-id="${Number(active?.id || 0)}"
+        data-cart-item-id="${Number(item?.id || 0)}"
+        data-row-kind="${row.rowKind}"
+        data-section-index="${row.sectionIndex}"
+        aria-label="Удалить позицию"
+        title="Удалить позицию"
+      >×</button>
+    `
+    : "";
+  const optionIcon = row.rowKind === "option" && !fixedGiftComposition && !hideOptionConfiguration
+    ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="Опции товара"><i class="fas fa-sliders-h"></i></button>`
+    : "";
+  const productOptionIcon = row.rowKind === "product" && row.hasOptions && !fixedGiftComposition && !hideOptionConfiguration
+    ? `<button type="button" class="new-order-right-cart-variant-chip new-order-right-cart-variant-option-icon" data-action="right-cart-open-product" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-product-id="${Number(item?.product_id || 0)}" title="Опции товара"><i class="fas fa-sliders-h"></i></button>`
+    : "";
+  const chips = row.variantValues.length > 1 && !fixedGiftComposition
+    ? `
+      <div class="new-order-right-cart-variant-scroll no-scrollbar">
+        <div class="new-order-right-cart-variant-row">
+          ${row.rowKind === "option" ? "" : `${removeBtn}${productOptionIcon}`}
+          ${row.variantValues.map((label, variantIndex) => `
+            <button
+              type="button"
+              class="new-order-right-cart-variant-chip ${variantIndex === row.selectedVariantIndex ? "is-selected" : ""}"
+              data-action="right-cart-variant-select"
+              data-order-id="${Number(active?.id || 0)}"
+              data-cart-item-id="${Number(item?.id || 0)}"
+              data-row-kind="${row.rowKind}"
+              data-section-index="${row.sectionIndex}"
+              data-option-index="${Number(row.optionIndex || 0)}"
+              data-variant-index="${variantIndex}"
+            >${escapeHtml(label)}</button>
+          `).join("")}
+        </div>
+      </div>
+    `
+    : "";
+  const optionQtyControls = row.rowKind === "option" && row.showQtyControls && !fixedGiftComposition
+    ? `
+      <div class="new-order-right-cart-ing-controls">
+        <button type="button" class="new-order-right-cart-ing-btn${row.canMinus ? "" : " is-disabled"}" data-action="right-cart-option-qty-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">−</button>
+        <span class="new-order-right-cart-ing-qty">${Number(row.optionQty || 0)}</span>
+        <button type="button" class="new-order-right-cart-ing-btn${row.canPlus ? "" : " is-disabled"}" data-action="right-cart-option-qty-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-option-index="${Number(row.optionIndex || 0)}">+</button>
+      </div>
+    `
+    : "";
+  const optionRemoveBtn = row.rowKind === "option" && !row.isLocked && !fixedGiftComposition
+    ? `
+      <button
+        type="button"
+        class="new-order-right-cart-variant-chip new-order-right-cart-variant-remove"
+        data-action="right-cart-option-remove"
+        data-order-id="${Number(active?.id || 0)}"
+        data-cart-item-id="${Number(item?.id || 0)}"
+        data-option-index="${Number(row.optionIndex || 0)}"
+        aria-label="Удалить опцию"
+        title="Удалить опцию"
+      >×</button>
+    `
+    : "";
+  const ingredientRows = Array.isArray(row.ingredients) ? row.ingredients : [];
+  const ingredientsHtml = ingredientRows.length
+    ? `
+      <div class="new-order-right-cart-ingredients">
+        ${ingredientRows.map((ing, ingIndex) => {
+          const ingName = String(ing?.ingredient_name || "").trim();
+          const qty = Number(ing?.qty || 0);
+          const unitLabel = String(ing?.unit_label || "").trim();
+          if (fixedGiftComposition || (selectionMode && ing.is_variable != null && Number(ing.is_variable) !== 1)) {
+            return `
+              <div class="new-order-right-cart-ing-row">
+                <div class="new-order-right-cart-ing-qty">${escapeHtml(String(qty))}${unitLabel ? ` ${escapeHtml(unitLabel)}` : ""}</div>
+                <div class="new-order-right-cart-ing-name" title="${escapeHtml(ingName)}">${escapeHtml(ingName)}</div>
+              </div>
+            `;
+          }
+          const min = Number(ing?.qty_min ?? 0);
+          const max = Number(ing?.qty_max ?? qty);
+          const canMinus = qty > min;
+          const canPlus = qty < max;
+          return `
+            <div class="new-order-right-cart-ing-row">
+              <div class="new-order-right-cart-ing-controls">
+                <button type="button" class="new-order-right-cart-ing-btn${canMinus ? "" : " is-disabled"}" data-action="right-cart-ingredient-minus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">−</button>
+                <span class="new-order-right-cart-ing-qty">${escapeHtml(String(qty))}${unitLabel ? ` ${escapeHtml(unitLabel)}` : ""}</span>
+                <button type="button" class="new-order-right-cart-ing-btn${canPlus ? "" : " is-disabled"}" data-action="right-cart-ingredient-plus" data-order-id="${Number(active?.id || 0)}" data-cart-item-id="${Number(item?.id || 0)}" data-row-kind="${row.rowKind}" data-section-index="${row.sectionIndex}" data-ingredient-index="${ingIndex}">+</button>
+              </div>
+              <div class="new-order-right-cart-ing-name" title="${escapeHtml(ingName)}">${escapeHtml(ingName)}</div>
+            </div>
+          `;
+        }).join("")}
+      </div>
+    `
+    : "";
+  const optionTitle = row.rowKind === "option"
+    ? `<div class="new-order-right-cart-option-title">${
+        row.showQtyControls
+          ? `${escapeHtml(String(Number(row.optionQty || 0)))} ${baseLine || escapeHtml(row.productName || "")}`
+          : (baseLine || escapeHtml(row.productName || ""))
+      }</div>`
+    : "";
+  const optionControlsRow = row.rowKind === "option"
+    ? `
+      <div class="new-order-right-cart-option-controls-row">
+        ${optionRemoveBtn}
+        ${optionIcon}
+        ${row.showQtyControls ? optionQtyControls : chips}
+      </div>
+    `
+    : "";
+  const productControlsRow = row.rowKind !== "option" && row.variantValues.length <= 1 && !isGiftReward && (removeBtn || productOptionIcon)
+    ? `<div class="new-order-right-cart-option-controls-row">${removeBtn}${productOptionIcon}</div>`
+    : "";
+  const rowClass = row.rowKind === "combo"
+    ? "new-order-right-cart-composition-row new-order-right-cart-combo-row"
+    : "new-order-right-cart-composition-row";
+  const comboTitleClass = row.rowKind === "combo" ? "new-order-right-cart-combo-title" : "";
+  const html = `<div class="${rowClass}">${row.rowKind === "option" ? `${optionTitle}${optionControlsRow}` : (baseLine ? `<div class="${comboTitleClass}">${baseLine}</div>` : "")}${row.rowKind === "option" ? "" : `${chips}${productControlsRow}`}${ingredientsHtml}</div>`;
+  return selectionMode ? html.replace(/data-action="right-cart-/g, 'data-action="selection-') : html;
+  }
+
+  function normalizePriceRoundingSettings(source) {
+    const modeRaw = source && typeof source === "object"
+      ? (typeof source.price_rounding_mode === "string" ? source.price_rounding_mode : source.mode)
+      : "none";
+    const mode = typeof modeRaw === "string" ? modeRaw : "none";
+    const allowed = new Set(["none", "down", "up", "nearest"]);
+    const safeMode = allowed.has(mode) ? mode : "none";
+    const precisionValue = source && typeof source === "object"
+      ? (Object.prototype.hasOwnProperty.call(source, "price_rounding_precision") ? source.price_rounding_precision : source.precision)
+      : null;
+    const precisionRaw = Number(precisionValue);
+    const precision = precisionRaw === 0 ? 0 : 2;
+    return { mode: safeMode, precision };
+  }
+
+  let overlayGeneration = 0;
+  let closeSelectionOverlay = null;
+  async function open(options = {}) {
+    closeSelectionOverlay?.();
+    const overlay = ensureOverlay();
+    const generation = ++overlayGeneration;
+    const list = overlay.querySelector('#newOrderProductOverlayList');
+    const host = document.createElement('div');
+    host.className = 'new-order-shared-product-host';
+    list.replaceChildren(host);
+    overlay.classList.add('is-shared-product');
+    overlay.classList.remove('hidden');
+    const onKey = event => { if (event.key === 'Escape') close(); };
+    const close = () => {
+      if (generation !== overlayGeneration) return;
+      overlayGeneration += 1;
+      document.removeEventListener('keydown', onKey);
+      overlay.classList.add('hidden');
+      overlay.onclick = null;
+      list.replaceChildren();
+      closeSelectionOverlay = null;
+      options.onBack?.();
+    };
+    closeSelectionOverlay = close;
+    overlay.onclick = event => {
+      if (event.target === overlay || event.target.closest('[data-action="product-overlay-close"]')) close();
+    };
+    document.addEventListener('keydown', onKey);
+    try {
+      await mount({ ...options, container: host, onBack: close,
+        isCurrent: () => generation === overlayGeneration && host.isConnected,
+        onSave: value => { if (generation === overlayGeneration) { close(); options.onSave?.(value); } },
+      });
+    } catch (error) { close(); throw error; }
+  }
+
+  const selectionDetails = new Map();
+  function sameSelectionPassport(previous, current) {
+    return Boolean(previous && current && ['product', 'ingredients', 'variants', 'options', 'optionGroups',
+      'option_groups', 'optionAssignments', 'defaultConfig', 'nestedIngredients', 'units', 'unitConversions',
+      'productUnitLinks', 'stock', 'availability'].every(key => previous[key] === current[key]));
+  }
+  async function prepareSelections(ids) {
+    await fetchPassports(ids);
+    await Promise.all(normalizeIds(ids).map(async id => {
+      const passport = getPassport(id);
+      if (sameSelectionPassport(selectionDetails.get(id)?.passport, passport)) return;
+      selectionDetails.set(id, { passport, details: await getRuntime().resolveProductDetailsConfig(id) });
+    }));
+    const relatedIds = normalizeIds(normalizeIds(ids).flatMap(id => {
+      const passport = getPassport(id), details = selectionDetails.get(id)?.details;
+      return [...(passport?.ingredients || []).map(row => row.ingredient_id),
+        ...(details?.optionGroups || []).flatMap(group => (group.items || []).map(row => row.target_product_id || row.product_id))];
+    }));
+    if (relatedIds.length) await fetchPassports(relatedIds);
+  }
+
+  function getSelection(id, selected) {
+    const passport = getPassport(id);
+    const cached = selectionDetails.get(Number(id));
+    const details = sameSelectionPassport(cached?.passport, passport) ? cached.details : null;
+    if (!passport || !details) return null;
+    const configuration = JSON.parse(JSON.stringify({ ...(passport.defaultConfig || {}), ...(selected || {}) }));
+    const ingredients = (details.ingredients || []).map(ingredient => {
+      const choice = (configuration.ingredients || []).find(row => Number(row.ingredient_id) === Number(ingredient.ingredient_id));
+      const variable = ingredient.is_variable == null || Number(ingredient.is_variable) === 1;
+      return { ...ingredient, ingredient_id: Number(ingredient.ingredient_id),
+        ingredient_name: ingredient.ingredient_name || choice?.ingredient_name || choice?.name || '',
+        qty: Number(choice?.quantity ?? choice?.qty ?? ingredient.quantity ?? 0),
+        qty_min: Number(variable ? ingredient.quantity_min ?? 0 : ingredient.quantity),
+        qty_max: Number(variable ? ingredient.quantity_max ?? ingredient.quantity : ingredient.quantity),
+        qty_step: Number(ingredient.quantity_step || 1),
+        unit_label: ingredient.unit_short_title || ingredient.unit_title || ingredient.unit_code || choice?.unit_label || '',
+      };
+    });
+    const group = (details.variants || []).find(row => Number(row.id || row.variant_group_id) === Number(configuration.variant_group_id)) || details.variants?.[0];
+    const labels = variantGroup => (variantGroup?.values || []).map(value => {
+      const label = String(value ?? '').trim(), unit = variantGroup.unit_short_title || variantGroup.unit_code || '';
+      return unit && /\d$/.test(label) ? `${label} ${unit}` : label;
+    });
+    const mainLabels = labels(group);
+    const mainIndex = Number(configuration.variant_value_index ?? group?.default_value_index ?? 0);
+    const rows = [{ rowKind: 'product', sectionIndex: 0, productName: '', unitLabel: mainLabels[mainIndex] || '',
+      variantValues: mainLabels, selectedVariantIndex: mainIndex, ingredients,
+      hasOptions: (details.optionGroups || []).length > 0, variantGroup: group }];
+    (configuration.option_items || []).forEach((option, optionIndex) => {
+      const optionGroup = (details.optionGroups || []).find(row => row.items?.some(item => Number(item.id) === Number(option.id)));
+      const item = optionGroup?.items?.find(row => Number(row.id) === Number(option.id));
+      if (!item) return;
+      const variantGroup = item.variants?.find(row => Number(row.id || row.variant_group_id) === Number(option.variant_group_id)) || item.variants?.[0];
+      const variantValues = labels(variantGroup);
+      const index = Number(option.variant_value_index ?? variantGroup?.default_value_index ?? 0);
+      const qty = Number(option.qty ?? option.quantity ?? 1);
+      const minimum = Number(item.qty_min ?? 1), maximum = Number(item.qty_max ?? 1);
+      const optionPassport = getPassport(option.target_product_id || option.product_id);
+      const configurableOptionIngredients = getRuntime().getConfigurableIngredients(optionPassport?.product,
+        optionPassport?.ingredients || []);
+      const optionIngredients = configurableOptionIngredients.map(ingredient => {
+        const selected = (option.ingredients || []).find(row => Number(row.ingredient_id) === Number(ingredient.ingredient_id));
+        const quantity = selected?.quantity ?? selected?.qty ?? ingredient.quantity;
+        return { ...ingredient, ...selected, qty: quantity, qty_min: quantity, qty_max: quantity,
+          unit_label: ingredient.unit_short_title || ingredient.unit_title || ingredient.unit_code || selected?.unit_label || '' };
+      });
+      rows.push({ rowKind: 'option', optionIndex, sectionIndex: 0,
+        isLocked: Boolean(item.is_locked),
+        productName: item.title || item.name || option.title || '',
+        unitLabel: variantValues[index] || option.variant_label || '', variantValues, selectedVariantIndex: index,
+        optionQty: qty, showQtyControls: getRuntime().getOptionGroupUiType(optionGroup) === 'multiple_item',
+        canMinus: qty > minimum, canPlus: qty < maximum, minimum, maximum, variantGroup,
+        ingredients: optionIngredients,
+      });
+    });
+    return { configuration, rows: rows.filter(row => row.rowKind === 'option' || row.unitLabel || row.ingredients.length || row.hasOptions), passport };
+  }
+
+  function getSelectionCost(id, configuration, parents = new Set()) {
+    id = Number(id);
+    if (parents.has(id)) throw new Error('PRODUCT_CONFIGURATION_CYCLE');
+    const passport = getPassport(id);
+    if (!passport?.product) throw new Error(`PRODUCT_PASSPORT_UNAVAILABLE:${id}`);
+    const ui = getRuntime(), product = passport.product;
+    const chosen = { ...(passport.defaultConfig || {}), ...(configuration || {}) };
+    const group = (passport.variants || []).find(row => Number(row.id || row.variant_group_id) === Number(chosen.variant_group_id));
+    const index = Number(chosen.variant_value_index ?? group?.default_value_index ?? 0);
+    let cost = ui.getVariantUnitPrice({ ...product, price: Number(product.cost_price || 0) },
+      group ? [{ ...group, discount_tiers: [] }] : [], { selectedIndex: index });
+    for (const ingredient of passport.ingredients || []) {
+      const selected = (chosen.ingredients || []).find(row => Number(row.ingredient_id) === Number(ingredient.ingredient_id));
+      if (!selected) continue;
+      const target = getPassport(ingredient.ingredient_id)?.product;
+      const unitCost = Number(target?.cost_price ?? ingredient.ingredient_cost_price ?? 0)
+        / Number(target?.base_qty || ingredient.ingredient_base_qty || 1);
+      const current = ui.getQtyInBase(ingredient, Number(selected.quantity ?? selected.qty ?? ingredient.quantity));
+      const base = ui.getQtyInBase(ingredient, Number(ingredient.quantity || 0));
+      if (current == null || base == null) throw new Error('INGREDIENT_UNIT_CONVERSION_UNAVAILABLE');
+      cost += (current - base) * unitCost;
+    }
+    const nextParents = new Set(parents).add(id);
+    for (const option of chosen.option_items || []) {
+      cost += getSelectionCost(option.target_product_id || option.product_id, option, nextParents)
+        * Number(option.qty ?? option.quantity ?? 1);
+    }
+    return ui.roundPrice(Math.max(0, cost));
+  }
+
+  function getSelectionPresentation(id, configuration) {
+    const selection = getSelection(id, configuration);
+    if (!selection) return null;
+    const ui = getRuntime(), product = selection.passport.product;
+    const details = selectionDetails.get(Number(id)).details;
+    const chosen = selection.configuration;
+    const variant = (details.variants || []).find(row => Number(row.id || row.variant_group_id) === Number(chosen.variant_group_id)) || details.variants?.[0];
+    const index = Number(chosen.variant_value_index ?? variant?.default_value_index ?? 0);
+    const variantPrice = ui.getVariantUnitPrice(product, variant ? [variant] : [], { selectedIndex: index });
+    const options = (chosen.option_items || []).map(choice => {
+      const item = (details.optionGroups || []).flatMap(group => group.items || []).find(row => Number(row.id) === Number(choice.id));
+      if (!item) throw new Error('OPTION_CONFIGURATION_UNAVAILABLE');
+      const group = item.variants?.find(row => Number(row.id || row.variant_group_id) === Number(choice.variant_group_id)) || item.variants?.[0];
+      const selectedIndex = Number(choice.variant_value_index ?? group?.default_value_index ?? 0);
+      const option = { ...item, ...choice, variants: item.variants, configuration_json: item.configuration_json };
+      if (group) Object.assign(option, ui.buildOptionItemVariantState(item, group, selectedIndex));
+      return option;
+    });
+    const optionPricing = ui.getSelectedOptionItemsPricingTotals(options);
+    const ingredientState = new Map((chosen.ingredients || []).map(row => [Number(row.ingredient_id), { quantity: row.quantity ?? row.qty }]));
+    const ingredientPricing = ui.calculateIngredientPricing(details.ingredients || [], ingredientState);
+    const ordinaryPrice = Math.max(variantPrice, ui.scaleProductBasePriceForCurrentUnit(product, variantPrice, Number(product.old_price || 0)))
+      + optionPricing.originalComparableTotal + ingredientPricing.originalDiff;
+    const unitPrice = ui.applyProductPromoPricing(product,
+      variantPrice + optionPricing.currentTotal + ingredientPricing.currentDiff, ordinaryPrice);
+    const discount = ui.calculateProductDiscountAmount(unitPrice, product.discount);
+    const price = ui.roundPrice(Math.max(0, unitPrice - discount));
+    const oldBase = ui.scaleProductBasePriceForCurrentUnit(product, variantPrice || Number(product.price || 0), Number(product.old_price || 0));
+    const oldPrice = discount > 0
+      ? ui.roundPrice(unitPrice + Math.max(0, optionPricing.originalComparableTotal - optionPricing.currentTotal))
+      : ui.roundPrice(Math.max(oldBase, variantPrice) + ingredientPricing.originalDiff + optionPricing.originalComparableTotal);
+    const label = selection.rows.find(row => row.rowKind === 'product')?.unitLabel || '';
+    const title = ui.getCatalogProductTitle({ ...product, default_variant: { ...product.default_variant, variant_label: label } });
+    return { title, price, priceText: ui.money(price), oldPrice: oldPrice > price ? oldPrice : 0,
+      oldPriceText: oldPrice > price ? ui.money(oldPrice) : '' };
+  }
+
   async function mount(options = {}) {
     const id = Number(options.productId || options.product?.id || 0);
     if (!(id > 0) || !options.container) throw new Error("INVALID_PRODUCT_DETAILS_TARGET");
@@ -201,7 +571,7 @@
       target = document.createElement("div");
       target.className = "shared-product-details-root";
       previous.replaceWith(target);
-      if (options.mode === "admin-order") target.classList.add("shared-product-details-root--admin-order");
+      if (options.mode === "admin-order" || options.mode === "selection") target.classList.add("shared-product-details-root--admin-order");
     }
     const product = options.product || getProduct(id);
     await renderer.renderProductDetailsInto(target, product, {
@@ -257,8 +627,12 @@
 
   window.SharedProductDetails = Object.freeze({
     configure(options) { source = options || {}; },
-    mount, prepare, ensureDetails, preload: ensureDetails,
+    normalizePriceRoundingSettings, mount, open, prepare, ensureOverlay, renderCompositionRow, prepareSelections, getSelection, getSelectionPresentation, ensureDetails, preload: ensureDetails,
     prefetch: fetchPassports, getSummaries,
+    getOptionItemDisplayPricing: (item, variant) => getRuntime().getOptionItemDisplayPricing(item, variant),
+    getSelectionCost,
+    applyProductPromoPricing: (product, current, original) => getRuntime().applyProductPromoPricing(product, current, original),
+    getConfiguredBasePrice: (product, group, index) => getRuntime().getVariantUnitPrice(product, group ? [group] : [], { selectedIndex: index }),
     getPassport: async id => { await fetchPassports([id]); return getPassport(id); },
     getPreorderDescription: product => getRuntime().getProductPreorderDescription(product),
     getPreorderInfo: product => getRuntime().getProductPreorderInfo(product),

@@ -235,7 +235,7 @@ function updateCatalogMediaPillContent(pill, product, label) {
     const daysHtml = pill.classList.contains('is-preorder') ? getPreorderWeekdaysHtml(weekdays) : '';
     const showDays = Boolean(daysHtml);
     pill.classList.toggle('has-preorder-weekdays', showDays);
-    const chevron = label === '\u041d\u0430\u0441\u0442\u0440\u043e\u0438\u0442\u044c' ? '<span class="sp-media-pill__chevron" aria-hidden="true">\u203a</span>' : '';
+    const chevron = ['Выбрать вариант', 'Изменить состав', 'Выбрать опции', 'Вариант и состав', 'Варианты и опции', 'Состав и опции', 'Настроить товар'].includes(label) ? '<span class="sp-media-pill__chevron" aria-hidden="true">\u203a</span>' : '';
     pill.innerHTML = `<span class="sp-media-pill__text">${runtime.escapeHtml(label)}${showDays ? ` ${daysHtml}` : ''}</span>${chevron}`;
   }
 
@@ -244,7 +244,17 @@ function getCatalogMediaPillLabel(product, availableForAdd = true, qty = 0) {
     if (preorder && !preorder.isOpen) return preorder.label;
     if (!availableForAdd) return Number(qty || 0) > 0 ? "Больше нет" : "Раскупили";
     if (preorder) return preorder.label;
-    return runtime.isCatalogProductConfigurable(product) ? "Настроить" : "";
+    if (!runtime.isCatalogProductConfigurable(product)) return "";
+    const hasOptions = Boolean(product?.blocks_config?.options || Number(product?.has_options || 0) === 1
+      || (Array.isArray(product?.options) && product.options.length));
+    const hasVariants = Boolean(product?.blocks_config?.variants || (Array.isArray(product?.variants) && product.variants.length));
+    const hasIngredients = Boolean(product?.blocks_config?.ingredients || (Array.isArray(product?.ingredients) && product.ingredients.length));
+    if (hasVariants && hasIngredients && hasOptions) return "Настроить товар";
+    if (hasVariants && hasOptions) return "Варианты и опции";
+    if (hasIngredients && hasOptions) return "Состав и опции";
+    if (hasVariants && hasIngredients) return "Вариант и состав";
+    if (hasOptions) return "Выбрать опции";
+    return hasVariants ? "Выбрать вариант" : "Изменить состав";
   }
 
 function getProductPreorderInfo(product) {

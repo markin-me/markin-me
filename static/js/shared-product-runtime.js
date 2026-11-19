@@ -3,6 +3,41 @@
   const factories = [];
   const instances = new Set();
   window.SharedProductRuntime = Object.freeze({
+    resolveAutoAddRules(groups, items, { timezone = 0, scheduledAt = null, createdAt = null } = {}) {
+      const today = new Date(Date.now() + Number(timezone) * 3600000).toISOString().slice(0, 10);
+      const byGroup = new Map(groups.map(group => [Number(group.id), group]));
+      const seen = new Set();
+      return items.slice().sort((a, b) => Number(byGroup.get(Number(a.group_id))?.sort_order || 0) - Number(byGroup.get(Number(b.group_id))?.sort_order || 0) || Number(a.group_id) - Number(b.group_id) || Number(a.sort_order) - Number(b.sort_order) || Number(a.id) - Number(b.id)).filter(rule => {
+        const group = byGroup.get(Number(rule.group_id));
+        if (!group) return false;
+        rule.group = group;
+        if (Number(group.rule_version) === 1) {
+          const schedule = typeof group.schedule_json === 'string' ? JSON.parse(group.schedule_json) : group.schedule_json;
+          const date = String(schedule?.basis === 'receipt' ? scheduledAt || createdAt || today : createdAt || today).slice(0, 10);
+          const weekday = (new Date(`${date}T12:00:00`).getDay() + 6) % 7;
+          const receipt = schedule?.settings?.receipt;
+          if (schedule?.mode === 'schedule') {
+            if (!receipt || (receipt.weekdays.length && !receipt.weekdays.includes(weekday))) return false;
+            if (receipt.mode === 'dates' && !receipt.dates.includes(date)) return false;
+            if (receipt.mode === 'period' && !(receipt.start <= date && date <= receipt.end)) return false;
+          }
+          const slot = !schedule || schedule.mode === 'always' || schedule.assignment === 'shared' ? 'shared' : receipt.mode === 'any' ? `weekday:${weekday}` : date;
+          if (rule.schedule_slot !== slot) return false;
+        }
+        if (seen.has(Number(rule.product_id))) return false;
+        seen.add(Number(rule.product_id));
+        return true;
+      });
+    },
+    autoAddFreeQty(rule, baseTotal) {
+      const group = rule.group;
+      if (baseTotal < Number(group.min_cart_amount || 0) || (group.max_cart_amount != null && baseTotal > Number(group.max_cart_amount))) return 0;
+      let qty = Number(group.first_free) === 1 ? 1 : 0;
+      if (Number(rule.free_per_amount) > 0) qty += Math.floor(Math.round(baseTotal * 100) / Math.round(Number(rule.free_per_amount) * 100));
+      if (rule.max_free_qty != null) qty = Math.min(qty, Number(rule.max_free_qty));
+      if (rule.current_free_limit != null) qty = Math.min(qty, rule.current_free_limit);
+      return Math.max(0, qty);
+    },
     register(factory) { factories.push(factory); instances.forEach(runtime => Object.assign(runtime, factory(runtime))); },
     create(services) {
       const runtime = Object.create(null);
@@ -282,6 +317,8 @@ function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsB
           discounted_price: item.discounted_price,
           discount: item.discount,
           buy_x_get_y_badge: item.buy_x_get_y_badge,
+          configuration_json: item.configuration_json,
+          ingredients: (typeof item.configuration_json === "string" ? JSON.parse(item.configuration_json) : item.configuration_json)?.ingredients || [],
           price_mode: item.price_mode,
           price_value: item.price_value,
         });
@@ -884,7 +921,8 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
       
       // Функция для получения цены с учётом варианта
       const getPriceWithVariant = (item, itemId) => {
-        const basePrice = Number(item.price || 0);
+        const configuration = typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json;
+        const basePrice = Number(item.price || 0) + Number(configuration?.ingredient_price_diff || 0);
         const variantData = state.variantByItemId?.get(itemId);
         if (variantData && Number.isFinite(variantData.variant_price_diff)) {
           return basePrice + variantData.variant_price_diff;
@@ -935,7 +973,9 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
             discounted_price: Number(item.discounted_price || 0),
             discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
             buy_x_get_y_badge: item.buy_x_get_y_badge || null,
-            price_mode: item.price_mode,
+            configuration_json: item.configuration_json,
+          ingredients: (typeof item.configuration_json === "string" ? JSON.parse(item.configuration_json) : item.configuration_json)?.ingredients || [],
+          price_mode: item.price_mode,
             price_value: item.price_value,
           };
           const variant = getVariantData(itemId);
@@ -968,7 +1008,9 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
               discounted_price: Number(item.discounted_price || 0),
               discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
               buy_x_get_y_badge: item.buy_x_get_y_badge || null,
-              price_mode: item.price_mode,
+              configuration_json: item.configuration_json,
+          ingredients: (typeof item.configuration_json === "string" ? JSON.parse(item.configuration_json) : item.configuration_json)?.ingredients || [],
+          price_mode: item.price_mode,
               price_value: item.price_value,
             };
             const variant = getVariantData(itemId);
@@ -1002,7 +1044,9 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
               discounted_price: Number(item.discounted_price || 0),
               discount: item.discount && typeof item.discount === "object" ? { ...item.discount } : null,
               buy_x_get_y_badge: item.buy_x_get_y_badge || null,
-              price_mode: item.price_mode,
+              configuration_json: item.configuration_json,
+          ingredients: (typeof item.configuration_json === "string" ? JSON.parse(item.configuration_json) : item.configuration_json)?.ingredients || [],
+          price_mode: item.price_mode,
               price_value: item.price_value,
             };
             const variant = getVariantData(itemId);
@@ -1162,6 +1206,9 @@ function createQtyPill({
 function normalizeProductOptionGroups(optionGroups) {
     return (Array.isArray(optionGroups) ? optionGroups : []).map((group) => ({
       ...group,
+      ...((group.items || []).some(item => item.is_locked) ? {
+        selection_type: 'single', is_required: true, min_select: 1, max_select: 1,
+      } : {}),
       items: (Array.isArray(group?.items) ? group.items : []).map((item) => runtime.normalizeOptionItemForDisplay(item)),
     }));
   }

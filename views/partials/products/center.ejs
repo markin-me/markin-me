@@ -208,6 +208,9 @@
         <div class="options-list" id="optionsGroupsList"></div>
         <div class="empty-hint" id="optionsGroupsEmpty">Пока нет опций...</div>
       </div>
+      <div class="content-view hidden" data-view-content="badges">
+        <div class="options-list" id="badgeDefinitionsList"></div>
+      </div>
       <div class="content-view hidden" data-view-content="auto-add">
         <div class="options-list" id="autoAddGroupsList"></div>
         <div class="empty-hint" id="autoAddGroupsEmpty">Пока нет автодобавлений...</div>
@@ -345,9 +348,10 @@
       </div>
       <div class="field-wrap">
         <label class="field-label" for="pe_base_unit_id">Ед. изм</label>
-        <select class="control" id="pe_base_unit_id" name="base_unit_id">
+        <select class="control hidden" id="pe_base_unit_id" name="base_unit_id">
           <option value="">—</option>
         </select>
+        <div id="peBaseUnitSelect"></div>
       </div>
       <div class="field-wrap">
         <label class="field-label" for="pe_stock">Остаток</label>
@@ -612,7 +616,7 @@
 
     <div class="info-card product-options-card" id="pePromotionsBlock" data-product-block="promotions">
       <div class="option-section-header">
-        <div class="kv-label">Участие в акциях</div>
+        <div class="kv-label">Участие в акциях <button class="btn btn-icon btn-sm" type="button" id="pePromoInfo" aria-label="Как рассчитывается скидка" title="Как рассчитывается скидка"><i class="fas fa-info-circle" aria-hidden="true"></i></button></div>
       </div>
       <div class="product-promo-editor">
         <label class="switch-row product-promo-switch">

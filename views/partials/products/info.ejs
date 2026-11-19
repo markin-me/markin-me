@@ -5,6 +5,12 @@
   </div>
 
   <div class="panel-body no-scrollbar" id="productInfoBody">
+    <div id="badgeDetails" class="hidden"></div>
+    <div id="badgeEmpty" class="empty-state hidden">
+      <div class="empty-icon"><i class="fas fa-tags"></i></div>
+      <div class="empty-title">Выберите бейдж</div>
+      <div class="empty-text">Нажмите на бейдж в списке, чтобы посмотреть условия отображения</div>
+    </div>
     <!-- Empty state -->
     <div id="productEmpty" class="empty-state">
       <div class="empty-icon"><i class="fas fa-mouse-pointer"></i></div>
@@ -304,108 +310,114 @@
   <div id="autoAddGroupInfo" class="hidden">
   <div id="autoAddLevelGroup">
     <form id="autoAddGroupForm" class="form-grid" autocomplete="off">
-      <div class="option-group-section">
-        <div class="section-title">Условие</div>
-
-        <div class="option-group-row">
-          <div class="option-group-title-field">
-            <label class="field-label" for="autoAddGroupTitle">Название *</label>
-            <input class="control" id="autoAddGroupTitle" name="title" type="text" required />
-          </div>
-
-          <div class="option-group-select-field">
-            <label class="field-label" for="autoAddGroupSort">Порядок сортировки</label>
-            <input class="control" id="autoAddGroupSort" name="sort_order" type="number" min="0" value="0" />
-          </div>
-        </div>
-
-        <div class="option-group-row">
-          <div class="option-group-title-field">
-            <label class="field-label" for="autoAddGroupDesc">Описание</label>
-            <input class="control" id="autoAddGroupDesc" name="description" type="text" />
-          </div>
-          <div></div>
-        </div>
-
-        <div class="form-row-2 option-group-switches">
+      <div class="option-group-section auto-add-group-main">
+        <input id="autoAddGroupSort" name="sort_order" type="hidden" value="0" />
+        <div class="auto-add-group-title-head">
+          <div class="section-title">Правило</div>
           <label class="switch">
             <input class="switch-input" type="checkbox" id="autoAddGroupIsActive" />
             <span class="switch-ui" aria-hidden="true"></span>
             <span class="switch-text">Активна</span>
           </label>
         </div>
+        <div>
+        <label class="field-label" for="autoAddGroupTitle">Название *</label>
+        <input class="control" id="autoAddGroupTitle" name="title" type="text" required />
+        </div>
+        <div>
+          <label class="field-label" for="autoAddGroupDesc">Описание</label>
+          <input class="control" id="autoAddGroupDesc" name="description" type="text" />
+        </div>
       </div>
 
       <div class="option-group-section">
-        <div class="section-title">Условия</div>
+        <div class="section-title">Условия и ограничения</div>
 
-        <div class="option-group-row">
+        <div class="option-group-row auto-add-limits-row">
           <div class="option-group-title-field">
-            <label class="field-label" for="autoAddMinAmount">Минимальная сумма</label>
+            <label class="field-label" for="autoAddMinAmount">Сумма от</label>
             <input class="control" id="autoAddMinAmount" name="min_cart_amount" type="number" min="0" step="0.01" />
           </div>
 
           <div class="option-group-select-field">
-            <label class="field-label" for="autoAddMaxAmount">Максимальная сумма</label>
+            <label class="field-label" for="autoAddMaxAmount">Сумма до</label>
             <input class="control" id="autoAddMaxAmount" name="max_cart_amount" type="number" min="0" step="0.01" />
           </div>
-        </div>
-
-        <div class="form-row-2 option-group-switches">
-          <label class="switch">
-            <input class="switch-input" type="checkbox" id="autoAddIncludeAutoTotal" />
-            <span class="switch-ui" aria-hidden="true"></span>
-            <span class="switch-text">Учитывать автодобавления в сумме</span>
-          </label>
-        </div>
-      </div>
-
-      <div class="option-group-section">
-        <div class="section-title">Ограничения</div>
-
-        <div class="option-group-row">
           <div class="option-group-title-field">
-            <label class="field-label" for="autoAddMaxItemsQty">Максимум товаров в группе</label>
-            <input class="control" id="autoAddMaxItemsQty" name="max_items_qty" type="number" min="0" step="1" />
+            <div class="auto-add-limit-label">
+              <label class="field-label" for="autoAddTotalIssueLimit">Общий лимит, шт.</label>
+              <details class="auto-add-limit-help">
+                <summary aria-label="О лимите выдачи"><i class="fas fa-info-circle" aria-hidden="true"></i></summary>
+                <small id="autoAddTotalIssueLimitHint">Общий запас на всех клиентов: 10 шт. в одном заказе уменьшают остаток на 10. Пусто — без ограничения.</small>
+              </details>
+            </div>
+            <input class="control" id="autoAddTotalIssueLimit" type="number" min="0" step="1" aria-describedby="autoAddTotalIssueLimitHint" />
+            <input id="autoAddMaxItemsQty" name="max_items_qty" type="hidden" />
           </div>
-          <div></div>
         </div>
 
-        <div class="form-row-2 option-group-switches">
-          <label class="switch">
-            <input class="switch-input" type="checkbox" id="autoAddAllowCustomerQty" />
-            <span class="switch-ui" aria-hidden="true"></span>
-            <span class="switch-text">Разрешить менять количество</span>
+        <div class="auto-add-condition-checks">
+          <label class="auto-add-condition-check">
+            <input class="products-bulk-toggle-all-input" type="checkbox" id="autoAddFirstFree" />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+            <span class="auto-add-condition-text">Первая штука бесплатно при наполнении корзины</span>
           </label>
-          <label class="switch">
-            <input class="switch-input" type="checkbox" id="autoAddAllowCustomerRemove" />
-            <span class="switch-ui" aria-hidden="true"></span>
-            <span class="switch-text">Разрешить удалять из корзины</span>
+          <label class="auto-add-condition-check">
+            <input class="products-bulk-toggle-all-input" type="checkbox" id="autoAddAutomatically" checked />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+            <span class="auto-add-condition-text">Добавлять в корзину автоматически</span>
+            <details class="auto-add-limit-help">
+              <summary aria-label="Как получать подарки"><i class="fas fa-info-circle" aria-hidden="true"></i></summary>
+              <small>Включено — все доступные подарки добавляются автоматически. Выключено — последующие подарки покупатель забирает в «Выгоды → Подарки». Если включена «Первая штука бесплатно», первая добавляется автоматически независимо от этого переключателя. После ручного удаления повторно сама не добавляется.</small>
+            </details>
+          </label>
+          <label class="auto-add-condition-check">
+            <input class="products-bulk-toggle-all-input" type="checkbox" id="autoAddAvailableToGuests" checked />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+            <span class="auto-add-condition-text">Доступно гостям</span>
+            <details class="auto-add-limit-help">
+              <summary aria-label="Доступность подарков гостям"><i class="fas fa-info-circle" aria-hidden="true"></i></summary>
+              <small>Включено — доступно всем покупателям. Выключено — только авторизованным пользователям.</small>
+            </details>
+          </label>
+          <input class="hidden" type="checkbox" id="autoAddIncludeAutoTotal" />
+
+          <label class="auto-add-condition-check">
+            <input class="products-bulk-toggle-all-input" type="checkbox" id="autoAddAllowCustomerQty" />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+            <span class="auto-add-condition-text">Разрешить менять количество</span>
+          </label>
+          <label class="auto-add-condition-check">
+            <input class="products-bulk-toggle-all-input" type="checkbox" id="autoAddAllowCustomerRemove" />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+            <span class="auto-add-condition-text">Разрешить удалять из корзины</span>
           </label>
         </div>
       </div>
     </form>
 
-    <div class="info-card info-accordion">
-      <div class="acc-item">
-        <div class="acc-header">
-          <button class="stage-item acc-trigger" type="button" data-acc-trigger>
-            <span class="stage-meta stage-text">
-              <b>Товары</b>
-            </span>
-            <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
-          </button>
+    <section class="auto-add-products-section">
+      <div class="section-title">Товары</div>
+      <div class="settings-print-api-tabs auto-add-mode-tabs" id="autoAddModeTabs" role="tablist" aria-label="Список товаров">
+        <button type="button" role="tab" data-auto-mode="always">Постоянный список</button>
+        <button type="button" role="tab" data-auto-mode="schedule">По расписанию</button>
+      </div>
+      <div id="autoAddSchedule" class="hidden">
+        <div class="form-row-2">
+          <div><span class="field-label">Дата срабатывания</span><div id="autoAddScheduleBasis"></div></div>
+          <div><span class="field-label">Товары по дням</span><div id="autoAddScheduleAssignment"></div></div>
+        </div>
+        <div id="autoAddScheduleCalendar"></div>
+        <div id="autoAddScheduleSlots" class="auto-add-schedule-slots"></div>
+      </div>
+        <div class="auto-add-products-toolbar">
+          <span>Список товаров</span>
           <button class="btn btn-icon acc-add" type="button" id="autoAddItemsAddBtn" title="Добавить товар" aria-label="Добавить товар">
             <i class="fas fa-plus"></i>
           </button>
         </div>
-        <div class="acc-panel" data-acc-panel>
-          <div class="acc-panel-inner">
             <div class="option-items-table" id="autoAddItemsList"></div>
-          </div>
-        </div>
-      </div>
-    </div>
+    </section>
   </div>
 
   <div id="autoAddLevelPicker" class="hidden">

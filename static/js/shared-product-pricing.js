@@ -2,6 +2,124 @@
 SharedProductRuntime.register(function (runtime) {
   "use strict";
 
+  function applyProductPromoPricing(product, current, original) {
+    const amount = Math.max(0, Number(current || 0));
+    const ordinary = Math.max(amount, Number(original || 0));
+    const percent = Math.min(100, Math.max(0, Number(product?.promo_discount_percent || 0)));
+    return Number(product?.promo_enabled) === 1 && percent > 0
+      ? runtime.roundPrice(Math.min(amount, ordinary * (1 - percent / 100))) : runtime.roundPrice(amount);
+  }
+
+  function getIngredientUnitPricing(ing) {
+    const ingredientBaseQty = ing.ingredient_base_qty != null && Number(ing.ingredient_base_qty) > 0 ? Number(ing.ingredient_base_qty) : 1;
+    const cachedProduct = runtime.state.productCache.get(Number(ing.ingredient_id || 0)) || null;
+    const ingredientCurrentBasePrice = Number(
+      cachedProduct?.price != null && Number(cachedProduct.price || 0) > 0
+        ? cachedProduct.price
+        : ing.ingredient_price || 0
+    );
+    const currentPricePerUnit = ing.price_override != null && Number(ing.price_override) >= 0
+      ? Number(ing.price_override)
+      : (
+          ingredientBaseQty > 0 && ingredientCurrentBasePrice > 0
+            ? ingredientCurrentBasePrice / ingredientBaseQty
+            : (ingredientCurrentBasePrice > 0 ? ingredientCurrentBasePrice : 0)
+        );
+
+    if (ing.price_override != null && Number(ing.price_override) >= 0) {
+      return {
+        currentPricePerUnit,
+        originalPricePerUnit: currentPricePerUnit,
+      };
+    }
+
+    const ingredientOriginalBasePrice = Number(
+      cachedProduct?.original_price != null && Number(cachedProduct.original_price || 0) > 0
+        ? cachedProduct.original_price
+        : (
+            cachedProduct?.old_price != null && Number(cachedProduct.old_price || 0) > 0
+              ? cachedProduct.old_price
+              : 0
+          )
+    );
+    const originalPricePerUnit =
+      ingredientBaseQty > 0 && ingredientOriginalBasePrice > 0
+        ? ingredientOriginalBasePrice / ingredientBaseQty
+        : (ingredientOriginalBasePrice > 0 ? ingredientOriginalBasePrice : currentPricePerUnit);
+
+    return {
+      currentPricePerUnit,
+      originalPricePerUnit,
+    };
+  }
+
+  function calculateIngredientPricing(ingredients, ingredientState) {
+    let currentTotal = 0;
+    let baseCurrentTotal = 0;
+    let originalTotal = 0;
+    let baseOriginalTotal = 0;
+
+    ingredients.forEach((ing) => {
+      const state = ingredientState.get(Number(ing.ingredient_id));
+      const currentQty = state ? (state.quantity ?? Number(ing.quantity ?? 1)) : Number(ing.quantity ?? 1);
+      const baseQty = Number(ing.quantity ?? 1);
+      const { currentPricePerUnit, originalPricePerUnit } = getIngredientUnitPricing(ing);
+      const currentQtyInBase = runtime.getQtyInBase(ing, currentQty);
+      const baseQtyInBase = runtime.getQtyInBase(ing, baseQty);
+
+      const currentIngredientTotal = currentQtyInBase != null && Number.isFinite(currentPricePerUnit)
+        ? currentPricePerUnit * currentQtyInBase
+        : 0;
+      const baseIngredientCurrentTotal = baseQtyInBase != null && Number.isFinite(currentPricePerUnit)
+        ? currentPricePerUnit * baseQtyInBase
+        : 0;
+      const currentIngredientOriginalTotal = currentQtyInBase != null && Number.isFinite(originalPricePerUnit)
+        ? originalPricePerUnit * currentQtyInBase
+        : currentIngredientTotal;
+      const baseIngredientOriginalTotal = baseQtyInBase != null && Number.isFinite(originalPricePerUnit)
+        ? originalPricePerUnit * baseQtyInBase
+        : baseIngredientCurrentTotal;
+
+      currentTotal += currentIngredientTotal;
+      baseCurrentTotal += baseIngredientCurrentTotal;
+      originalTotal += currentIngredientOriginalTotal;
+      baseOriginalTotal += baseIngredientOriginalTotal;
+    });
+
+    return {
+      currentDiff: currentTotal - baseCurrentTotal,
+      originalDiff: originalTotal - baseOriginalTotal,
+    };
+  }
+
+  function calculateProductDiscountAmount(price, discount) {
+    const srcPrice = Number(price || 0);
+    if (!(srcPrice > 0) || !discount) return 0;
+
+    const discType = String(discount.discount_type || "").trim();
+    const discValue = Number(discount.discount_value || 0);
+    let discountAmount = 0;
+
+    if (discType === "percent") {
+      if (!(discValue > 0)) return 0;
+      discountAmount = srcPrice * (discValue / 100);
+    } else if (discType === "fixed") {
+      if (!(discValue > 0)) return 0;
+      discountAmount = discValue;
+    } else if (discType === "special_price") {
+      discountAmount = Math.max(0, srcPrice - discValue);
+    } else {
+      return 0;
+    }
+
+    const maxDiscountAmount = Number(discount.max_discount_amount);
+    if (Number.isFinite(maxDiscountAmount) && maxDiscountAmount > 0 && discountAmount > maxDiscountAmount) {
+      discountAmount = maxDiscountAmount;
+    }
+    if (discountAmount > srcPrice) discountAmount = srcPrice;
+
+    return Math.round(discountAmount * 100) / 100;
+  }
 function getOptionItemPrice(item) {
     if (!item) return 0;
     if (item.price_mode === "fixed") return Number(item.price_value || 0);
@@ -171,11 +289,18 @@ function computeItemPricing(item, totals) {
         ? Number(rule.price_override)
         : parts.baseProductUnit;
       unitPrice = priceOverride + parts.optionTotal + parts.ingredientDiff;
-      freeQty = runtime.calcAutoFreeQty(rule, baseTotal);
+      freeQty = Math.max(0, Math.min(qty, runtime.calcAutoFreeQty(rule, baseTotal)));
       paidQty = Math.max(0, qty - freeQty);
       isAutoItem = true;
     }
 
+    if (!isAutoItem && Number(item?.product?.promo_enabled) === 1) {
+      const optionPricing = runtime.getSelectedOptionItemsPricingTotals(item.option_items || []);
+      const originalBase = Math.max(parts.baseProductUnit, runtime.scaleProductBasePriceForCurrentUnit(
+        item.product, parts.baseProductUnit, Number(item.product.old_price || 0)));
+      unitPrice = applyProductPromoPricing(item.product, unitPrice,
+        originalBase + Number(optionPricing.originalComparableTotal || 0) + parts.ingredientDiff);
+    }
     unitPrice = runtime.roundPrice(unitPrice);
     let lineTotal = runtime.roundPrice(unitPrice * paidQty);
 
@@ -300,6 +425,7 @@ function getCatalogBuyXGetYRule(product) {
 
 function calcAutoFreeQty(rule, baseTotal) {
     if (!rule) return 0;
+    if (Number(rule.group?.rule_version) === 1) return window.SharedProductRuntime.autoAddFreeQty(rule, baseTotal);
     let freeQty = Math.max(0, runtime.parseRuleAmount(rule.free_first_qty));
     const amountStep = runtime.parseRuleAmount(rule.free_per_amount);
     const stepQty = Math.max(0, runtime.parseRuleAmount(rule.free_per_amount_qty));
@@ -382,7 +508,9 @@ function computeAutoEligibleTotal(items) {
 
 function computeNonAutoTotal(items) {
     return (Array.isArray(items) ? items : []).reduce((sum, item) => {
+      if (Number(item?.gift_reward_id || 0)) return sum;
       if (Number(item?.auto_add || 0) === 1) return sum;
+      if (Number(runtime.getAutoRuleByProductId(item?.product?.id || item?.product_id)?.group?.rule_version) === 1) return sum;
       const qty = Math.max(0, Number(item?.qty || 0));
       if (!qty) return sum;
       const { baseUnit } = runtime.getItemUnitParts(item);
@@ -394,11 +522,13 @@ function computeNonAutoTotal(items) {
 
 function getOptionItemDisplayPricing(item, variantData = null) {
     const product = runtime.getOptionItemTargetProduct(item);
-    const currentPrice = runtime.getOptionItemCurrentDisplayPrice(item, variantData, product);
+    const configuration = typeof item?.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item?.configuration_json;
+    const ingredientDiff = Number(configuration?.ingredient_price_diff || 0);
+    const currentPrice = runtime.roundPrice(runtime.getOptionItemCurrentDisplayPrice(item, variantData, product) + ingredientDiff);
     const baseOriginalPrice = runtime.getOptionItemResolvedOriginalBasePrice(item, product);
     const priceScaleRatio = runtime.getOptionItemPriceScaleRatio(item, variantData, product);
     const originalPrice = baseOriginalPrice > 0
-      ? runtime.roundPrice(baseOriginalPrice * priceScaleRatio)
+      ? runtime.roundPrice(baseOriginalPrice * priceScaleRatio + ingredientDiff)
       : 0;
     const showOld = originalPrice > currentPrice;
     const badgeText = showOld ? runtime.getDiscountBadgeTextForPricePair(currentPrice, originalPrice) : "";
@@ -610,7 +740,7 @@ function getQtyInBase(ing, qty) {
     return factor != null ? Number(qty || 0) * factor : null;
   }
 
-  return { getOptionItemPrice, getOptionItemResolvedDisplayBasePrice, getOptionItemVariantUnitPrice, parseVariantValueNumber, getOptionItemDefaultVariantMeta, roundPrice, getPriceRoundingSettings, getOptionItemTargetProduct, scaleProductBasePriceForCurrentUnit, computeItemPricing, calculateCatalogBuyXGetYApplication, getCatalogBuyXGetYRule, calcAutoFreeQty, parseRuleAmount, getItemUnitParts, optionItemsTotal, getAutoRuleByProductId, computeAutoEligibleTotal, computeNonAutoTotal, getOptionItemDisplayPricing, getDiscountBadgeTextForPricePair, getOptionItemPriceScaleRatio, getOptionItemResolvedOriginalBasePrice, getOptionItemCurrentDisplayPrice, calcConsumedPerUnit, toStockVariantValue, getVariantUnitPrice, getSelectedOptionItemsPricingTotals, getSelectedOptionItemVariantData, getQtyInBase };
+  return { applyProductPromoPricing, calculateIngredientPricing, calculateProductDiscountAmount, getOptionItemPrice, getOptionItemResolvedDisplayBasePrice, getOptionItemVariantUnitPrice, parseVariantValueNumber, getOptionItemDefaultVariantMeta, roundPrice, getPriceRoundingSettings, getOptionItemTargetProduct, scaleProductBasePriceForCurrentUnit, computeItemPricing, calculateCatalogBuyXGetYApplication, getCatalogBuyXGetYRule, calcAutoFreeQty, parseRuleAmount, getItemUnitParts, optionItemsTotal, getAutoRuleByProductId, computeAutoEligibleTotal, computeNonAutoTotal, getOptionItemDisplayPricing, getDiscountBadgeTextForPricePair, getOptionItemPriceScaleRatio, getOptionItemResolvedOriginalBasePrice, getOptionItemCurrentDisplayPrice, calcConsumedPerUnit, toStockVariantValue, getVariantUnitPrice, getSelectedOptionItemsPricingTotals, getSelectedOptionItemVariantData, getQtyInBase };
 });
 
 SharedProductRuntime.register(function (runtime) {

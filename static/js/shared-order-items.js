@@ -531,6 +531,11 @@
       if (line) detailLines.push(line);
     });
 
+    if (Number(item && item.auto_add_rule_version) === 1) {
+      var freeQty = Math.min(getItemQty(item), Math.max(0, Number(item.auto_add_free_qty || 0)));
+      var paidQty = getItemQty(item) - freeQty;
+      detailLines.unshift(String(freeQty) + " бесплатно" + (paidQty > 0 ? " · " + String(paidQty) + " по каталогу" : ""));
+    }
     return {
       primaryVariantLine: variantLines[0] || "",
       detailsHtml: renderDetailLines(detailLines)
@@ -587,7 +592,7 @@
       '<div class="' + rowClasses.join(" ") + '">' +
         thumbHtml +
         '<div class="cart-mid">' +
-          '<div class="cart-title">' + escapeHtml(String(qty) + " x " + titleText) + "</div>" +
+          '<div class="cart-title">' + (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1 ? '<i class="fas fa-gift" aria-label="Подарок"></i> ' : '') + escapeHtml(String(qty) + " x " + titleText) + "</div>" +
           detailsHtml +
         "</div>" +
         '<div class="cart-footer">' +
