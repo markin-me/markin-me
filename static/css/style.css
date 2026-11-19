@@ -17289,6 +17289,12 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
   color:#fff;
 }
 .option-product-variant:disabled{cursor:default;opacity:1;}
+#peVariantBlock{min-width:0;}
+#peVariantBlock .product-variant-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;}
+#peVariantBlock .product-variant-heading-label{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;min-width:0;}
+#peVariantBlock .product-variant-heading-label small{color:var(--color-text-muted);}
+#peVariantBlock .option-product-variants{overscroll-behavior-inline:contain;}
+#peVariantBlock .product-variant-add{display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;}
 .variant-item-row{
   grid-template-columns:auto minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   width:100%;

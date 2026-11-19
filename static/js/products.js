@@ -6524,7 +6524,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     `;
   }
 
-  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null, { isEditable = false, groupId = null, valueIndexMap = null, removableValueIndexes = null } = {}) {
+  function renderVariantValuesSummary(values, tiers, defaultValueIndex = null, { isEditable = false, unitLabel = "", valueIndexMap = null } = {}) {
     const list = Array.isArray(values) ? values : [];
     if (!list.length) {
       return `<div class="empty-hint">\u041f\u043e\u043a\u0430 \u043d\u0435\u0442 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0439...</div>`;
@@ -6541,13 +6541,6 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           return Number.isFinite(numericIndex) && numericIndex >= 0 ? numericIndex : idx;
         })
       : list.map((_, idx) => idx);
-    const removableIndexSet = removableValueIndexes instanceof Set
-      ? removableValueIndexes
-      : new Set(
-          (Array.isArray(removableValueIndexes) ? removableValueIndexes : [])
-            .map((mappedIndex) => Number(mappedIndex))
-            .filter((mappedIndex) => Number.isFinite(mappedIndex) && mappedIndex >= 0)
-        );
     const formatSignedPercent = (storedValue) => {
       const num = Number(storedValue || 0);
       const uiValue = Number.isFinite(num) ? -num : 0;
@@ -6556,44 +6549,17 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     };
 
     return `
-      <div class="option-summary-list">
+      <div class="option-product-variants">
         ${list.map((value, idx) => {
           const tier = tierMap.get(idx) || {};
           const discountRaw = tier.discount_percent != null ? tier.discount_percent : (tier.discount_value || 0);
           const discount = Number(discountRaw) || 0;
           const uiSigned = Number.isFinite(discount) ? -discount : 0;
           const mappedValueIndex = normalizedValueIndexMap[idx];
-          const metaLabel = uiSigned < 0
-            ? `\u0421\u043a\u0438\u0434\u043a\u0430: ${formatSignedPercent(discount)}%`
-            : (uiSigned > 0 ? `\u041d\u0430\u0434\u0431\u0430\u0432\u043a\u0430: ${formatSignedPercent(discount)}%` : "\u0411\u0435\u0437 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f");
-          const isDefault = defaultIdx !== null && idx === defaultIdx;
-          const starIcon = isDefault
-            ? '<i class="fas fa-star" style="color: #ff7a00; margin-right: 8px;"></i>'
-            : '<i class="far fa-star" style="color: #888; margin-right: 8px;"></i>';
-          const starElement = isEditable && groupId != null
-            ? `<button type="button" class="variant-star-btn-inline" data-variant-star-group="${groupId}" data-variant-star-index="${mappedValueIndex}" style="background: none; border: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; margin-right: 8px;" title="${isDefault ? '\u0412\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e' : '\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u043a\u0430\u043a \u0432\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e'}" aria-label="${isDefault ? '\u0412\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e' : '\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u043a\u0430\u043a \u0432\u0430\u0440\u0438\u0430\u043d\u0442 \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e'}">${starIcon}</button>`
-            : `<span style="margin-right: 8px;">${starIcon}</span>`;
-          const removeButton = isEditable && groupId != null && removableIndexSet.has(mappedValueIndex)
-            ? `<button class="option-row-remove option-summary-remove" type="button" data-product-variant-value-remove="${groupId}:${mappedValueIndex}" title="\u0423\u0431\u0440\u0430\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430" aria-label="\u0423\u0431\u0440\u0430\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u0443 \u044d\u0442\u043e\u0433\u043e \u0442\u043e\u0432\u0430\u0440\u0430"><i class="fas fa-times"></i></button>`
-            : "";
-
-          return `
-            <div class="option-summary-row ${removeButton ? "is-removable" : ""}">
-              <div style="display: flex; align-items: center;">
-                ${starElement}
-                <div>
-                  <div class="option-summary-title">${escapeHtml(value)}</div>
-                  <div class="option-summary-meta">${metaLabel}</div>
-                </div>
-              </div>
-              <div class="option-summary-price-wrap">
-                <div class="option-summary-price">
-                  <span>${uiSigned !== 0 ? `${formatSignedPercent(discount)}%` : ""}</span>
-                </div>
-                ${removeButton}
-              </div>
-            </div>
-          `;
+          const isDefault = idx === defaultIdx;
+          const adjustment = uiSigned ? formatSignedPercent(discount) + "%" : "";
+          const label = [value, unitLabel, adjustment].filter((part) => part !== "").join(" ");
+          return `<button type="button" class="option-product-variant${isDefault ? " is-active" : ""}" aria-pressed="${isDefault}" data-variant-star-index="${mappedValueIndex}" ${isEditable ? "" : "disabled"}>${escapeHtml(label)}</button>`;
         }).join("")}
       </div>
     `;
@@ -17782,7 +17748,7 @@ const isViewMode = state.comboPanel.mode === "view";
       { key: 'options', label: '\u041e\u043f\u0446\u0438\u0438', icon: 'fa-sliders-h' },
       { key: 'information', label: '\u0418\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f', icon: 'fa-info-circle' },
     ];
-    const sectionByBlock = { ingredients: 'composition', variants: 'composition', nutrition: 'composition', options: 'options', description: 'information', promotions: 'information' };
+    const sectionByBlock = { ingredients: 'composition', nutrition: 'composition', options: 'options', description: 'information', promotions: 'information' };
     const sectionPanels = new Map();
     const blockSwitches = new Map();
     let activeEditorSection = 'sale';
@@ -17815,10 +17781,14 @@ const isViewMode = state.comboPanel.mode === "view";
       ['ingredients', 'variants', 'nutrition', 'options', 'description', 'promotions'].forEach(key => {
         const block = blocks[key];
         if (!block) return;
+        if (key === 'variants') {
+          priceBlock.before(block);
+          return;
+        }
         sectionPanels.get(sectionByBlock[key]).appendChild(block);
         const label = document.createElement('label');
         label.className = 'switch product-editor-block-switch';
-        const text = ['options', 'variants', 'promotions'].includes(key)
+        const text = ['options', 'promotions'].includes(key)
           ? '\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u043d\u0430 \u0441\u0430\u0439\u0442\u0435' : '\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c \u043d\u0430 \u0441\u0430\u0439\u0442\u0435';
         label.innerHTML = `<input type="checkbox" class="switch-input"><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">${text}</span>`;
         const input = label.querySelector('input');
@@ -17877,7 +17847,7 @@ const isViewMode = state.comboPanel.mode === "view";
           definitions: PRODUCT_BLOCK_DEFINITIONS.slice(),
           getConfig: () => ({ ...draft.blocksConfig }),
           setBlock: (key, value) => {
-            if (!Object.prototype.hasOwnProperty.call(draft.blocksConfig, key)) return;
+            if (key === "variants" || !Object.prototype.hasOwnProperty.call(draft.blocksConfig, key)) return;
             draft.blocksConfig[key] = Boolean(value);
             syncProductBlocksVisibility();
           },
@@ -19040,7 +19010,9 @@ const isViewMode = state.comboPanel.mode === "view";
     }
 
     function getCachedProductScopedVariantDetails(groupId) {
-      return variantDetailsCache.get(Number(groupId)) || state.variantGroupCache.get(Number(groupId)) || null;
+      const id = Number(groupId);
+      const shared = state.variantGroupCache.get(id);
+      return variantDetailsCache.get(id) || (!product?.id && !shared?.product_scope ? shared : null) || null;
     }
 
     function setCachedProductScopedVariantDetails(groupId, details) {
@@ -19051,9 +19023,8 @@ const isViewMode = state.comboPanel.mode === "view";
       variantDetailsCache.delete(Number(groupId));
     }
 
-    function syncDraftProductVariantDefault(groupId, details) {
+    function syncDraftProductVariantDefault(groupId, resolvedDefaultValueIndex) {
       const numericGroupId = Number(groupId);
-      const resolvedDefaultValueIndex = Number(details?.product_scope?.resolved_default_value_index);
       if (!Number.isFinite(numericGroupId) || numericGroupId <= 0) return;
       if (!Number.isFinite(resolvedDefaultValueIndex) || resolvedDefaultValueIndex < 0) return;
       if (!Array.isArray(draft.productVariants)) draft.productVariants = [];
@@ -19071,7 +19042,7 @@ const isViewMode = state.comboPanel.mode === "view";
       const details = res.data || null;
       if (details) {
         setCachedProductScopedVariantDetails(numericGroupId, details);
-        syncDraftProductVariantDefault(numericGroupId, details);
+        syncDraftProductVariantDefault(numericGroupId, details.product_scope?.resolved_default_value_index);
       }
       return details;
     }
@@ -19088,7 +19059,6 @@ const isViewMode = state.comboPanel.mode === "view";
           tiers: Array.isArray(scoped.visible_tiers) ? scoped.visible_tiers : [],
           defaultIdx: Number.isFinite(resolvedVisibleIndex) && resolvedVisibleIndex >= 0 ? resolvedVisibleIndex : null,
           valueIndexMap: visibleIndexes,
-          removableValueIndexes: visibleIndexes,
         };
       }
 
@@ -19100,7 +19070,6 @@ const isViewMode = state.comboPanel.mode === "view";
           ? Number(variantData.default_value_index)
           : (details?.group?.default_value_index != null ? Number(details.group.default_value_index) : null),
         valueIndexMap: null,
-        removableValueIndexes: null,
       };
     }
 
@@ -19234,7 +19203,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     async function applyProductVariantValueSelection(groupId, selection) {
       const numericGroupId = Number(groupId);
-      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0 || !product || !product.id) return;
+      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0) return;
       const details = await ensureProductScopedVariantGroupDetails(numericGroupId);
       const allIndexes = Array.isArray(details?.values_meta)
         ? details.values_meta
@@ -19245,7 +19214,8 @@ const isViewMode = state.comboPanel.mode === "view";
       if (!selection.size) throw new Error('AT_LEAST_ONE_VALUE_REQUIRED');
       draftVariantExclusions.set(numericGroupId, excludedValueIndexes);
       const visibleIndexes = allIndexes.filter(index => selection.has(index));
-      const previousDefault = details.product_scope?.resolved_default_value_index;
+      const previousDefault = draft.productVariants?.find(variant => Number(variant.id) === numericGroupId)?.default_value_index
+        ?? details.product_scope?.resolved_default_value_index ?? details.group?.default_value_index;
       const defaultIndex = selection.has(previousDefault) ? previousDefault : visibleIndexes[0];
       const nextDetails = { ...details, product_scope: { ...details.product_scope,
         excluded_value_indexes: excludedValueIndexes, visible_value_indexes: visibleIndexes,
@@ -19256,7 +19226,10 @@ const isViewMode = state.comboPanel.mode === "view";
         resolved_default_value_index: defaultIndex, resolved_default_visible_index: visibleIndexes.indexOf(defaultIndex),
       } };
       setCachedProductScopedVariantDetails(numericGroupId, nextDetails);
-      syncDraftProductVariantDefault(numericGroupId, nextDetails);
+      syncDraftProductVariantDefault(numericGroupId, defaultIndex);
+      if (draftVariantDefaultChanges.has(numericGroupId)) {
+        draftVariantDefaultChanges.set(numericGroupId, defaultIndex);
+      }
     }
 
     async function applyProductVariantValuesPickerSelection() {
@@ -19277,7 +19250,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     async function openProductVariantValuesPicker(groupId) {
       const numericGroupId = Number(groupId);
-      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0 || !isEdit || !product || !product.id) return;
+      if (!Number.isFinite(numericGroupId) || numericGroupId <= 0 || !isEditable) return;
       const details = await ensureProductScopedVariantGroupDetails(numericGroupId);
       if (!details) return;
       const valuesMeta = Array.isArray(details.values_meta) ? details.values_meta : [];
@@ -19285,12 +19258,9 @@ const isViewMode = state.comboPanel.mode === "view";
         groupId: numericGroupId,
         query: "",
         valuesMeta,
-        selection: new Set(
-          valuesMeta
-            .filter((item) => item?.is_excluded_for_product !== true)
-            .map((item) => Number(item.index))
-            .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)
-        ),
+        selection: new Set(details.product_scope?.visible_value_indexes ?? valuesMeta
+          .map((item) => Number(item.index))
+          .filter((valueIndex) => Number.isFinite(valueIndex) && valueIndex >= 0)),
       };
 
       const pickerOverlay = document.createElement("div");
@@ -19422,63 +19392,30 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     }
 
-    async function bindVariantStarHandlers(container, groupId) {
-      if (!container || !isEdit || !product || !product.id) return;
-      
-      container.querySelectorAll("[data-variant-star-group]").forEach((btn) => {
-        const btnGroupId = Number(btn.dataset.variantStarGroup);
-        const variantIndex = Number(btn.dataset.variantStarIndex);
-        
-        if (!Number.isFinite(btnGroupId) || !Number.isFinite(variantIndex) || btnGroupId !== groupId) return;
-        
-        // Remove existing handler to avoid duplicates
-        const newBtn = btn.cloneNode(true);
-        btn.parentNode.replaceChild(newBtn, btn);
-        
-        newBtn.addEventListener("click", async (e) => {
-          e.stopPropagation();
-          
-          try {
-            draftVariantDefaultChanges.set(groupId, variantIndex);
-            
-            // Update draft.productVariants
-            if (!draft.productVariants) draft.productVariants = [];
-            let variantData = draft.productVariants.find(v => Number(v.id) === groupId);
-            if (variantData) {
-              variantData.default_value_index = variantIndex;
-            } else {
-              draft.productVariants.push({
-                id: groupId,
-                default_value_index: variantIndex
-              });
-            }
-            applyCompositionPriceValues();
-            
-            // Re-render the accordion content
-            const details = getCachedProductScopedVariantDetails(groupId) || await ensureProductScopedVariantGroupDetails(groupId);
-            if (details) {
-              if (details.product_scope) {
-                setCachedProductScopedVariantDetails(groupId, { ...details, product_scope: { ...details.product_scope,
-                  resolved_default_value_index: variantIndex,
-                  resolved_default_visible_index: details.product_scope.visible_value_indexes?.indexOf(variantIndex),
-                } });
-              }
-              const group = state.variantGroups.find((item) => Number(item.id) === groupId);
-              const summaryPayload = getProductScopedVariantSummaryPayload(groupId, group, getCachedProductScopedVariantDetails(groupId) || details);
-              container.innerHTML = renderVariantValuesSummary(summaryPayload.values, summaryPayload.tiers, summaryPayload.defaultIdx, {
-                isEditable: isEdit,
-                groupId,
-                valueIndexMap: summaryPayload.valueIndexMap,
-                removableValueIndexes: summaryPayload.removableValueIndexes,
-              });
-              bindVariantStarHandlers(container, groupId);
-            }
-            
-            // toast removed: too noisy in UI
-          } catch (e) {
-            console.error("Failed to update variant default value", e);
-            showToast("Не удалось обновить вариант по умолчанию");
+    function bindVariantStarHandlers(container, groupId) {
+      if (!isEditable) return;
+      const buttons = container.querySelectorAll("[data-variant-star-index]");
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          if (button.getAttribute("aria-pressed") === "true") return;
+          const variantIndex = Number(button.dataset.variantStarIndex);
+          draftVariantDefaultChanges.set(groupId, variantIndex);
+          syncDraftProductVariantDefault(groupId, variantIndex);
+
+          const details = getCachedProductScopedVariantDetails(groupId);
+          const scope = details?.product_scope;
+          if (scope) {
+            setCachedProductScopedVariantDetails(groupId, { ...details, product_scope: { ...scope,
+              resolved_default_value_index: variantIndex,
+              resolved_default_visible_index: scope.visible_value_indexes.indexOf(variantIndex),
+            } });
           }
+          buttons.forEach((chip) => {
+            const selected = chip === button;
+            chip.classList.toggle("is-active", selected);
+            chip.setAttribute("aria-pressed", String(selected));
+          });
+          applyCompositionPriceValues();
         });
       });
     }
@@ -19843,8 +19780,14 @@ const isViewMode = state.comboPanel.mode === "view";
     async function renderVariantAccordion() {
       if (!ui.variantAccordion) return;
       const groupId = Number(draft.variantGroupId);
-      if (!Number.isFinite(groupId) || groupId <= 0) {
-        ui.variantAccordion.innerHTML = `<div class="empty-hint">\u0412\u0430\u0440\u0438\u0430\u043d\u0442 \u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d...</div>`;
+      const hasVariant = Number.isFinite(groupId) && groupId > 0;
+      draft.blocksConfig.variants = hasVariant;
+      if (isView) ui.variantBlock?.classList.toggle("hidden", !hasVariant);
+      ui.variantManageBtn?.classList.toggle("hidden", hasVariant || isView);
+      ui.variantAccordion.classList.toggle("hidden", !hasVariant);
+      if (!hasVariant) {
+        ui.variantAccordion.replaceChildren();
+        applyCompositionPriceValues();
         return;
       }
       const group = state.variantGroups.find((item) => Number(item.id) === groupId);
@@ -19854,31 +19797,21 @@ const isViewMode = state.comboPanel.mode === "view";
       }
 
       const unitLabel = getUnitLabel(group.unit_id);
-      const unitMeta = unitLabel ? `\u0415\u0434.: ${unitLabel}` : "\u0415\u0434.: \u2014";
-      const details = getCachedProductScopedVariantDetails(groupId);
-      const summaryPayload = details ? getProductScopedVariantSummaryPayload(groupId, group, details) : null;
-      const itemsHtml = summaryPayload
-        ? renderVariantValuesSummary(summaryPayload.values, summaryPayload.tiers, summaryPayload.defaultIdx, {
-            isEditable: isEdit,
-            groupId,
-            valueIndexMap: summaryPayload.valueIndexMap,
-            removableValueIndexes: summaryPayload.removableValueIndexes,
-          })
-        : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f.</div>`;
-
+      const unitMeta = `Ед.изм.: ${unitLabel || "—"}`;
       const actionsHtml = isView ? '' : `
         <button class="btn btn-icon btn-sm" type="button" data-option-menu-open="${groupId}" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с вариантом"><i class="fas fa-ellipsis-h" aria-hidden="true"></i></button>
         <div class="product-footer-more-dropdown product-option-actions-menu hidden" role="menu">
-          ${isEdit && product?.id ? `<button class="product-footer-more-dropdown-item" type="button" data-product-variant-values-open="${groupId}" role="menuitem"><i class="fas fa-sliders-h" aria-hidden="true"></i><span>Настройки варианта</span></button>` : ''}
+          <button class="product-footer-more-dropdown-item" type="button" data-product-variant-values-open="${groupId}" role="menuitem"><i class="fas fa-sliders-h" aria-hidden="true"></i><span>Настройки варианта</span></button>
           <button class="product-footer-more-dropdown-item" type="button" data-variant-edit="${groupId}" role="menuitem"><i class="fas fa-pen" aria-hidden="true"></i><span>Изменить общий вариант</span></button>
           <div class="product-footer-more-dropdown-sep" role="separator"></div>
-          <button class="product-footer-more-dropdown-item" type="button" data-variant-delete="${groupId}" role="menuitem"><i class="fas fa-unlink" aria-hidden="true"></i><span>Убрать вариант из товара</span></button>
+          <button class="product-footer-more-dropdown-item" type="button" data-variant-delete role="menuitem"><i class="fas fa-unlink" aria-hidden="true"></i><span>Убрать вариант из товара</span></button>
         </div>`;
 
       ui.variantAccordion.innerHTML = `
         <div class="acc-item" data-variant-group="${groupId}">
-          <div class="stage-item acc-trigger" role="button" tabindex="0" data-acc-trigger>
-            <span class="stage-meta stage-text">
+          <div class="product-variant-heading" data-acc-trigger>
+            <span class="product-variant-heading-label">
+              <span>Варианты товара ·</span>
               <b>${escapeHtml(group.title || "")}</b>
               <small>${escapeHtml(unitMeta)}</small>
             </span>
@@ -19886,16 +19819,29 @@ const isViewMode = state.comboPanel.mode === "view";
               ${actionsHtml}
             </div>
           </div>
-          <div class="acc-panel" data-acc-panel>
-            <div class="acc-panel-inner">
-              ${itemsHtml}
-            </div>
-          </div>
+          <div class="product-variant-values"></div>
         </div>
       `;
 
-      bindAccordionContainer(ui.variantAccordion);
       if (!isView) bindProductGroupActionMenus(ui.variantAccordion);
+
+      const valuesContainer = ui.variantAccordion.querySelector(".product-variant-values");
+      const details = await ensureProductScopedVariantGroupDetails(groupId).catch((error) => {
+        console.error("Failed to load product variants", error);
+        return null;
+      });
+      if (!ui.variantAccordion.contains(valuesContainer)) return;
+      if (!details) {
+        valuesContainer.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b";
+        return false;
+      }
+      const summary = getProductScopedVariantSummaryPayload(groupId, group, details);
+      valuesContainer.innerHTML = renderVariantValuesSummary(summary.values, summary.tiers, summary.defaultIdx, {
+        isEditable,
+        unitLabel,
+        valueIndexMap: summary.valueIndexMap,
+      });
+      bindVariantStarHandlers(valuesContainer, groupId);
 
       if (!isView) {
         ui.variantAccordion.querySelectorAll("[data-product-variant-values-open]").forEach((btn) => {
@@ -19921,79 +19867,17 @@ const isViewMode = state.comboPanel.mode === "view";
           });
         });
 
-        ui.variantAccordion.querySelectorAll("[data-variant-delete]").forEach((btn) => {
-          btn.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            draft.variantGroupId = null;
-            clearCachedProductScopedVariantDetails(groupId);
-            renderVariantAccordion();
-          });
+        ui.variantAccordion.querySelector("[data-variant-delete]").addEventListener("click", () => {
+          draft.variantGroupId = null;
+          draftVariantDefaultChanges.delete(groupId);
+          draftVariantExclusions.delete(groupId);
+          draft.productVariants = draft.productVariants?.filter(variant => Number(variant.id) !== groupId) || [];
+          clearCachedProductScopedVariantDetails(groupId);
+          void renderVariantAccordion();
         });
-
-        ui.variantAccordion.querySelectorAll("[data-product-variant-value-remove]").forEach((btn) => {
-          btn.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            const [groupIdRaw, valueIndexRaw] = String(btn.dataset.productVariantValueRemove || "").split(":");
-            const scopedGroupId = Number(groupIdRaw);
-            const valueIndex = Number(valueIndexRaw);
-            if (!Number.isFinite(scopedGroupId) || scopedGroupId <= 0) return;
-            if (!Number.isFinite(valueIndex) || valueIndex < 0) return;
-            try {
-              const scopedDetails = getCachedProductScopedVariantDetails(scopedGroupId)
-                || await ensureProductScopedVariantGroupDetails(scopedGroupId);
-              const visibleIndexes = Array.isArray(scopedDetails?.product_scope?.visible_value_indexes)
-                ? scopedDetails.product_scope.visible_value_indexes
-                    .map((idx) => Number(idx))
-                    .filter((idx) => Number.isFinite(idx) && idx >= 0)
-                : [];
-              const nextSelection = new Set(visibleIndexes.filter((idx) => idx !== valueIndex));
-              await applyProductVariantValueSelection(scopedGroupId, nextSelection);
-              await renderVariantAccordion();
-            } catch (error) {
-              console.error("Failed to exclude variant value for product", error);
-              const message = error?.message === "AT_LEAST_ONE_VALUE_REQUIRED"
-                ? "\u041d\u0443\u0436\u043d\u043e \u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0445\u043e\u0442\u044f \u0431\u044b \u043e\u0434\u043d\u043e \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435"
-                : "\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u0438 \u0441\u043a\u0440\u044b\u0442\u0438\u0438 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u0430";
-              if (typeof showToast === "function") showToast(message);
-              else alert(message);
-            }
-          });
-        });
-      }
-
-      ui.variantAccordion.querySelectorAll(".acc-item").forEach((item) => {
-        const id = Number(item.dataset.variantGroup);
-        if (!Number.isFinite(id)) return;
-        const trigger = item.querySelector("[data-acc-trigger]");
-        const panel = item.querySelector("[data-acc-panel]");
-        if (!trigger || !panel) return;
-        trigger.addEventListener("click", async () => {
-          if (getCachedProductScopedVariantDetails(id)) return;
-          const scopedDetails = await ensureProductScopedVariantGroupDetails(id);
-          const inner = panel.querySelector(".acc-panel-inner");
-          if (inner) {
-            const nextSummary = scopedDetails ? getProductScopedVariantSummaryPayload(id, group, scopedDetails) : null;
-            inner.innerHTML = nextSummary
-              ? renderVariantValuesSummary(nextSummary.values, nextSummary.tiers, nextSummary.defaultIdx, {
-                  isEditable: isEdit,
-                  groupId: id,
-                  valueIndexMap: nextSummary.valueIndexMap,
-                  removableValueIndexes: nextSummary.removableValueIndexes,
-                })
-              : `<div class="muted">\u0420\u0430\u0441\u043a\u0440\u043e\u0439\u0442\u0435, \u0447\u0442\u043e\u0431\u044b \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f.</div>`;
-            if (isEdit) bindVariantStarHandlers(inner, id);
-          }
-          refreshOpenAccordions();
-        });
-      });
-
-      if (isEdit && summaryPayload) {
-        const inner = ui.variantAccordion.querySelector(".acc-panel-inner");
-        if (inner) bindVariantStarHandlers(inner, groupId);
       }
 
       applyCompositionPriceValues();
-      refreshOpenAccordions();
     }
 
     if (ui.variantManageBtn && !isView) {
@@ -22897,13 +22781,15 @@ const isViewMode = state.comboPanel.mode === "view";
           advancedHydrationFailed = true;
           markSectionError("#peOptionAccordion", "Не удалось загрузить опции");
         });
-      const variantsReady = loadVariantsPromise
-        .then((started) => { if (started !== false) renderVariantAccordion(); })
+      const unitsReady = loadUnits();
+      const variantsReady = Promise.all([loadVariantsPromise, unitsReady])
+        .then(async ([started]) => {
+          if (started !== false && await renderVariantAccordion() === false) advancedHydrationFailed = true;
+        })
         .catch(() => {
           advancedHydrationFailed = true;
           markSectionError("#peVariantAccordion", "Не удалось загрузить варианты");
         });
-      const unitsReady = loadUnits();
       const conversionsReady = (async () => {
         if (!(await waitForAdvancedHydration())) return false;
         if (!editorPassport) {
