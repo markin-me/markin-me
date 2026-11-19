@@ -1,7 +1,7 @@
 const { createServiceTextRenderer } = require('./botContentTemplates');
 const { confirmMaxLink, sendMaxMessage, getTenantMaxBotId, fetchMaxApi } = require('./maxIntegration');
 const crypto = require('crypto');
-const { listTemplates, renderTemplate } = require('./botContentTemplates');
+const { listTemplates, renderTemplate, employeeAuthResponse } = require('./botContentTemplates');
 const { keepCurrentOperationPending, markCurrentOperation, recordCurrentServiceMessage } = require('./messengerCleanup');
 
 function normalizeUpdatesPayload(data) {
@@ -752,7 +752,7 @@ async function sendTenantMaxMessage(payload) {
 async function answerTenantMaxCallback(token,callbackId,text){
   const base=String(process.env.MAX_API_BASE_URL || 'https://platform-api2.max.ru').replace(/\/$/,'');
   if(!base.startsWith('https://'))throw Object.assign(new Error('MAX_HTTPS_REQUIRED'),{code:'MAX_HTTPS_REQUIRED'});
-  const response=await fetchMaxApi(`${base}/answers?callback_id=${encodeURIComponent(callbackId)}`,{method:'POST',headers:{Authorization:token,'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),body:JSON.stringify({message:{text}})});
+  const response=await fetchMaxApi(`${base}/answers?callback_id=${encodeURIComponent(callbackId)}`,{method:'POST',headers:{Authorization:token,'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),body:JSON.stringify(text?{message:{text}}:{})});
   const answer=await response.json().catch(()=>null);
   if(!response.ok || answer?.success!==true)throw Object.assign(new Error('MAX_CALLBACK_FAILED'),{code:'MAX_CALLBACK_FAILED'});
 }
@@ -795,18 +795,71 @@ async function sendConfiguredMaxWelcome(db, tenantId, storeId, token, userId, se
 
 async function handleTenantMaxUpdate(db, helpers, { tenantId, storeId = 1, token }, u, options = {}, send = sendTenantMaxMessage) {
   const serviceText = createServiceTextRenderer(db, tenantId, Number(storeId || 1), 'max');
-  if(u?.update_type==='message_callback' && /^auth:(?:b_[A-Za-z0-9_-]{40}|r_[A-Za-z0-9_-]{43})$/.test(String(u.callback?.payload)) && options.onBrowserAuth){
+  const customerResult = async (uid,result) => {
+    const employee=employeeAuthResponse({...result,accountType:result.accountType || (options.employeeOperation?'employee':undefined)},'max');
+    if(employee){
+      if(employee.text){
+        const button=employee.button && (employee.contact ? {type:'request_contact',text:employee.button}
+          : {type:'callback',text:employee.button,payload:'auth:'+employee.reference});
+        await send({db,tenantId,botToken:token,maxUserId:uid,text:employee.text,
+          extraPayload:button?{attachments:[{type:'inline_keyboard',payload:{buttons:[[button]]}}]}:undefined});
+        if(employee.phase)await options.onCustomerPrompt?.(result,employee.phase);
+      }
+      return true;
+    }
+    if(result.silent || result.guestConfirmed)return true;
+    if(!result.ok || result.accountType!=='customer' && result.context!=='PROFILE_LINK')return false;
+    const linkPrompt=result.purpose==='profile_link' || result.context==='PROFILE_LINK';
+    if(result.linkConfirmation || linkPrompt && (result.contactRequired || result.consentAccepted)){
+      const contact=Boolean(result.contactRequired);
+      const button=contact?{type:'request_contact',text:'Привязать'}:{type:'callback',text:'Привязать',payload:`auth:${result.reference}`};
+      await send({db,tenantId,botToken:token,maxUserId:uid,text:'Для привязки мессенджера нажмите кнопку „Привязать“.',
+        extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[button]]}}]}});
+      await options.onCustomerPrompt?.(result,contact?'contact':'final');
+      return true;
+    }
+    if(result.purpose==='profile_link' || result.context==='PROFILE_LINK')return false;
+    if(result.confirmed || result.autoConfirmed)return true;
+    let text,buttons,phase;
+    if(result.phoneChoiceRequired){
+      phase='choice';
+      text='Номер телефона в MAX отличается от номера, указанного в магазине.\n\nАвторизоваться под другим номером?';
+      buttons=[[{type:'callback',text:'Да',payload:`auth:${result.reference}:yes`},{type:'callback',text:'Нет',payload:`auth:${result.reference}:no`}]];
+    }else if(result.cancelled)text='Авторизация отменена.';
+    else if(result.contactRequired){phase='contact';text='Для авторизации нажмите кнопку „Авторизоваться“.';buttons=[[{type:'request_contact',text:'Авторизоваться'}]];}
+    else return false;
+    await send({db,tenantId,botToken:token,maxUserId:uid,text,extraPayload:buttons?{attachments:[{type:'inline_keyboard',payload:{buttons}}]}:undefined});
+    if(phase)await options.onCustomerPrompt?.(result,phase);
+    return true;
+  };
+  if(u?.update_type==='message_callback' && /^auth:(?:b_[A-Za-z0-9_-]{40}|[cr]_[A-Za-z0-9_-]{43})(?::(?:yes|no))?$/.test(String(u.callback?.payload)) && options.onBrowserAuth){
     const uid=String(u.callback?.user?.user_id || '');
     if(!uid || u.callback.user.is_bot)return;
-    const result=await options.onBrowserAuth({providerUserId:uid,token:u.callback.payload.slice(5),confirm:true});
+    const result=await options.onBrowserAuth({providerUserId:uid,token:u.callback.payload.slice(5).split(':')[0],confirm:true,phoneChoice:u.callback.payload.split(':')[2] || null});
+    if(result.context==='PROFILE_LINK' || await customerResult(uid,result)){
+      if(result.context==='PROFILE_LINK' && !result.silent && !result.guestConfirmed){
+        await send({db,tenantId,botToken:token,maxUserId:uid,text:result.ok?'MAX успешно привязан. Вернитесь в магазин.'
+          :result.error==='CONTACT_PHONE_MISMATCH'?'Номер телефона в MAX отличается от номера вашего профиля. Привязка невозможна.':'Не удалось привязать MAX. Начните привязку заново в профиле.'});
+      }
+      if(result.confirmed || result.consentAccepted || result.cancelled || result.context==='PROFILE_LINK'){
+        await options.onCustomerControlsUsed?.(u.message?.body?.mid);
+      }
+      await answerTenantMaxCallback(token,u.callback.callback_id,'')
+        .catch(error=>console.warn('CUSTOMER_CALLBACK_ACK_FAILED',{provider:'max',reason:error.code || error.name}));
+      return;
+    }
+    if(result.accountType==='employee' && result.confirmed){
+      await answerTenantMaxCallback(token,u.callback.callback_id,'');
+      return;
+    }
     await answerTenantMaxCallback(token,u.callback.callback_id,result.ok?await serviceText('auth_success', 'Подтверждение принято. Вернитесь в исходную вкладку для завершения входа.'):'Запрос истёк или доступ не разрешён');
     await send({db,tenantId,botToken:token,maxUserId:uid,text:result.ok?await serviceText('auth_success', 'Подтверждение принято. Вернитесь в исходную вкладку.')
       :result.error==='EMPLOYEE_MESSENGER_NOT_LINKED'?'Вернитесь в исходную карточку и подтвердите логин и пароль, затем нажмите кнопку снова.'
-      :result.error==='CUSTOMER_OWNERSHIP_PROOF_REQUIRED'?'Карточка с этим номером уже существует. Нужны ранее подтверждённый мессенджер или помощь администратора. Совпадения номера и даты рождения для привязки недостаточно.'
       :await serviceText('request_error', 'Вход не подтверждён. Начните заново в исходном браузере.')});
     return;
   }
   const parsed = parseUpdate(u);
+  if(options.employeeOperation && options.loginEnabled===false)return;
   if (options.loginEnabled === false) {
     if (parsed.userId && parsed.payload) {
       await markCurrentOperation('error');
@@ -831,21 +884,28 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, storeId = 1, token
     const valid=contacts.length===1 && vcf.length<=10000 && received.length===32 && crypto.timingSafeEqual(expected,received)
       && phones.length===1 && message?.sender?.user_id && !message.sender.is_bot
       && payload.max_info?.user_id && String(payload.max_info.user_id)===String(message.sender.user_id)
-      && message.recipient?.chat_type==='dialog';
-    if(!valid){await markCurrentOperation('error');await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:'Контакт не подтверждён MAX. Используйте только кнопку «Поделиться контактом», не текст и не пересланную карточку.'});return;}
+      && message.recipient?.chat_type==='dialog'
+      && (!options.customerContactEvent || message.link?.type!=='forward');
+    if(!valid && options.employeeOperation)return;
+    if(!valid){if(!options.customerContactEvent)await markCurrentOperation('error');await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:options.customerContactEvent
+      ? 'Контакт не подтверждён MAX. Используйте системную кнопку «Авторизоваться» или «Привязать» в текущем запросе.'
+      : 'Контакт не подтверждён MAX. Используйте только кнопку «Поделиться контактом», не текст и не пересланную карточку.'});return;}
     const result=await options.onBrowserContact({providerUserId:String(message.sender.user_id),phone:phones[0][1],name:[message.sender.first_name,message.sender.last_name].filter(Boolean).join(' ') || message.sender.name,avatarUrl:message.sender.full_avatar_url || message.sender.avatar_url});
+    if(await customerResult(parsed.userId,result))return;
     if(result.context==='PROFILE_LINK'){
       await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok
-        ?result.guestConfirmed?'Номер телефона подтверждён! MAX подключён к вашему профилю. Теперь вам доступны бонусы и вход по коду.':await serviceText('link_success', 'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот')
-        :result.error==='CONTACT_PHONE_MISMATCH'?'Не удалось привязать мессенджер, так как номер телефона не совпадает с учётной записью':'Не удалось привязать MAX. Начните привязку заново в профиле.'});return;
+        ?'MAX успешно привязан. Вернитесь в магазин.'
+        :result.error==='CONTACT_PHONE_MISMATCH'?'Номер телефона в MAX отличается от номера вашего профиля. Привязка невозможна.':'Не удалось привязать MAX. Начните привязку заново в профиле.'});return;
     }
+    if(result.accountType==='employee' && result.confirmed)return;
     if(result.autoConfirmed){await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:await serviceText('auth_success', 'Номер телефона подтверждён. Вход будет завершён автоматически')});return;}
     await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.ok
       ?await serviceText('confirmation_pending', 'Контакт подтверждён. Подтвердите начатый вами вход.')
-      :result.error==='CUSTOMER_RELINK_PROOF_REQUIRED'?'Для повторного подключения используйте прежний MAX-аккаунт. Если он недоступен, восстановите доступ через магазин.':result.error==='CONTACT_REQUEST_AMBIGUOUS'?'Открыто несколько запросов входа. Отмените лишние в исходных вкладках, затем отправьте контакт снова.':await serviceText('request_expired', 'Запрос отсутствует или истёк. Начните вход заново в исходной карточке.'),extraPayload:result.ok?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'Авторизоваться',payload:`auth:${result.reference}`}]]}}]}:undefined});return;
+      :result.error==='CONTACT_REQUEST_AMBIGUOUS'?'Открыто несколько запросов входа. Отмените лишние в исходных вкладках, затем отправьте контакт снова.':await serviceText('request_expired', 'Запрос отсутствует или истёк. Начните вход заново в исходной карточке.'),extraPayload:result.ok?{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'callback',text:'Авторизоваться',payload:`auth:${result.reference}`}]]}}]}:undefined});return;
   }
   if (startToken?.startsWith('l_') && parsed.userId && typeof options.onAuthLogin === 'function') {
     const result = await options.onAuthLogin({ providerUserId: parsed.userId, token: startToken });
+    if(options.employeeOperation)return;
     if (!result.ok || result.alreadySent) await send({ db, tenantId, botToken: token, maxUserId: parsed.userId,
       text: result.alreadySent ? 'Код уже отправлен. Он действует 3 минуты. Для нового кода вернитесь на карточку входа.'
         : result.error === 'CODE_DELIVERY_FAILED' ? await serviceText('request_error', 'Не удалось доставить код. Создайте новый запрос на карточке входа.')
@@ -854,6 +914,7 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, storeId = 1, token
   }
   if(startToken?.startsWith('b_') && parsed.userId && options.onBrowserAuth){
     const result=await options.onBrowserAuth({providerUserId:parsed.userId,token:startToken,confirm:false});
+    if(await customerResult(parsed.userId,{...result,reference:result.reference || startToken}))return;
     if(result.ok&&result.contactRequired){
       await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:await serviceText('contact_request', 'Чтобы авторизоваться в системе, нажмите «Авторизоваться».'),extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Авторизоваться'}]]}}]}});return;
     }
@@ -863,71 +924,25 @@ async function handleTenantMaxUpdate(db, helpers, { tenantId, storeId = 1, token
   }
   if (startToken?.startsWith('a_') && parsed.userId && typeof options.onAuthLink === 'function') {
     const result = await options.onAuthLink({ provider: 'max', providerUserId: parsed.userId, token: startToken });
+    if(await customerResult(parsed.userId,result))return;
     if(result?.contactRequired){
-      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:await serviceText('contact_request', 'Подтвердите собственный контакт для привязки MAX к вашему профилю.'),extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:'Поделиться своим контактом'}]]}}]}});return;
+      await send({db,tenantId,botToken:token,maxUserId:parsed.userId,text:result.context==='PROFILE_LINK'?'Для привязки мессенджера нажмите кнопку „Привязать“.':await serviceText('contact_request', 'Подтвердите собственный контакт для привязки MAX к вашему профилю.'),extraPayload:{attachments:[{type:'inline_keyboard',payload:{buttons:[[{type:'request_contact',text:result.context==='PROFILE_LINK'?'Привязать':'Поделиться своим контактом'}]]}}]}});return;
     }
     await send({ db, tenantId, botToken: token, maxUserId: parsed.userId, text: result?.ok
       ? result.context==='PROFILE_LINK'
-        ?await serviceText('link_success', 'MAX успешно привязан к вашему профилю! Теперь вы можете получать коды для входа в магазин через этот бот')
+        ?'MAX успешно привязан. Вернитесь в магазин.'
         :await serviceText('link_success', 'MAX успешно привязан. Вернитесь в CRM. Теперь вы можете получать коды для входа через этот бот.')
       : 'Ссылка недействительна или истекла. Получите новую в профиле.' });
     return;
   }
-  if (startToken && parsed.userId) {
-    let loginOrigin = '';
-    if (!isGenericLinkPayload(startToken)) {
-      loginOrigin = await readLoginOriginToken(db, tenantId, startToken);
-      if (loginOrigin) {
-        await rememberPendingOrigin(db, tenantId, parsed.userId, loginOrigin);
-      } else {
-        await rememberPendingToken(db, tenantId, parsed.userId, startToken);
-      }
-    }
-    const pendingOrigin = loginOrigin || await readPendingOrigin(db, tenantId, parsed.userId);
-    const knownCustomerId = await findKnownCustomerForAuth(
-      db,
-      helpers,
-      tenantId,
-      parsed.userId,
-      null
-    );
-    if (knownCustomerId) {
-      const loginMessage = await buildLoginMessage(
-        db,
-        tenantId,
-        knownCustomerId,
-        '\u041c\u044b \u0443\u0437\u043d\u0430\u043b\u0438 \u0432\u0430\u0448 \u0430\u043a\u043a\u0430\u0443\u043d\u0442. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435, \u043a\u0443\u0434\u0430 \u043f\u0435\u0440\u0435\u0439\u0442\u0438:',
-        pendingOrigin
-      );
-      await send({
-        db,
-        tenantId,
-        botToken: token,
-        maxUserId: parsed.userId,
-        text: loginMessage.text,
-        extraPayload: loginMessage.extraPayload || undefined,
-      });
-      return;
-    }
-    await sendTenantMaxProfileHint(db, tenantId, token, parsed.userId, send);
-    return;
-  }
+  if (startToken) return;
 
   if ((isPlainStartCommand(parsed.text) || parsed.updateType === 'bot_started') && parsed.userId) {
     await sendConfiguredMaxWelcome(db, tenantId, storeId, token, parsed.userId, send);
     return;
   }
 
-  if (parsed.userId && (parsed.phone || parsed.hasContact)) {
-    const knownId = await findKnownCustomerForAuth(db, helpers, tenantId, parsed.userId, null);
-    if (knownId) {
-      const message = await buildLoginMessage(db, tenantId, knownId, 'Выберите, куда перейти:');
-      await send({ db, tenantId, botToken: token, maxUserId: parsed.userId, text: message.text, extraPayload: message.extraPayload });
-    } else {
-      await send({ db, tenantId, botToken: token, maxUserId: parsed.userId,
-        text: 'Для безопасной привязки войдите на сайт магазина и откройте настройки профиля. Номер телефона сам по себе не привязывает аккаунт.' });
-    }
-  }
+
 }
 
 function startMaxPolling(db, helpers) {

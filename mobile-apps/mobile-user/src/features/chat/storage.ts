@@ -4,8 +4,7 @@ import { apiConfig } from '../../shared/api';
 import { readCachedCustomerPassport } from '../../shared/api';
 import type { ChatActor, ChatMessage, ChatProfile, ChatSettings, ChatThreadMeta, ChatTypingState, ImportantMessage } from './types';
 
-const GUEST_CLIENT_KEY = `mobile_chat_guest_client_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
-const LAST_CUSTOMER_CLIENT_KEY = `mobile_chat_last_customer_client_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
+const VISITOR_PROOF_KEY = `mobile_chat_visitor_proof_t${apiConfig.tenantId}`;
 const PUSH_ENABLED_KEY = `mobile_chat_push_enabled_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const PUSH_TOKEN_KEY = `mobile_chat_push_token_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
 const CHAT_SETTINGS_CACHE_KEY = `mobile_chat_settings_cache_v1_t${apiConfig.tenantId}_s${apiConfig.storeId}`;
@@ -42,52 +41,11 @@ type ImportantMessagesCacheSnapshot = {
 
 const THREAD_CACHE_MEMORY = new Map<string, ChatThreadCacheSnapshot>();
 const CHAT_UNREAD_CACHE_MEMORY = new Map<string, ChatUnreadCacheSnapshot>();
-let LAST_CHAT_PROFILE_MEMORY: ChatProfile | null = null;
 let LAST_CHAT_SETTINGS_MEMORY: ChatSettings | null = null;
-let LAST_CUSTOMER_CLIENT_MEMORY = '';
 const IMPORTANT_MESSAGES_CACHE_MEMORY = new Map<string, ImportantMessagesCacheSnapshot>();
 
-function makeGuestId() {
-  const base = Date.now().toString().slice(-9);
-  const random = Math.floor(Math.random() * 9000) + 1000;
-  return `${base}${random}`.slice(0, 12);
-}
-
-export async function readGuestChatClientId() {
-  const existing = await readStoredGuestChatClientId();
-  if (existing) return existing;
-  const next = makeGuestId();
-  await AsyncStorage.setItem(GUEST_CLIENT_KEY, next);
-  return next;
-}
-
-export async function readStoredGuestChatClientId() {
-  return String(await AsyncStorage.getItem(GUEST_CLIENT_KEY).catch(() => '') || '').trim();
-}
-
-export async function clearGuestChatClientId(clientId?: string) {
-  const current = await readStoredGuestChatClientId();
-  const safeClientId = String(clientId || '').trim();
-  if (!current || (safeClientId && current !== safeClientId)) return;
-  await AsyncStorage.removeItem(GUEST_CLIENT_KEY);
-}
-
-export async function readLastCustomerChatClientId() {
-  const clientId = String(await AsyncStorage.getItem(LAST_CUSTOMER_CLIENT_KEY).catch(() => '') || '').trim();
-  if (clientId) LAST_CUSTOMER_CLIENT_MEMORY = clientId;
-  return clientId;
-}
-
-export async function saveLastCustomerChatClientId(clientId: string) {
-  const safe = String(clientId || '').trim();
-  if (safe) {
-    LAST_CUSTOMER_CLIENT_MEMORY = safe;
-    await AsyncStorage.setItem(LAST_CUSTOMER_CLIENT_KEY, safe);
-  }
-}
-
-export function readLastCustomerChatClientIdSync() {
-  return LAST_CUSTOMER_CLIENT_MEMORY;
+export async function readChatVisitorCredential() {
+  return String(await AsyncStorage.getItem(VISITOR_PROOF_KEY) || '');
 }
 
 export async function readChatPushEnabled() {
@@ -354,14 +312,6 @@ export async function markImportantMessageRead(item: ImportantMessage | number) 
   await saveImportantMessagesReadMap(readMap);
 }
 
-export function readLastChatProfileSync() {
-  return LAST_CHAT_PROFILE_MEMORY ? { ...LAST_CHAT_PROFILE_MEMORY } : null;
-}
-
-export function saveLastChatProfile(profile: ChatProfile | null) {
-  LAST_CHAT_PROFILE_MEMORY = profile ? { ...profile } : null;
-}
-
 export function readLastChatSettingsSync() {
   return LAST_CHAT_SETTINGS_MEMORY ? { ...LAST_CHAT_SETTINGS_MEMORY } : null;
 }
@@ -375,32 +325,42 @@ export function saveLastChatSettings(settings: ChatSettings | null) {
   }
 }
 
+let profileRequest: { token: string; pending: Promise<ChatProfile> } | null = null;
+
 export async function resolveUserChatProfile(): Promise<ChatProfile> {
-  const passport = await readCachedCustomerPassport().catch(() => null);
+  const passport = await readCachedCustomerPassport();
   const token = String(passport?.token || '').trim();
-  const customer = passport?.customer || null;
-  const directId = Number(customer?.id || 0);
-
-  if (token && Number.isFinite(directId) && directId > 0) {
-    const clientId = String(Math.trunc(directId));
-    const profile = {
-      clientId,
+  if (profileRequest?.token === token) return profileRequest.pending;
+  const previous = profileRequest?.pending;
+  const pending = (async () => {
+    await previous?.catch(() => undefined);
+    const proof = await readChatVisitorCredential();
+    const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/api/chat-temp/identity`, {
+      method: 'POST',
+      headers: {
+        'x-tenant-id': String(apiConfig.tenantId),
+        'x-chat-actor': 'in',
+        'x-chat-client': 'native',
+        ...(proof ? { 'x-chat-visitor': proof } : {}),
+        ...(token ? { 'x-customer-token': token } : {}),
+      },
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(String(result.error || 'CHAT_IDENTITY_UNAVAILABLE'));
+    const currentPassport = await readCachedCustomerPassport();
+    if (String(currentPassport?.token || '') !== token) throw new Error('CHAT_IDENTITY_CHANGED');
+    const identity = result.data;
+    if (identity.visitor_token) await AsyncStorage.setItem(VISITOR_PROOF_KEY, identity.visitor_token);
+    const customer = Number(currentPassport?.customer?.id) === Number(identity.client_id) ? currentPassport?.customer : null;
+    return {
+      clientId: String(identity.client_id),
       customerToken: token,
-      name: String(customer?.name || 'Клиент'),
+      name: String(customer?.name || (identity.is_visitor ? 'Гость' : 'Клиент')),
       phone: String(customer?.phone || ''),
-      isGuest: false,
+      isGuest: Boolean(identity.is_visitor),
     };
-    saveLastChatProfile(profile);
-    return profile;
-  }
-
-  const profile = {
-    clientId: await readGuestChatClientId(),
-    customerToken: '',
-    name: 'Гость',
-    phone: '',
-    isGuest: true,
-  };
-  saveLastChatProfile(profile);
-  return profile;
+  })();
+  profileRequest = { token, pending };
+  try { return await pending; }
+  finally { if (profileRequest?.pending === pending) profileRequest = null; }
 }

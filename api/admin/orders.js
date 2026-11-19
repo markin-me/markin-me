@@ -903,7 +903,9 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     const settings = await loadBonusProgramSettings(queryable, normalizedTenantId);
     const blockedByRedeem = Boolean(benefitsMeta?.bonus_accrual_blocked_by_redeem)
       || (redeemAmount > 0 && !settings.allowRedeemAndAccrue);
-    const storedAccrualAmount = benefitsMeta?.bonus_accrual_amount != null && Number.isFinite(Number(benefitsMeta.bonus_accrual_amount))
+    const guestAccrual = guestOrigin ? parseOrderJsonObject(bonusOrder.benefits_meta_json).bonus_accrual_amount : null;
+    const storedAccrualAmount = guestAccrual === 0 ? 0
+      : benefitsMeta?.bonus_accrual_amount != null && Number.isFinite(Number(benefitsMeta.bonus_accrual_amount))
       ? Number(benefitsMeta.bonus_accrual_amount)
       : null;
     const recalculatedAccrualAmount = blockedByRedeem || storedAccrualAmount != null
@@ -3997,7 +3999,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const hasBenefitsMetaColumn = await ensureOrderBenefitsMetaColumn();
 
       const [existingRows] = await db.query(
-        `SELECT id, public_id, customer_id, promo_code, address_comment, cutlery_qty, discounts_json, status_id, is_paid, online_payment_required, online_payment_status,
+        `SELECT id, public_id, customer_id, guest_session_hash, promo_code, address_comment, cutlery_qty, discounts_json, status_id, is_paid, online_payment_required, online_payment_status,
                 ${hasBenefitsMetaColumn ? "benefits_meta_json," : ""}
                 items,
                 stock_deducted_at
@@ -4072,9 +4074,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const customerPhone = hasPhone && phoneDigits.length === 11 ? `+${phoneDigits}` : null;
       const customerIdRaw = Number(req.body?.customer_id || 0);
       const existingCustomerId = Number(existing?.customer_id || 0);
-      const customerId = customerIdRaw > 0
-        ? customerIdRaw
-        : (existingCustomerId > 0 ? existingCustomerId : null);
+      const guestOrigin=Boolean(existing.guest_session_hash);
+      const customerId = !guestOrigin && customerIdRaw > 0 ? customerIdRaw : existingCustomerId || null;
 
       const isDeliveryMethod = String(methodCode).trim().toLowerCase() === "delivery";
       const deliveryAddress = helpers.strOrNull(req.body?.delivery_address);
@@ -4093,10 +4094,18 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const promoCode = Object.prototype.hasOwnProperty.call(req.body || {}, "promo_code")
         ? helpers.strOrNull(req.body?.promo_code)
         : helpers.strOrNull(existing?.promo_code);
-      const benefitsMetaJson = hasBenefitsMetaColumn
+      let benefitsMetaJson = hasBenefitsMetaColumn
         ? buildOrderBenefitsMetaJson(req.body, existing?.benefits_meta_json)
         : null;
-      const hasExplicitBonusRedeemDisabled = (
+      if(guestOrigin && hasBenefitsMetaColumn){
+        const guestBonus=parseOrderBenefitsMetaJson(existing.benefits_meta_json);
+        const guestAccrual=parseOrderJsonObject(existing.benefits_meta_json).bonus_accrual_amount;
+        benefitsMetaJson=JSON.stringify({...parseOrderBenefitsMetaJson(benefitsMetaJson),
+          bonus_account_id:guestBonus?.bonus_account_id ?? null,bonus_level_id:guestBonus?.bonus_level_id ?? null,
+          bonus_accrual_amount:guestAccrual===0?0:guestBonus?.bonus_accrual_amount ?? null,
+          bonus_redeem_enabled:false,bonus_redeem_amount:0,bonus_accrual_blocked_by_redeem:false});
+      }
+      const hasExplicitBonusRedeemDisabled = guestOrigin || (
         Object.prototype.hasOwnProperty.call(req.body || {}, "bonus_redeem_enabled")
         && !(req.body.bonus_redeem_enabled === true || req.body.bonus_redeem_enabled === "true" || Number(req.body.bonus_redeem_enabled || 0) === 1)
       ) || (
@@ -4145,7 +4154,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           lineTotal,
           Math.max(0, Number(rawItem?.benefits_excluded_line_total ?? rawItem?.discount_excluded_line_total ?? 0) || 0)
         ));
-        const bonusRedeemLineAmount = roundMoney(Math.min(
+        const bonusRedeemLineAmount = guestOrigin ? 0 : roundMoney(Math.min(
           Math.max(0, originalLineTotal - lineTotal),
           Math.max(0, Number(rawItem?.bonus_redeem_line_amount ?? rawItem?.bonusRedeemLineAmount ?? 0) || 0)
         ));
@@ -4922,13 +4931,13 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const isSavedSuccessfulFinal = Number(savedStatusRows?.[0]?.is_final || 0) === 1 && !isSavedCanceled;
       const previousBonusCustomerId = Number(existing?.customer_id || 0) || null;
       const nextBonusCustomerId = Number(customerId || 0) || null;
-      if (isSavedCanceled) {
+      if (!guestOrigin && isSavedCanceled) {
         await releaseOrderBonusReserve(db, {
           tenantId,
           orderId: id,
           customerId: previousBonusCustomerId || nextBonusCustomerId,
         });
-      } else if (isSavedSuccessfulFinal) {
+      } else if (!guestOrigin && isSavedSuccessfulFinal) {
         await settleOrderBonus(db, {
           tenantId,
           orderId: id,
@@ -4936,7 +4945,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
           discountsJson,
           benefitsMetaRaw: benefitsMetaJson,
         });
-      } else {
+      } else if (!guestOrigin) {
         await releaseOrderBonusReserve(db, {
           tenantId,
           orderId: id,
@@ -4952,7 +4961,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       }
 
       const updateFields = [
-        "customer_id=?",
+        "customer_id=IF(guest_session_hash IS NULL,?,customer_id)",
         "customer_name=?",
         "customer_phone=?",
         "promo_code=?",

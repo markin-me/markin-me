@@ -29,6 +29,7 @@ import {
 } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { routes, type RootStackParamList } from '../../app/navigation/routes';
+import { getChatMediaHeaders } from '../../features/chat/api';
 import {
   formatChatDay,
   formatChatTime,
@@ -124,6 +125,17 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
   const [selectionDeleteConfirmOpen, setSelectionDeleteConfirmOpen] = useState(false);
   const [reactionsExpanded, setReactionsExpanded] = useState(false);
   const [imageViewerUri, setImageViewerUri] = useState('');
+  const [media, setMedia] = useState<{ key: string; headers: Record<string, string> }>();
+  const mediaKey = chat.clientId + ':' + chat.customerToken;
+  const mediaHeaders = media?.key === mediaKey ? media.headers : undefined;
+  useEffect(() => {
+    if (!chat.clientId) return;
+    let cancelled = false;
+    void getChatMediaHeaders(chat.customerToken).then(headers => {
+      if (!cancelled) setMedia({key:mediaKey,headers});
+    }).catch(error => console.warn('CHAT_ATTACHMENT_UNAVAILABLE', error));
+    return () => { cancelled = true; };
+  }, [chat.clientId, chat.customerToken, mediaKey]);
   const [pickedImages, setPickedImages] = useState<ChatPickedImage[]>([]);
   const [caption, setCaption] = useState('');
   const [bodyHeight, setBodyHeight] = useState(0);
@@ -383,6 +395,15 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     threadScrollDirectionRef.current = null;
     threadScrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
     setWaitingForScrollRestore(false);
+    setImageViewerUri('');
+    setActionMessage(null);
+    setActionMessageLayout(null);
+    setContextHiddenMessageId('');
+    setReactionsExpanded(false);
+    setSelectionActive(false);
+    setSelectionDeleteConfirmOpen(false);
+    setPickedImages([]);
+    setCaption('');
   }, [chat.clientId]);
 
   useEffect(() => {
@@ -760,6 +781,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
           actor={chat.actor}
           contextHidden={contextHiddenMessageId === message.id}
           message={message}
+          mediaHeaders={mediaHeaders}
           onDoublePress={handleBubbleDoublePress}
           onLongPress={handleLongPress}
           onOpenImage={setImageViewerUri}
@@ -795,6 +817,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
     handleQuickQuestion,
     handleReact,
     handleSwipeReply,
+    mediaHeaders,
     openOrder,
     quickQuestionsThreadIndex,
     selectedIdSet,
@@ -946,6 +969,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
 
       <ChatActionSheet
         actor={chat.actor}
+        mediaHeaders={mediaHeaders}
         canDeleteForPeer={selectionDeleteConfirmOpen ? selectedCanDeleteForPeer : !!actionMessage && isOutgoing(actionMessage, chat.actor)}
         canEdit={!selectionDeleteConfirmOpen && !!actionMessage && isOutgoing(actionMessage, chat.actor)}
         confirmOnly={selectionDeleteConfirmOpen}
@@ -1002,7 +1026,7 @@ export function ChatPage({ active = true, onBack }: ChatPageProps = {}) {
         visible={pickedImages.length > 0}
       />
 
-      <ChatImageViewer onClose={() => setImageViewerUri('')} uri={imageViewerUri} />
+      <ChatImageViewer mediaHeaders={mediaHeaders} onClose={() => setImageViewerUri('')} uri={imageViewerUri} />
     </Screen>
   );
 }

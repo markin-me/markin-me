@@ -18,6 +18,7 @@ type ChatActionSheetProps = {
   confirmTitle?: string;
   confirmPeerLabel?: string;
   message: ChatMessage | null;
+  mediaHeaders?: Record<string, string>;
   onClose: () => void;
   onCopy: () => void;
   onDelete: (options?: { deleteForPeer?: boolean }) => void;
@@ -57,6 +58,7 @@ export function ChatActionSheet({
   confirmTitle,
   confirmPeerLabel,
   message,
+  mediaHeaders,
   onClose,
   onCopy,
   onDelete: confirmDelete,
@@ -283,6 +285,7 @@ export function ChatActionSheet({
               actor={actor}
               contextClone
               message={message}
+              mediaHeaders={mediaHeaders}
               onLongPress={() => undefined}
               onOpenImage={() => undefined}
               onOpenOrder={() => undefined}

@@ -14,7 +14,7 @@ import type {
   ChatWaitResult,
   ImportantMessage,
 } from './types';
-import { saveLastChatSettings } from './storage';
+import { readChatVisitorCredential, saveLastChatSettings } from './storage';
 
 let chatSettingsRequest: Promise<ChatSettings> | null = null;
 
@@ -63,8 +63,17 @@ function buildHeaders(options: ChatRequestOptions) {
   return headers;
 }
 
-function buildHeaderRecord(options: ChatRequestOptions) {
+async function buildChatHeaders(options: ChatRequestOptions) {
   const headers = buildHeaders(options);
+  if ((options.actor || 'in') === 'in') {
+    headers.set('x-chat-client', 'native');
+    const proof = await readChatVisitorCredential();
+    if (proof) headers.set('x-chat-visitor', proof);
+  }
+  return headers;
+}
+
+function buildHeaderRecord(headers: Headers) {
   const out: Record<string, string> = {};
   headers.forEach((value, key) => {
     out[key] = value;
@@ -72,9 +81,27 @@ function buildHeaderRecord(options: ChatRequestOptions) {
   return out;
 }
 
+export async function getChatMediaHeaders(customerToken: string) {
+  return buildHeaderRecord(await buildChatHeaders({ customerToken, actor: 'in' }));
+}
+
+export function getChatImageSource(uri: string, headers?: Record<string, string>) {
+  if (!uri) return undefined;
+  const base = new URL(apiConfig.baseUrl);
+  const url = new URL(uri, base);
+  const local = url.origin === base.origin && url.pathname.match(/^\/(static\/)?uploads\/chat\/(.+)$/);
+  if (!local) return { uri };
+  if (!headers) return undefined;
+  return {
+    uri: buildUrl('/api/chat-temp/media/' + (local[1] ? 'static/' : 'uploads/') + local[2]),
+    headers,
+    cache: 'reload' as const,
+  };
+}
+
 async function requestData<T>(path: string, options: ChatRequestOptions = {}): Promise<T> {
   const actor = options.actor || 'in';
-  const headers = buildHeaders(options);
+  const headers = path.startsWith('/api/chat-temp/') ? await buildChatHeaders(options) : buildHeaders(options);
   const hasBody = typeof options.body !== 'undefined';
   if (hasBody && !(options.body instanceof FormData) && !headers.has('content-type')) {
     headers.set('content-type', 'application/json');
@@ -205,14 +232,14 @@ export function waitThread(clientId: string, params: {
   });
 }
 
-export function openThreadStream(clientId: string, params: {
+export async function openThreadStream(clientId: string, params: {
   actor: ChatActor;
   customerToken?: string;
 }) {
   return new EventSource<'thread'>(buildUrl(`/api/chat-temp/thread/${encodeURIComponent(clientId)}/stream`, {
     client_id: clientId,
   }, params.actor), {
-    headers: buildHeaderRecord({ actor: params.actor, customerToken: params.customerToken }),
+    headers: buildHeaderRecord(await buildChatHeaders(params)),
     pollingInterval: 5000,
     timeout: 0,
   });
@@ -297,30 +324,6 @@ export function patchThreadMeta(clientId: string, meta: ChatThreadMeta, params: 
   });
 }
 
-export function mergeThreads(fromClientId: string, toClientId: string, actor: ChatActor = 'in') {
-  return requestData<{ merged?: boolean; updated_at?: string }>('/api/chat-temp/thread/merge', {
-    actor,
-    method: 'POST',
-    body: JSON.stringify({ from_client_id: fromClientId, to_client_id: toClientId }),
-  });
-}
-
-export async function uploadChatImage(clientId: string, file: { uri: string; name: string; type: string }, params: {
-  actor: ChatActor;
-  customerToken?: string;
-}) {
-  const form = new FormData();
-  form.append('client_id', clientId);
-  form.append('file', file as unknown as Blob);
-  return requestData<{ attachment: ChatAttachment }>('/api/chat-temp/attachment', {
-    actor: params.actor,
-    customerToken: params.customerToken,
-    method: 'POST',
-    body: form,
-    query: { client_id: clientId },
-  });
-}
-
 export function fetchUnread(params: {
   actor: ChatActor;
   customerToken?: string;
@@ -353,7 +356,7 @@ export function waitUnread(params: {
   });
 }
 
-export function openUnreadStream(params: {
+export async function openUnreadStream(params: {
   actor: ChatActor;
   customerToken?: string;
   clientId?: string;
@@ -361,10 +364,7 @@ export function openUnreadStream(params: {
   return new EventSource<'unread'>(buildUrl('/api/chat-temp/unread/stream', {
     client_id: params.clientId || undefined,
   }, params.actor), {
-    headers: buildHeaderRecord({
-      actor: params.actor,
-      customerToken: params.customerToken,
-    }),
+    headers: buildHeaderRecord(await buildChatHeaders(params)),
     pollingInterval: 5000,
     timeout: 0,
   });
@@ -404,7 +404,7 @@ export function unsubscribeChatPush(clientId: string, subscription: ChatPushSubs
 
 export function openOrderEventsStream(customerToken: string) {
   return new EventSource<'order.updated'>(buildUrl('/api/public/changes/stream'), {
-    headers: buildHeaderRecord({ customerToken }),
+    headers: buildHeaderRecord(buildHeaders({ customerToken })),
     pollingInterval: 5000,
     timeout: 0,
   });

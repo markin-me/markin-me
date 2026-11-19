@@ -6,7 +6,6 @@ const multer = require('multer');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendNewOrderMaxNotification } = require('../maxNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
-const makeChatTempRouter = require('../chatTemp');
 const { geocodeStoreAddress } = require('../../data/map-geocoder');
 const { getTenantMapConfig } = require('../../data/tenant-map-config');
 const {
@@ -104,13 +103,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }catch(error){sendCustomerMessengerError(res,error);}
   });
   async function customerBrowserSession(conn,r,req){
-    const tenantId=Number(r.tenant_id),token=makeToken32();
-    await dualWriteSession(conn,{tenantId,storeId:helpers.getStoreId(req),customerId:r.account_id,token,expiresAt:null,isActive:1,authStrength:'strong',userAgent:String(req.headers['user-agent']||'').slice(0,500),ipAddress:String(req.ip||'').slice(0,64)});
-    if(r.guest_session_hash){
-      await customerAuth.promoteGuest(conn,tenantId,str(req.headers['x-customer-token']),r,helpers.getStoreId(req));
-      await syncCustomerOrderMetrics(conn,tenantId,r.account_id);
+    const tenantId=Number(r.tenant_id);
+    let token=makeToken32();
+    if(r.result_session_id){
+      const [[session]]=await conn.query("SELECT token FROM cust_customer_sessions WHERE tenant_id=? AND customer_id=? AND id=? AND store_id=? AND auth_strength='strong' AND is_active=1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP()) FOR UPDATE",[tenantId,r.account_id,r.result_session_id,helpers.getStoreId(req)]);
+      if(!session)throw new MessengerAuthError('REQUEST_EXPIRED',409);
+      token=session.token;
+    }else{
+      await dualWriteSession(conn,{tenantId,storeId:helpers.getStoreId(req),customerId:r.account_id,token,expiresAt:null,isActive:1,authStrength:'strong',userAgent:String(req.headers['user-agent']||'').slice(0,500),ipAddress:String(req.ip||'').slice(0,64)});
+      if(r.guest_session_hash){
+        await customerAuth.promoteGuest(conn,tenantId,str(req.headers['x-customer-token']),r,helpers.getStoreId(req));
+        await syncCustomerOrderMetrics(conn,tenantId,r.account_id);
+      }
+      else if(str(req.headers['x-customer-token']).startsWith('g_'))throw new MessengerAuthError('GUEST_SESSION_MISMATCH',403);
     }
-    else if(str(req.headers['x-customer-token']).startsWith('g_'))throw new MessengerAuthError('GUEST_SESSION_MISMATCH',403);
     const [[customer]]=await conn.query("SELECT id,name,phone,DATE_FORMAT(birthday,'%Y-%m-%d') birthday,photo FROM cust_customers WHERE tenant_id=? AND id=?",[tenantId,r.account_id]);
     return {ok:true,token,customer};
   }
@@ -123,14 +129,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const channels=await getAccountChannels(db,customerScope(tenantId,customer.id),{includePrivate:true});
       const available=providers.filter(p=>channels.some(c=>c.provider===p&&c.verifiedAt));
       if(!available.length){
-        if(channels.length)throw new MessengerAuthError('CUSTOMER_MESSENGER_NOT_AVAILABLE',409);
-        return res.json({ok:true,mode:'unverified',channels:providers,customer_exists:true,relink_required:true,birthday_allowed:false});
+        return res.json({ok:true,mode:'unverified',channels:providers,customer_exists:true,birthday_allowed:false});
       }
       let provider=req.body.provider?String(req.body.provider):available[0];if(!available.includes(provider))throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
       const guestToken=str(req.headers['x-customer-token']);
       const guest=guestToken.startsWith('g_')?await customerAuth.getGuest(db,tenantId,guestToken,false,helpers.getStoreId(req)):null;
       if(guestToken.startsWith('g_')&&!guest)throw new MessengerAuthError('UNAUTHORIZED',401);
-      const binding=browserBinding(req,res);
+      const binding=browserBinding(req,res,'customer');
       if(!req.body.provider){
         const [[existing]]=await db.query(`SELECT r.public_id,r.provider,
           GREATEST(0,TIMESTAMPDIFF(SECOND,NOW(),c.resend_after)) resend_after,
@@ -148,12 +153,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const request=await createBrowserRequest(db,{tenantId,accountType:'customer',provider,binding,ipAddress:req.ip,guestSessionHash:guest?.token_hash||null});
       await db.query('UPDATE auth_browser_requests SET requested_phone=?,account_id=? WHERE public_id=?',[phone,customer.id,request.requestId]);
       let challenge;
-      try{challenge=await issueCodeChallenge(db,{tenantId,accountType:'customer',accountId:customer.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload,{customer:true})});}
+      try{challenge=await issueCodeChallenge(db,{tenantId,accountType:'customer',accountId:customer.id,purpose:'login',provider,ipAddress:req.ip,deliver:(payload,queryable)=>deliverCode(queryable,payload,{customer:true})});}
       catch(error){
         const otherProvider=available.find(p=>p!==provider);
         if(['CODE_DELIVERY_FAILED','TELEGRAM_BOT_START_REQUIRED'].includes(error.code)&&otherProvider){
           provider=otherProvider;
-          try{challenge=await issueCodeChallenge(db,{tenantId,accountType:'customer',accountId:customer.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload,{customer:true})});}
+          try{challenge=await issueCodeChallenge(db,{tenantId,accountType:'customer',accountId:customer.id,purpose:'login',provider,ipAddress:req.ip,deliver:(payload,queryable)=>deliverCode(queryable,payload,{customer:true})});}
           catch(telegramError){error=telegramError;}
         }
         if(!challenge){
@@ -230,9 +235,23 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const guestToken=str(req.headers['x-customer-token']);
       const guest=guestToken.startsWith('g_')?await customerAuth.getGuest(db,tenantId,guestToken,false,helpers.getStoreId(req)):null;
       if(guestToken.startsWith('g_')&&!guest)throw new MessengerAuthError('UNAUTHORIZED',401);
-      const request=await createBrowserRequest(db,{tenantId,accountType:'customer',provider,binding:browserBinding(req,res),ipAddress:req.ip,
-        purpose:'login',guestSessionHash:guest?.token_hash||null});
-      await db.query('UPDATE auth_browser_requests SET requested_phone=? WHERE public_id=?',[phone,request.requestId]);
+      const binding=browserBinding(req,res,'customer');
+      const conn=await db.getConnection();
+      let request;
+      try{
+        await conn.beginTransaction();
+        await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[tenantId]);
+        if(guest && !await customerAuth.getGuest(conn,tenantId,guestToken,true,helpers.getStoreId(req))){
+          throw new MessengerAuthError('UNAUTHORIZED',401);
+        }
+        await conn.query(`UPDATE auth_browser_requests SET state='cancelled'
+          WHERE tenant_id=? AND account_type='customer' AND provider=? AND browser_hash=? AND guest_session_hash <=> ?
+            AND purpose='login' AND state IN ('pending','started') AND code_challenge_id IS NULL`,
+        [tenantId,provider,crypto.createHash('sha256').update(binding).digest(),guest?.token_hash || null]);
+        request=await createBrowserRequest(conn,{tenantId,accountType:'customer',provider,binding,ipAddress:req.ip,
+          purpose:'login',guestSessionHash:guest?.token_hash||null,requestedPhone:phone});
+        await conn.commit();
+      }catch(error){await conn.rollback();throw error;}finally{conn.release();}
       res.json({ok:true,context:'LOGIN',request_id:request.requestId,bot_link:await buildProviderLink(db,tenantId,provider,request.token,{customer:true})});
     }catch(e){console.error('CUSTOMER_BROWSER_START_FAILED:',e.code||e.name);sendCustomerMessengerError(res,e);}
   });
@@ -245,10 +264,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
           if(!(await customerAuth.settings(conn,tenantId))[r.provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
           return customerBrowserSession(conn,r,req);
         }});
-      if(value.state==='confirmed'){
-        try{await mergeGuestChatIntoCustomerIfNeeded(tenantId,readIncomingGuestChatClientId(req),value.customer.id);}
-        catch(error){console.error('AUTH_GUEST_CHAT_MERGE_FAILED:',error.code || error.name);value.warnings=['GUEST_CHAT_MERGE_FAILED'];}
-      }
       res.json(value);
     }catch(e){sendCustomerMessengerError(res,e);}
   });
@@ -640,36 +655,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     );
   }
 
-  function readIncomingGuestChatClientId(req) {
-    const rawValue = req.body?.chat_guest_client_id
-      ?? req.body?.chatGuestClientId
-      ?? req.headers['x-chat-guest-client-id']
-      ?? req.query?.chat_guest_client_id
-      ?? req.query?.chatGuestClientId
-      ?? 0;
-    const guestClientId = Number(rawValue || 0);
-    return Number.isFinite(guestClientId) && guestClientId > 0
-      ? Math.trunc(guestClientId)
-      : 0;
-  }
-
-  async function mergeGuestChatIntoCustomerIfNeeded(tenantId, guestClientId, customerId) {
-    const fromId = Number(guestClientId || 0);
-    const toId = Number(customerId || 0);
-    if (!Number.isFinite(fromId) || fromId <= 0) return false;
-    if (!Number.isFinite(toId) || toId <= 0 || fromId === toId) return false;
-    const mergeFn = makeChatTempRouter && typeof makeChatTempRouter.mergeThreadIntoClientAndNotify === 'function'
-      ? makeChatTempRouter.mergeThreadIntoClientAndNotify
-      : null;
-    if (!mergeFn) return false;
-    try {
-      const result = await mergeFn(tenantId, fromId, toId);
-      return result?.merged === true;
-    } catch (err) {
-      console.error('AUTH_CHAT_GUEST_MERGE_FAILED:', err?.message || err);
-      return false;
-    }
-  }
   let discountProductConfigColumnReady = false;
   let ensureDiscountProductConfigColumnPromise = null;
   let discountHideInBenefitsColumnReady = false;
@@ -6865,7 +6850,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const tenantId = helpers.getTenantId(req);
       const phoneRaw = str(req.body.phone);
       const phone = helpers.normalizePhone(phoneRaw);
-      const guestChatClientId = readIncomingGuestChatClientId(req);
 
       if (!phone || phone.length < 10) {
         return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
@@ -6914,7 +6898,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         [tenantId, customerId]
       );
 
-      await mergeGuestChatIntoCustomerIfNeeded(tenantId, guestChatClientId, customerId);
 
       res.json({ ok: true, token, customer: me[0] || null });
 
@@ -6943,7 +6926,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const phoneRaw = str(req.body.phone);
       const phone = helpers.normalizePhone(phoneRaw);
       const name = normalizeRequiredCustomerName(req.body?.name);
-      const guestChatClientId = readIncomingGuestChatClientId(req);
 
       if (!phone || phone.length < 10) {
         return res.status(400).json({ ok: false, error: 'PHONE_REQUIRED' });
@@ -6989,7 +6971,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         [tenantId, customerId]
       );
 
-      await mergeGuestChatIntoCustomerIfNeeded(tenantId, guestChatClientId, customerId);
 
       res.json({ ok: true, token, customer: me[0] || null });
 
@@ -7020,7 +7001,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (!await buildProviderLink(db, tenantId, 'max', 'configuration-check')) {
         return res.status(409).json({ ok: false, error: 'MAX_BOT_NOT_CONFIGURED' });
       }
-      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), 'max');
+      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), 'max',{sessionToken});
       return res.json({
         ok: true,
         provider: 'max',
@@ -7044,7 +7025,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (!await buildProviderLink(db, tenantId, 'tg', 'configuration-check')) {
         return res.status(409).json({ ok: false, error: 'TG_BOT_NOT_CONFIGURED' });
       }
-      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), 'tg');
+      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), 'tg',{sessionToken});
       return res.json({
         ok: true,
         provider: 'tg',
@@ -7437,7 +7418,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         purpose: 'phone_verify',
         provider,
         ipAddress: req.ip,
-        deliver: (message) => deliverCode(db, message),
+        deliver: (message, queryable) => deliverCode(queryable, message),
       });
       return res.json({
         ok: true,
@@ -7542,9 +7523,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const policy=await customerAuth.settings(db,tenantId);
         if(!policy[provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
         await assertBrowserProviderReady(await getTenantBotConfig(db,tenantId,provider,{customer:true}));
-        const binding=browserBinding(req,res),conn=await db.getConnection();
+        const binding=browserBinding(req,res,'customer'),conn=await db.getConnection();
         try{
           await conn.beginTransaction();
+          await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[tenantId]);
           const guest=await customerAuth.getGuest(conn,tenantId,sessionToken,true,helpers.getStoreId(req));
           if(!guest)throw new MessengerAuthError('UNAUTHORIZED',401);
           const [[confirmed]]=await conn.query("SELECT public_id,DATE_FORMAT(expires_at,'%Y-%m-%dT%H:%i:%sZ') expires_at FROM auth_browser_requests WHERE tenant_id=? AND guest_session_hash=? AND browser_hash=? AND purpose='profile_link' AND state='confirmed' AND expires_at>NOW() LIMIT 1",[tenantId,guest.token_hash,crypto.createHash('sha256').update(binding).digest()]);
@@ -7568,7 +7550,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!await buildProviderLink(db, tenantId, provider, 'configuration-check')) {
         return res.status(409).json({ ok: false, error: provider === 'max' ? 'MAX_BOT_NOT_CONFIGURED' : 'TG_BOT_NOT_CONFIGURED' });
       }
-      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), provider);
+      const challenge = await createLinkChallenge(db, customerScope(tenantId, customer.id), provider,{sessionToken});
       return res.json({
         ok: true,
         provider,

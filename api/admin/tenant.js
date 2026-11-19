@@ -4071,6 +4071,17 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       const telegramBotUsername = req.body.telegram_bot_username !== undefined ? helpers.strOrNull(req.body.telegram_bot_username) : undefined;
       const telegramBotToken = req.body.telegram_bot_token !== undefined ? helpers.strOrNull(req.body.telegram_bot_token) : undefined;
+      if (telegramBotToken && !/^[1-9][0-9]*:[A-Za-z0-9_-]+$/.test(telegramBotToken)) {
+        console.warn('TENANT_TELEGRAM_TOKEN_INVALID', {
+          valueType: typeof req.body.telegram_bot_token,
+          length: telegramBotToken.length,
+          masked: /^[*•●]+$/.test(telegramBotToken),
+          hasColon: telegramBotToken.includes(':'),
+          hasWhitespace: /\s/.test(telegramBotToken),
+          numericPrefix: /^[1-9][0-9]*:/.test(telegramBotToken)
+        });
+        return res.status(400).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN_INVALID' });
+      }
       const maxBotToken = typeof req.body.max_bot_token === 'string' && /^\*+$/.test(req.body.max_bot_token.trim()) ? undefined
         : req.body.max_bot_token !== undefined ? helpers.strOrNull(req.body.max_bot_token) : undefined;
       if (maxBotToken) {
@@ -4108,10 +4119,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
           chatGuestThreadTtlDays = null;
         } else {
           const ttl = Math.trunc(Number(ttlRaw));
-          if (!Number.isFinite(ttl) || ttl < 1 || ttl > 365) {
+          if (!Number.isFinite(ttl) || ttl !== Number(ttlRaw) || ttl < 0 || ttl > 365) {
             return res.status(400).json({ ok: false, error: 'BAD_CHAT_GUEST_THREAD_TTL_DAYS' });
           }
-          chatGuestThreadTtlDays = ttl;
+          chatGuestThreadTtlDays = ttl === 0 ? null : ttl;
         }
       }
       let chatThreadTtlDays = undefined;
@@ -4121,7 +4132,7 @@ async function fetchStoreWithHours(tenantId, storeId) {
           chatThreadTtlDays = null;
         } else {
           const ttl = Math.trunc(Number(ttlRaw));
-          if (!Number.isFinite(ttl) || ttl < 0 || ttl > 365) {
+          if (!Number.isFinite(ttl) || ttl !== Number(ttlRaw) || ttl < 0 || ttl > 365) {
             return res.status(400).json({ ok: false, error: 'BAD_CHAT_THREAD_TTL_DAYS' });
           }
           chatThreadTtlDays = ttl === 0 ? null : ttl;
@@ -4444,7 +4455,10 @@ async function fetchStoreWithHours(tenantId, storeId) {
 
       res.json({ ok: true, tenant: await buildTenantResponse(rows[0] || null, req) });
     } catch (err) {
-      console.error('РћС€РёР±РєР° РѕР±РЅРѕРІР»РµРЅРёСЏ tenant РїСЂРѕС„РёР»СЏ:', err.code || err.name);
+      console.error('TENANT_SETTINGS_SAVE_FAILED', {
+        code: err.code || err.name,
+        frames: String(err.stack || '').split('\n').filter(line => /^\s+at /.test(line)).slice(0, 8)
+      });
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
     }
   });

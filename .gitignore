@@ -58,3 +58,8 @@ ADM.PERF — оптимизация админской панели
 a1186497_markin_me.sql
 
 !migrations/2026-11-17_max_auto_webhook.js
+!migrations/2026-11-18_customer_phone_consent.js
+
+!migrations/2026-11-18_customer_auth_operation_routing.js
+!migrations/2026-11-19_chat_visitor_identity.js
+!migrations/2026-11-19_chat_retention.js

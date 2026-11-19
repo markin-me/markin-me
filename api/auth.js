@@ -55,8 +55,14 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         const otherProvider=available.find(candidate=>candidate!==provider);
         if(['CODE_DELIVERY_FAILED','TELEGRAM_BOT_START_REQUIRED'].includes(error.code)&&otherProvider){
           provider=otherProvider;
-          challenge=await issueCodeChallenge(db,{tenantId,accountType:'employee',accountId:employee.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload)});
-        }else throw error;
+          try {
+            challenge=await issueCodeChallenge(db,{tenantId,accountType:'employee',accountId:employee.id,purpose:'login',provider,ipAddress:req.ip,deliver:payload=>deliverCode(db,payload)});
+          } catch (alternativeError) { error=alternativeError; }
+        }
+        if (!challenge) {
+          error.details={...error.details,channels:providers,codeChannels:available,provider};
+          throw error;
+        }
       }
       await db.query('UPDATE auth_browser_requests SET provider=?,code_challenge_id=?,expires_at=DATE_ADD(NOW(),INTERVAL 3 MINUTE) WHERE public_id=?',[provider,challenge.requestId,request.requestId]);
       res.json({ok:true,mode:'code',request_id:request.requestId,provider,channels:available,link_channels:providers,expires_in:180,resend_after:0});
@@ -80,13 +86,18 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       const provider=String(req.body.provider || '');
       const purpose=req.body.purpose||'login';
       const requestedPhone=purpose==='login'?helpers.normalizePhone(req.body.phone):null;
+      let loginEmployee;
       if(purpose==='login'&&!/^7\d{10}$/.test(requestedPhone))throw new MessengerAuthError('PHONE_REQUIRED',400);
       if(purpose==='login'){
-        const employee=await employeeByPhone(tenantId,requestedPhone);
-        if(employee&&(await getAccountChannels(db,{tenantId,accountType:'employee',accountId:employee.id},{includePrivate:true})).some(channel=>channel.provider===provider&&channel.verifiedAt))throw new MessengerAuthError('EMPLOYEE_CODE_REQUIRED',409);
+        loginEmployee=await employeeByPhone(tenantId,requestedPhone);
+        if(!loginEmployee)throw new MessengerAuthError('EMPLOYEE_NOT_FOUND',404);
+        if((await getAccountChannels(db,{tenantId,accountType:'employee',accountId:loginEmployee.id},{includePrivate:true})).some(channel=>channel.provider===provider&&channel.verifiedAt))throw new MessengerAuthError('EMPLOYEE_CODE_REQUIRED',409);
       }
       await assertBrowserProviderReady(await getTenantBotConfig(db,tenantId,provider));
       const request=await createBrowserRequest(db,{tenantId,accountType:'employee',provider,binding:browserBinding(req,res),ipAddress:req.ip,purpose,requestedPhone});
+      if(purpose==='login'){
+        await db.query('UPDATE auth_browser_requests SET account_id=? WHERE public_id=? AND account_type=\'employee\'',[loginEmployee.id,request.requestId]);
+      }
       res.json({ok:true,request_id:request.requestId,bot_link:await buildProviderLink(db,tenantId,provider,request.token)});
     } catch(e){sendMessengerError(res,e);}
   });
@@ -274,6 +285,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         provider: error.details.provider || undefined,
         retry_after: error.details.retryAfter || undefined,
         attempts_remaining: error.details.attemptsRemaining,
+        ...(Array.isArray(error.details.channels) ? {channels:error.details.channels,code_channels:error.details.codeChannels} : {}),
       } : {}),
     });
   }
@@ -399,7 +411,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       if (!await buildProviderLink(db, currentEmployeeScope(req).tenantId, provider, 'configuration-check')) {
         throw new MessengerAuthError('BOT_NOT_CONFIGURED', 409);
       }
-      const challenge = await createLinkChallenge(db, currentEmployeeScope(req), provider);
+      const challenge = await createLinkChallenge(db, currentEmployeeScope(req), provider, {authVersion:req.user.authVersion});
       return res.json({
         ok: true,
         provider: challenge.provider,
@@ -415,7 +427,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   router.delete('/messenger-links/:provider', authMiddleware, async (req, res) => {
     try {
       const scope = currentEmployeeScope(req);
-      await unlinkAccountChannel(db, scope, req.params.provider);
+      await unlinkAccountChannel(db, scope, req.params.provider, {authVersion:req.user.authVersion});
       return res.json({ ok: true });
     } catch (error) {
       console.error('EMPLOYEE_MESSENGER_UNLINK_FAILED:', error.code || error.name);

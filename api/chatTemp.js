@@ -31,22 +31,10 @@ const CHAT_SUMMARIES_PAGE_CACHE_TTL_MS = parsePositiveInt(
 );
 const CHAT_THREAD_PAGE_DEFAULT_LIMIT = 60;
 const CHAT_THREAD_PAGE_MAX_LIMIT = 200;
-const CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT = parsePositiveInt(
-  process.env.CHAT_GUEST_THREAD_TTL_DAYS,
-  7,
-  1,
-  365
-);
 const CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS = parsePositiveInt(
   process.env.CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS,
   5 * 60 * 1000,
   10000,
-  24 * 60 * 60 * 1000
-);
-const CHAT_ORPHAN_THREAD_CLEANUP_MIN_INTERVAL_MS = parsePositiveInt(
-  process.env.CHAT_ORPHAN_THREAD_CLEANUP_MIN_INTERVAL_MS,
-  30 * 1000,
-  5000,
   24 * 60 * 60 * 1000
 );
 const CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT = parsePositiveInt(
@@ -55,7 +43,6 @@ const CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT = parsePositiveInt(
   10,
   2000
 );
-const CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT = CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT;
 const CHAT_PUSH_ENDPOINT_MAX_LENGTH = 1024;
 const CHAT_PUSH_COMPANY_TITLE_CACHE_TTL_MS = 60 * 1000;
 const CHAT_ADMIN_PUSH_UNANSWERED_DELAY_MS = parsePositiveInt(
@@ -502,7 +489,7 @@ function sanitizePushSubscription(raw) {
   return { endpoint, p256dh, auth };
 }
 
-async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, subscription, userAgent) {
+async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, subscription, userAgent, queryable=db) {
   await ensurePushSubscriptionsTable();
   const actor = actorKey === "in" ? "in" : "out";
   const endpoint = String(subscription.endpoint || "");
@@ -512,7 +499,7 @@ async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, sub
   // For customer chat subscriptions keep one active endpoint per browser profile.
   // This prevents duplicate notifications when stale endpoints remain valid.
   if (actor === "in" && normalizedUserAgent) {
-    await db.query(
+    await queryable.query(
       `DELETE FROM chat_push_subscriptions
         WHERE tenant_id = ? AND client_id = ? AND actor = 'in'
           AND user_agent = ? AND endpoint_hash <> ?`,
@@ -520,7 +507,7 @@ async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, sub
     );
   }
   if (actor === "in") {
-    await db.query(
+    await queryable.query(
       `DELETE FROM chat_push_subscriptions
         WHERE tenant_id = ? AND actor = 'in'
           AND endpoint_hash = ? AND client_id <> ?`,
@@ -528,7 +515,7 @@ async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, sub
     );
   }
 
-  await db.query(
+  await queryable.query(
     `INSERT INTO chat_push_subscriptions
       (tenant_id, store_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -664,7 +651,13 @@ async function listPushSubscriptionsForThread(tenantId, clientId, actorKey) {
     const [inRows] = await db.query(
       `SELECT id, endpoint, p256dh, auth
          FROM chat_push_subscriptions
-        WHERE tenant_id = ? AND client_id = ? AND actor = 'in' AND push_chat_enabled = 1`,
+        WHERE tenant_id = ? AND client_id = ? AND actor = 'in' AND push_chat_enabled = 1
+          AND (EXISTS (SELECT 1 FROM cust_customer_sessions s
+                WHERE s.id=chat_push_subscriptions.customer_session_id AND s.tenant_id=chat_push_subscriptions.tenant_id
+                AND s.customer_id=chat_push_subscriptions.client_id AND s.auth_strength='strong'
+                AND s.is_active=1 AND s.revoked_at IS NULL AND (s.expires_at IS NULL OR s.expires_at>UTC_TIMESTAMP()))
+            OR EXISTS (SELECT 1 FROM chat_visitor_identities v WHERE v.tenant_id=chat_push_subscriptions.tenant_id
+                AND v.client_id=chat_push_subscriptions.client_id AND v.claimed_at IS NULL AND (v.expires_at IS NULL OR v.expires_at>UTC_TIMESTAMP(6))))`,
       [Number(tenantId), Number(clientId)]
     );
     rows = inRows;
@@ -1108,16 +1101,6 @@ function normalizeTenantChatWidgetEnabled(rawValue) {
   return true;
 }
 
-function normalizeTenantGuestThreadTtlDays(rawValue) {
-  if (rawValue === undefined || rawValue === null || rawValue === "") return null;
-  const n = Number(rawValue);
-  if (!Number.isFinite(n)) return null;
-  const whole = Math.trunc(n);
-  if (whole < 1) return null;
-  if (whole > 365) return 365;
-  return whole;
-}
-
 function normalizeTenantThreadTtlDays(rawValue) {
   if (rawValue === undefined || rawValue === null || rawValue === "") return null;
   const n = Number(rawValue);
@@ -1321,28 +1304,6 @@ async function handleTenantChatWidgetStateChange(tenantId, enabled) {
   });
 }
 
-async function resolveGuestThreadTtlDaysForTenant(tenantId) {
-  const key = String(tenantId || "").trim();
-  if (!key) return CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT;
-
-  try {
-    const [rows] = await db.query(
-      `SELECT chat_guest_thread_ttl_days
-         FROM ten_tenants
-        WHERE id = ?
-        LIMIT 1`,
-      [Number(key)]
-    );
-    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
-    const ttlDays = normalizeTenantGuestThreadTtlDays(row ? row.chat_guest_thread_ttl_days : null);
-    return ttlDays || CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT;
-  } catch (err) {
-    const code = String(err && err.code || "");
-    if (code === "ER_BAD_FIELD_ERROR") return CHAT_GUEST_THREAD_TTL_DAYS_DEFAULT;
-    throw err;
-  }
-}
-
 function getTenantId(req) {
   const fromHeader = Number(req.headers["x-tenant-id"]);
   if (Number.isFinite(fromHeader) && fromHeader > 0) return String(Math.trunc(fromHeader));
@@ -1357,6 +1318,77 @@ function normalizeClientId(value) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
   return String(Math.trunc(n));
+}
+
+const CHAT_VISITOR_COOKIE = "chat_visitor";
+const VISITOR_COOKIE_MAX_AGE_MS = 400 * 24 * 60 * 60 * 1000;
+
+function visitorCredential(req) {
+  const native = req.headers["x-chat-client"] === "native";
+  const token = String(native ? req.headers["x-chat-visitor"] || "" : req.cookies?.[CHAT_VISITOR_COOKIE] || "");
+  return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : "";
+}
+
+function visitorHash(token) {
+  return crypto.createHash("sha256").update(token).digest();
+}
+
+async function readVisitor(conn, tenantId, token, lock = false) {
+  if (!token) return null;
+  const [[visitor]] = await conn.query(`SELECT client_id,claimed_at,active_session_id FROM chat_visitor_identities
+    WHERE tenant_id=? AND token_hash=? AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP(6))${lock ? " FOR UPDATE" : ""}`,
+  [tenantId,visitorHash(token)]);
+  return visitor || null;
+}
+
+async function reserveVisitor(tenantId) {
+  const token=crypto.randomBytes(32).toString("base64url");
+  // Disjoint from customer INT IDs and previously generated browser/mobile IDs.
+  for(let attempt=0;attempt<3;attempt++){
+    const clientId=crypto.randomInt(100_000_000_000_000,200_000_000_000_000);
+    try{
+      await db.query(`INSERT INTO chat_visitor_identities (tenant_id,token_hash,client_id,expires_at,is_client_chat)
+        VALUES (?,?,?,NULL,0)`,[tenantId,visitorHash(token),clientId]);
+      return {token,clientId:String(clientId)};
+    }catch(error){if(error.code!=="ER_DUP_ENTRY")throw error;}
+  }
+  throw new Error("CHAT_VISITOR_ID_COLLISION");
+}
+
+async function customerChatOwner(req, conn=db, lock=false) {
+  const tenantId=getTenantId(req);
+  const token=String(req.headers["x-customer-token"] || "").trim();
+  if(token && !token.startsWith("g_")){
+    const session=await resolveStrongChatSession(tenantId,token,conn,lock);
+    return session ? {id:String(session.customer_id),isVisitor:false,sessionId:session.id} : null;
+  }
+  const visitor=await readVisitor(conn,tenantId,visitorCredential(req),lock);
+  return visitor && !visitor.claimed_at ? {id:String(visitor.client_id),isVisitor:true} : null;
+}
+
+async function lockCustomerChatOwner(req, conn) {
+  if(!req.customerChatRequest)return;
+  const owner=await customerChatOwner(req,conn,true);
+  if(!owner || owner.id!==req.chatOwner.id){
+    throw Object.assign(new Error("CHAT_IDENTITY_CHANGED"),{status:409});
+  }
+}
+
+async function requireCurrentChatOwner(req,res) {
+  if(!req.customerChatRequest)return true;
+  const owner=await customerChatOwner(req);
+  if(owner && owner.id===req.chatOwner.id)return true;
+  res.status(401).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
+  return false;
+}
+
+async function resolveStrongChatSession(tenantId, token, conn=db, lock=false) {
+  const [[session]]=await conn.query(`SELECT s.id,s.customer_id FROM cust_customer_sessions s
+    JOIN cust_customers c ON c.tenant_id=s.tenant_id AND c.id=s.customer_id AND c.is_active=1
+    WHERE s.tenant_id=? AND s.token=? AND s.auth_strength='strong' AND s.is_active=1 AND s.revoked_at IS NULL
+      AND (s.expires_at IS NULL OR s.expires_at>UTC_TIMESTAMP())
+    LIMIT 1${lock?' FOR UPDATE':''}`,[tenantId,token]);
+  return session || null;
 }
 
 async function resolveCustomerClientIdByToken(tenantId, customerToken) {
@@ -1382,6 +1414,7 @@ async function resolveCustomerClientIdByToken(tenantId, customerToken) {
 }
 
 async function resolveIncomingActorClientId(req, tenantId) {
+  if(req.customerChatRequest)return req.chatOwner?.id || null;
   const explicitClientId = normalizeClientId(req.query.client_id ?? req.query.clientId ?? "");
   const customerToken = String(req.headers["x-customer-token"] || "").trim();
   if (!customerToken) return explicitClientId;
@@ -1415,242 +1448,115 @@ function parsePositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGE
   return whole;
 }
 
-function getGuestThreadCleanupBucket(tenantId) {
-  const key = String(tenantId || "");
-  if (!key) return null;
-  let bucket = guestThreadCleanupState.get(key);
-  if (!bucket) {
-    bucket = {
-      lastGuestRunAt: 0,
-      lastOrphanRunAt: 0,
-      inFlight: null,
-    };
-    guestThreadCleanupState.set(key, bucket);
-  }
-  return bucket;
+const CHAT_RETENTION_CANDIDATES = `
+  FROM chat_threads t
+  JOIN ten_tenants tenant ON tenant.id=t.tenant_id
+  LEFT JOIN chat_visitor_identities v ON v.tenant_id=t.tenant_id AND v.client_id=t.client_id
+  LEFT JOIN cust_customers c ON c.tenant_id=t.tenant_id AND c.id=t.client_id
+  WHERE t.tenant_id=? AND (c.id IS NOT NULL OR v.is_client_chat IS NOT NULL)
+    AND CASE WHEN c.id IS NOT NULL OR v.is_client_chat=1
+      THEN tenant.chat_thread_ttl_days>0 AND t.updated_at<NOW(3)-INTERVAL tenant.chat_thread_ttl_days DAY
+      ELSE tenant.chat_guest_thread_ttl_days>0 AND t.updated_at<NOW(3)-INTERVAL tenant.chat_guest_thread_ttl_days DAY
+    END`;
+
+function chatAttachmentFile(url) {
+  const match = String(url || "").match(/^\/(static\/)?uploads\/chat\/([1-9][0-9]*\/[1-9][0-9]*\/\d{4}\/(?:0[1-9]|1[0-2])\/[0-9]+_[a-f0-9]{10}\.(?:webp|png|gif|avif|jpe?g))$/);
+  if (!match) return null;
+  const resource = "/" + (match[1] || "") + "uploads/chat/" + match[2];
+  return {resource, relative:match[2], absolute:path.join(__dirname,"..",resource.slice(1))};
 }
 
-async function cleanupExpiredGuestThreadsForTenant(tenantId) {
-  const tenant = String(tenantId || "");
-  if (!tenant) return 0;
-
-  const ttlDays = await resolveGuestThreadTtlDaysForTenant(tenant);
-  if (!ttlDays || ttlDays <= 0) return 0;
-
-  const guestPrefix = "\u0433\u043e\u0441\u0442\u044c";
-  const timestamp = new Date().toISOString();
-  let totalDeleted = 0;
-
-  for (let pass = 0; pass < 5; pass += 1) {
-    const [candidateRows] = await db.query(
-      `SELECT client_id
-         FROM chat_threads
-        WHERE tenant_id = ?
-          AND updated_at < (NOW(3) - INTERVAL ? DAY)
-          AND LOWER(TRIM(COALESCE(meta_name, ''))) LIKE CONCAT(?, '%')
-        ORDER BY updated_at ASC, client_id ASC
-        LIMIT ?`,
-      [
-        Number(tenant),
-        ttlDays,
-        guestPrefix,
-        CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT,
-      ]
-    );
-
-    const clientIds = (Array.isArray(candidateRows) ? candidateRows : [])
-      .map((row) => normalizeClientId(row?.client_id))
-      .filter(Boolean);
-    if (!clientIds.length) break;
-
-    const [deleteResult] = await db.query(
-      `DELETE FROM chat_threads
-        WHERE tenant_id = ? AND client_id IN (${clientIds.map(() => "?").join(",")})`,
-      [Number(tenant), ...clientIds.map((id) => Number(id))]
-    );
-    const deletedNow = Number(deleteResult?.affectedRows || 0);
-    if (deletedNow <= 0) break;
-
-    totalDeleted += deletedNow;
-    await deletePushSubscriptionsForThreads(tenant, clientIds).catch(() => {});
-    clientIds.forEach((clientId) => {
-      clearThreadTypingState(tenant, clientId);
-      notifyThreadChange(tenant, clientId, timestamp);
-    });
-
-    if (clientIds.length < CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT) break;
-  }
-
-  if (totalDeleted > 0) {
-    scheduleTenantUnreadRefresh(tenant);
-    console.info(
-      `[chat-temp] auto-removed expired guest chats tenant=${tenant} count=${totalDeleted}`
-    );
-  }
-
-  return totalDeleted;
+async function lockLocalAttachment(conn, tenantId, attachment) {
+  const file = chatAttachmentFile(attachment?.url);
+  if (!file || !file.relative.startsWith(String(tenantId)+"/")) return;
+  await conn.query("SELECT path FROM chat_attachment_gc WHERE tenant_id=? AND path=? FOR UPDATE", [tenantId,file.resource]);
+  if (!fs.existsSync(file.absolute)) throw new Error("CHAT_ATTACHMENT_MISSING");
 }
 
-async function cleanupExpiredThreadsForTenant(tenantId) {
-  const tenant = String(tenantId || "");
-  if (!tenant) return 0;
-
-  const ttlDays = await resolveThreadTtlDaysForTenant(tenant);
-  if (!ttlDays || ttlDays <= 0) return 0;
-
-  const timestamp = new Date().toISOString();
-  let totalDeleted = 0;
-
-  for (let pass = 0; pass < 5; pass += 1) {
-    const [candidateRows] = await db.query(
-      `SELECT client_id
-         FROM chat_threads
-        WHERE tenant_id = ?
-          AND updated_at < (NOW(3) - INTERVAL ? DAY)
-        ORDER BY updated_at ASC, client_id ASC
-        LIMIT ?`,
-      [Number(tenant), ttlDays, CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT]
-    );
-
-    const clientIds = (Array.isArray(candidateRows) ? candidateRows : [])
-      .map((row) => normalizeClientId(row?.client_id))
-      .filter(Boolean);
-    if (!clientIds.length) break;
-
-    const [deleteResult] = await db.query(
-      `DELETE FROM chat_threads
-        WHERE tenant_id = ? AND client_id IN (${clientIds.map(() => "?").join(",")})`,
-      [Number(tenant), ...clientIds.map((id) => Number(id))]
-    );
-    const deletedNow = Number(deleteResult?.affectedRows || 0);
-    if (deletedNow <= 0) break;
-
-    totalDeleted += deletedNow;
-    await deletePushSubscriptionsForThreads(tenant, clientIds).catch(() => {});
-    clientIds.forEach((clientId) => {
-      clearThreadTypingState(tenant, clientId);
-      notifyThreadChange(tenant, clientId, timestamp);
-    });
-
-    if (clientIds.length < CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT) break;
+async function cleanExpiredChatFiles(tenantId) {
+  const [jobs] = await db.query("SELECT path FROM chat_attachment_gc WHERE tenant_id=? LIMIT ?", [tenantId,CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT]);
+  for (const job of jobs) {
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [[queued]] = await conn.query("SELECT path FROM chat_attachment_gc WHERE tenant_id=? AND path=? FOR UPDATE", [tenantId,job.path]);
+      if (queued) {
+        const file = chatAttachmentFile(queued.path);
+        const [[reference]] = await conn.query(`SELECT 1 FROM chat_messages
+          WHERE RIGHT(JSON_UNQUOTE(JSON_EXTRACT(attachment_json,'$.url')),CHAR_LENGTH(?))=? LIMIT 1`,
+        [queued.path,queued.path]);
+        if (!reference && file?.relative.startsWith(String(tenantId)+"/")) {
+          try { await fs.promises.unlink(file.absolute); }
+          catch (error) { if (error.code !== "ENOENT") throw error; }
+        }
+        await conn.query("DELETE FROM chat_attachment_gc WHERE tenant_id=? AND path=?", [tenantId,job.path]);
+      }
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      console.error("chat-temp file retention error:", error.code || error.name);
+    } finally { conn.release(); }
   }
-
-  if (totalDeleted > 0) {
-    scheduleTenantUnreadRefresh(tenant);
-    console.info(
-      `[chat-temp] auto-removed expired chats (all) tenant=${tenant} ttl_days=${ttlDays} count=${totalDeleted}`
-    );
-  }
-
-  return totalDeleted;
 }
 
-async function cleanupOrphanedClientThreadsForTenant(tenantId) {
-  const tenant = String(tenantId || "");
-  if (!tenant) return 0;
-
-  const guestPrefix = "\u0433\u043e\u0441\u0442\u044c";
-  const timestamp = new Date().toISOString();
-  let totalDeleted = 0;
-
-  for (let pass = 0; pass < 5; pass += 1) {
-    const [candidateRows] = await db.query(
-      `SELECT t.client_id
-         FROM chat_threads t
-         LEFT JOIN cust_customers c
-           ON c.tenant_id = t.tenant_id
-          AND c.id = t.client_id
-        WHERE t.tenant_id = ?
-          AND c.id IS NULL
-          AND LOWER(TRIM(COALESCE(t.meta_name, ''))) NOT LIKE CONCAT(?, '%')
-        ORDER BY t.updated_at ASC, t.client_id ASC
-        LIMIT ?`,
-      [
-        Number(tenant),
-        guestPrefix,
-        CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT,
-      ]
-    );
-
-    const clientIds = (Array.isArray(candidateRows) ? candidateRows : [])
-      .map((row) => normalizeClientId(row?.client_id))
-      .filter(Boolean);
-    if (!clientIds.length) break;
-
-    const [deleteResult] = await db.query(
-      `DELETE FROM chat_threads
-        WHERE tenant_id = ? AND client_id IN (${clientIds.map(() => "?").join(",")})`,
-      [Number(tenant), ...clientIds.map((id) => Number(id))]
-    );
-    const deletedNow = Number(deleteResult?.affectedRows || 0);
-    if (deletedNow <= 0) break;
-
-    totalDeleted += deletedNow;
-    await deletePushSubscriptionsForThreads(tenant, clientIds).catch(() => {});
-    clientIds.forEach((clientId) => {
-      clearThreadTypingState(tenant, clientId);
-      notifyThreadChange(tenant, clientId, timestamp);
-    });
-
-    if (clientIds.length < CHAT_ORPHAN_THREAD_CLEANUP_BATCH_LIMIT) break;
+async function cleanupExpiredChatThreads(tenantId) {
+  await ensureHiddenMessagesTable();
+  await ensurePushSubscriptionsTable();
+  const [candidates] = await db.query(
+    `SELECT t.client_id ${CHAT_RETENTION_CANDIDATES} ORDER BY t.updated_at LIMIT ?`,
+    [tenantId, CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT]);
+  for (const {client_id: clientId} of candidates) {
+    const conn = await db.getConnection();
+    let deleted = false;
+    try {
+      await conn.beginTransaction();
+      // Same visitor-before-thread order as claiming and sending messages.
+      const [[policy]] = await conn.query("SELECT chat_thread_ttl_days,chat_guest_thread_ttl_days FROM ten_tenants WHERE id=? FOR UPDATE", [tenantId]);
+      const [[visitor]] = await conn.query("SELECT is_client_chat FROM chat_visitor_identities WHERE tenant_id=? AND client_id=? FOR UPDATE", [tenantId,clientId]);
+      const [[customer]] = await conn.query("SELECT id FROM cust_customers WHERE tenant_id=? AND id=?", [tenantId,clientId]);
+      const ttl = normalizeTenantThreadTtlDays(customer || Number(visitor?.is_client_chat) === 1
+        ? policy?.chat_thread_ttl_days : policy?.chat_guest_thread_ttl_days);
+      const [[live]] = await conn.query(
+        `SELECT client_id FROM chat_threads WHERE tenant_id=? AND client_id=?
+          AND ?>0 AND updated_at<NOW(3)-INTERVAL ? DAY FOR UPDATE`, [tenantId,clientId,ttl,ttl]);
+      if (live && (visitor?.is_client_chat != null || customer)) {
+        const [attachments] = await conn.query("SELECT attachment_json FROM chat_messages WHERE tenant_id=? AND client_id=? AND attachment_json IS NOT NULL", [tenantId,clientId]);
+        const files = [...new Set(attachments.map(row => chatAttachmentFile(parseJsonObject(row.attachment_json)?.url)?.resource).filter(Boolean))].sort();
+        for (const file of files) {
+          await conn.query("INSERT IGNORE INTO chat_attachment_gc(tenant_id,path) VALUES (?,?)", [tenantId,file]);
+        }
+        for (const table of ["chat_message_hidden", "chat_messages", "chat_push_subscriptions", "chat_threads", "chat_visitor_identities"]) {
+          await conn.query(`DELETE FROM ${table} WHERE tenant_id=? AND client_id=?`, [tenantId, clientId]);
+        }
+        deleted = true;
+      }
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    } finally {
+      conn.release();
+    }
+    if (deleted) {
+      clearThreadTypingState(tenantId, clientId);
+      notifyThreadChange(tenantId, clientId, new Date().toISOString());
+      scheduleTenantUnreadRefresh(tenantId);
+    }
   }
-
-  if (totalDeleted > 0) {
-    scheduleTenantUnreadRefresh(tenant);
-    console.info(
-      `[chat-temp] auto-removed orphan client chats tenant=${tenant} count=${totalDeleted}`
-    );
-  }
-
-  return totalDeleted;
+  await cleanExpiredChatFiles(tenantId);
 }
 
 function scheduleExpiredGuestThreadsCleanup(tenantId) {
-  const tenant = String(tenantId || "");
-  if (!tenant) return;
-  const bucket = getGuestThreadCleanupBucket(tenant);
-  if (!bucket) return;
-
-  const now = Date.now();
-  if (bucket.inFlight) return;
-  const shouldRunOrphan = !(
-    bucket.lastOrphanRunAt > 0
-    && (now - bucket.lastOrphanRunAt) < CHAT_ORPHAN_THREAD_CLEANUP_MIN_INTERVAL_MS
-  );
-  const shouldRunGuest = !(
-    bucket.lastGuestRunAt > 0
-    && (now - bucket.lastGuestRunAt) < CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS
-  );
-  if (!shouldRunOrphan && !shouldRunGuest) {
-    return;
-  }
-
-  if (shouldRunOrphan) {
-    bucket.lastOrphanRunAt = now;
-  }
-  if (shouldRunGuest) {
-    bucket.lastGuestRunAt = now;
-  }
-
-  bucket.inFlight = (async () => {
-    if (shouldRunOrphan) {
-      await cleanupOrphanedClientThreadsForTenant(tenant);
-    }
-    if (shouldRunGuest) {
-      const removedAll = await cleanupExpiredThreadsForTenant(tenant);
-      if (!removedAll) {
-        await cleanupExpiredGuestThreadsForTenant(tenant);
-      }
-    }
-  })()
-    .catch((err) => {
-      console.error("chat-temp guest cleanup error:", err);
-    })
-    .finally(() => {
-      const next = getGuestThreadCleanupBucket(tenant);
-      if (!next) return;
-      next.inFlight = null;
-    });
+  const key = String(tenantId || "");
+  if (!key) return;
+  const bucket = guestThreadCleanupState.get(key) || {lastRun: 0, inFlight: false};
+  if (bucket.inFlight || Date.now()-bucket.lastRun<CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS) return;
+  bucket.lastRun = Date.now();
+  bucket.inFlight = true;
+  guestThreadCleanupState.set(key, bucket);
+  void cleanupExpiredChatThreads(tenantId)
+    .catch(error => console.error("chat-temp retention error:", error))
+    .finally(() => { bucket.inFlight = false; });
 }
 
 function parseJsonObject(value) {
@@ -1947,27 +1853,6 @@ function getTenantKey(tenantId) {
   return tenant || "";
 }
 
-async function resolveThreadTtlDaysForTenant(tenantId) {
-  const key = String(tenantId || "").trim();
-  if (!key) return null;
-
-  try {
-    const [rows] = await db.query(
-      `SELECT chat_thread_ttl_days
-         FROM ten_tenants
-        WHERE id = ?
-        LIMIT 1`,
-      [Number(key)]
-    );
-    const row = Array.isArray(rows) && rows.length ? rows[0] : null;
-    return normalizeTenantThreadTtlDays(row ? row.chat_thread_ttl_days : null);
-  } catch (err) {
-    const code = String(err && err.code || "");
-    if (code === "ER_BAD_FIELD_ERROR") return null;
-    throw err;
-  }
-}
-
 function getUnreadStreamKey(tenantId, actorKey, clientId = "") {
   const tenant = getTenantKey(tenantId);
   if (!tenant) return "";
@@ -2022,6 +1907,7 @@ function createSseSubscriber(res, eventName, buildPayload) {
     const data = typeof buildPayload === "function" ? buildPayload(payload) : (payload || {});
     streamWrites = streamWrites.then(async () => {
       if (res.destroyed || res.writableEnded) return;
+      if (res.locals.checkChatStreamOwner && !await res.locals.checkChatStreamOwner()) return res.end();
       if (res.locals.employeeStreamUser && !await isUserSessionActive(res.locals.employeeStreamUser)) return res.end();
       if (!writeSseEvent(res, subscriber.eventName, data)) res.end();
     }).catch((error) => { console.error('CHAT_STREAM_SESSION_FAILED:', error.code || error.name); res.end(); });
@@ -2040,9 +1926,18 @@ function addSseSubscriber(store, key, subscriber) {
 
 function startSseHeartbeat(subscriber) {
   if (!subscriber || subscriber.heartbeatTimer) return;
-  subscriber.heartbeatTimer = setInterval(() => {
-    if (!writeSseComment(subscriber.res, "heartbeat")) {
-      stopSseHeartbeat(subscriber);
+  subscriber.heartbeatTimer = setInterval(async () => {
+    const res = subscriber.res;
+    try {
+      if (res.locals.checkChatStreamOwner && !await res.locals.checkChatStreamOwner()) return res.end();
+      if (subscriber.refresh && !subscriber.refreshing) {
+        subscriber.refreshing = true;
+        try { await subscriber.refresh(); } finally { subscriber.refreshing = false; }
+      }
+      if (!writeSseComment(res, "heartbeat")) res.end();
+    } catch (error) {
+      console.error("CHAT_STREAM_SESSION_FAILED:", error.code || error.name);
+      res.end();
     }
   }, CHAT_SSE_HEARTBEAT_MS);
 }
@@ -2984,6 +2879,7 @@ function waitForTenantChange(tenantId, timeoutMs) {
 }
 
 function getRequestReactionActor(req) {
+  if (req.customerChatRequest) return "in";
   const explicitQueryActor = String(req.query?.chat_actor || req.query?.actor || "")
     .trim()
     .toLowerCase();
@@ -3525,6 +3421,7 @@ async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
   await ensureChatMessageOrderCardsColumn();
   const row = mapApiMessageToDbRow(tenantId, clientId, msg);
   if (!row) throw new Error("MESSAGE_INVALID");
+  await lockLocalAttachment(conn,tenantId,msg.attachment);
 
   await conn.query(
     `INSERT INTO chat_messages (
@@ -3674,6 +3571,7 @@ function applyMessagePatch(existingMessage, patchInput, actorKey = "out") {
 
 async function replaceThreadMessages(conn, tenantId, clientId, messages) {
   await ensureChatMessageOrderCardsColumn();
+  for (const message of messages) await lockLocalAttachment(conn,tenantId,message.attachment);
   await conn.query(
     `DELETE FROM chat_messages
       WHERE tenant_id = ? AND client_id = ?`,
@@ -3900,24 +3798,7 @@ async function mergeThreadIntoClientAndNotify(tenantId, fromClientId, toClientId
     conn.release();
     conn = null;
 
-    if (merged?.merged === true) {
-      clearThreadTypingState(tenantId, toId);
-      clearThreadTypingState(tenantId, fromId);
-      notifyThreadChange(tenantId, toId, merged?.updated_at || "", {
-        skipTenantChange: true,
-      });
-      notifyThreadChange(tenantId, fromId, merged?.updated_at || "", {
-        skipTenantChange: true,
-      });
-      notifyTenantChange(tenantId, merged?.updated_at || "", {
-        messageChanged: true,
-        clientId: Number(toId),
-        removedClientId: Number(fromId),
-        mergedFromClientId: Number(fromId),
-        mergedIntoClientId: Number(toId),
-      });
-      scheduleTenantUnreadRefresh(tenantId);
-    }
+    notifyMergedThread(tenantId,fromId,toId,merged);
 
     return merged;
   } catch (err) {
@@ -3927,6 +3808,74 @@ async function mergeThreadIntoClientAndNotify(tenantId, fromClientId, toClientId
     }
     throw err;
   }
+}
+
+function notifyMergedThread(tenantId,fromId,toId,merged) {
+  if (merged?.merged === true) {
+    clearThreadTypingState(tenantId, toId);
+    clearThreadTypingState(tenantId, fromId);
+    notifyThreadChange(tenantId, toId, merged?.updated_at || "", {
+      skipTenantChange: true,
+    });
+    notifyThreadChange(tenantId, fromId, merged?.updated_at || "", {
+      skipTenantChange: true,
+    });
+    notifyTenantChange(tenantId, merged?.updated_at || "", {
+      messageChanged: true,
+      clientId: Number(toId),
+      removedClientId: Number(fromId),
+      mergedFromClientId: Number(fromId),
+      mergedIntoClientId: Number(toId),
+    });
+    scheduleTenantUnreadRefresh(tenantId);
+  }
+}
+
+async function claimVisitorThread(tenantId, token, targetCustomerId, customerToken) {
+  if(!token)return null;
+  // Schema checks must not run on a second pool connection while the transaction is open.
+  await ensureHiddenMessagesTable();
+  await ensurePushSubscriptionsTable();
+  const conn=await db.getConnection();
+  let fromId=null, updatedAt=null;
+  try{
+    await conn.beginTransaction();
+    const verified=await resolveStrongChatSession(tenantId,customerToken,conn,true);
+    if(String(verified?.customer_id)!==targetCustomerId)throw Object.assign(new Error("CHAT_IDENTITY_CHANGED"),{status:401});
+    const visitor=await readVisitor(conn,tenantId,token,true);
+    if(!visitor || visitor.claimed_at){await conn.commit();return null;}
+    fromId=String(visitor.client_id);
+    const [[from]]=await conn.query(
+      'SELECT * FROM chat_threads WHERE tenant_id=? AND client_id=? FOR UPDATE',[tenantId,fromId]);
+    if(from){
+      const [[to]]=await conn.query(
+        'SELECT * FROM chat_threads WHERE tenant_id=? AND client_id=? FOR UPDATE',[tenantId,targetCustomerId]);
+      updatedAt=new Date(Math.max(new Date(from.updated_at).getTime(), to ? new Date(to.updated_at).getTime() : 0));
+      const meta=mergeThreadMetaValues(sanitizeMetaFromDbRow(to),sanitizeMetaFromDbRow(from));
+      await upsertThreadMeta(conn,tenantId,targetCustomerId,meta,updatedAt);
+      // Keep database message IDs, dates, attachments, order cards and read flags.
+      // For an existing logical message ID, the established conversation wins.
+      await conn.query(`UPDATE chat_messages src
+        LEFT JOIN chat_messages dst ON dst.tenant_id=src.tenant_id AND dst.client_id=? AND dst.message_id=src.message_id
+        SET src.client_id=? WHERE src.tenant_id=? AND src.client_id=? AND dst.id IS NULL`,
+      [targetCustomerId,targetCustomerId,tenantId,fromId]);
+      await conn.query(`INSERT IGNORE INTO chat_message_hidden (tenant_id,client_id,message_id,actor)
+        SELECT tenant_id,?,message_id,actor FROM chat_message_hidden WHERE tenant_id=? AND client_id=?`,
+      [targetCustomerId,tenantId,fromId]);
+      await conn.query('DELETE FROM chat_message_hidden WHERE tenant_id=? AND client_id=?',[tenantId,fromId]);
+      await conn.query('DELETE FROM chat_messages WHERE tenant_id=? AND client_id=?',[tenantId,fromId]);
+      await conn.query('DELETE FROM chat_threads WHERE tenant_id=? AND client_id=?',[tenantId,fromId]);
+    }
+    await conn.query(`UPDATE chat_push_subscriptions SET customer_session_id=?
+      WHERE tenant_id=? AND client_id=? AND actor='in'`,[verified.id,tenantId,fromId]);
+    await reassignPushSubscriptionsForMergedThread(conn,tenantId,fromId,targetCustomerId);
+    await conn.query(`UPDATE chat_visitor_identities SET claimed_at=UTC_TIMESTAMP(6),claimed_customer_id=?
+      WHERE tenant_id=? AND token_hash=?`, [targetCustomerId,tenantId,visitorHash(token)]);
+    await conn.commit();
+  }catch(error){await conn.rollback();throw error;}
+  finally{conn.release();}
+  if(updatedAt)notifyMergedThread(tenantId,fromId,targetCustomerId,{merged:true,updated_at:updatedAt.toISOString()});
+  return fromId;
 }
 
 async function querySummaryRows(
@@ -4346,12 +4295,110 @@ function makeChatTempRouter() {
       if (!chatEnabled && !isPushRequest) {
         return res.status(403).json({ ok: false, error: "CHAT_DISABLED" });
       }
-      scheduleExpiredGuestThreadsCleanup(tenantId);
+      if (req.path !== "/identity") scheduleExpiredGuestThreadsCleanup(tenantId);
       return next();
     } catch (err) {
       console.error("chat-temp feature gate error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
+  });
+
+  router.post("/identity", async (req,res,next) => {
+    if(!req.customerChatRequest)return res.sendStatus(404);
+    res.set("Cache-Control","no-store");
+    const tenantId=getTenantId(req);
+    const customerToken=String(req.headers["x-customer-token"] || "").trim();
+    const token=visitorCredential(req);
+    const native=req.headers["x-chat-client"]==="native";
+    const sendIdentity = (credential, data, issued = false) => {
+      scheduleExpiredGuestThreadsCleanup(tenantId);
+      if (!native) {
+        res.clearCookie(CHAT_VISITOR_COOKIE,{path:"/api"});
+        res.cookie(CHAT_VISITOR_COOKIE, credential, {
+          httpOnly:true,sameSite:"lax",secure:req.secure,path:"/",maxAge:VISITOR_COOKIE_MAX_AGE_MS,
+        });
+      }
+      return res.json({ok:true,data:{...data,...(native && issued ? {visitor_token:credential} : {})}});
+    };
+    try{
+      const visitor=await readVisitor(db,tenantId,token);
+      if(customerToken && !customerToken.startsWith("g_")){
+        const session=await resolveStrongChatSession(tenantId,customerToken);
+        if(!session)return res.status(401).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
+        const id=String(session.customer_id);
+        const credential=visitor ? token : (await reserveVisitor(tenantId)).token;
+        const mergedFrom=await claimVisitorThread(tenantId,credential,id,customerToken);
+        await db.query(`UPDATE chat_visitor_identities SET active_session_id=?
+          WHERE tenant_id=? AND token_hash=?`,[session.id,tenantId,visitorHash(credential)]);
+        return sendIdentity(credential,{client_id:id,is_visitor:false,merged_from:mergedFrom},!visitor);
+      }
+      const guest=customerToken.startsWith("g_")
+        ? await require("./helpers/customerAuth").getGuest(db,tenantId,customerToken,false,Number(req.headers["x-store-id"] || 1))
+        : null;
+      if (visitor?.claimed_at && visitor.active_session_id) {
+        await db.query("UPDATE chat_visitor_identities SET active_session_id=NULL WHERE tenant_id=? AND token_hash=?",
+          [tenantId,visitorHash(token)]);
+      }
+      const issued=visitor && !visitor.claimed_at ? null : await reserveVisitor(tenantId);
+      const credential=issued?.token || token;
+      if (guest) await db.query(`UPDATE chat_visitor_identities SET is_client_chat=1
+        WHERE tenant_id=? AND token_hash=? AND claimed_at IS NULL`,[tenantId,visitorHash(credential)]);
+      return sendIdentity(credential,{client_id:String(issued?.clientId || visitor.client_id),is_visitor:true},Boolean(issued));
+    }catch(error){return next(error);}
+  });
+
+  router.get("/media/:root/:tenant/:owner/:year/:month/:file", (req,res,next) => {
+    const {root,tenant,owner,year,month,file} = req.params;
+    if (root !== "static" && root !== "uploads") return res.sendStatus(404);
+    req.chatAttachmentPath = "/" + [tenant,owner,year,month,file].join("/");
+    req.chatAttachmentRoot = root;
+    return serveChatAttachment(req,res,next);
+  });
+
+  router.use(async (req,res,next) => {
+    if(!req.customerChatRequest)return next();
+    res.set("Cache-Control","no-store");
+    const route=String(req.path || "");
+    const method=req.method;
+    if(route==="/push/public-key" && method==="GET")return next();
+    const thread=route.match(/^\/thread\/([0-9]+)(\/.*)?$/);
+    const suffix=thread?.[2] || "";
+    const threadAllowed=thread && (
+      method==="GET" && ["","/meta","/diff","/stream"].includes(suffix)
+      || method==="POST" && ["/typing","/messages","/messages/read"].includes(suffix)
+      || method==="PATCH" && suffix==="/meta"
+      || ["PATCH","DELETE"].includes(method) && /^\/messages\/[^/]+$/.test(suffix));
+    const ownerRoute=threadAllowed || [
+      "POST /attachment","GET /unread","GET /unread/stream",
+      "POST /push/subscribe","POST /push/unsubscribe","GET /push/preferences","PUT /push/preferences",
+    ].includes(method+" "+route);
+    if(!ownerRoute)return res.status(403).json({ok:false,error:"CHAT_OPERATION_FORBIDDEN"});
+    try{
+      const owner=await customerChatOwner(req);
+      if(!owner)return res.status(401).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
+      if(thread && normalizeClientId(thread[1])!==owner.id){
+        return res.status(403).json({ok:false,error:"CHAT_THREAD_FORBIDDEN"});
+      }
+      req.chatOwner=owner;
+      if (route.endsWith("/stream")) {
+        let pending;
+        res.locals.checkChatStreamOwner = () => {
+          if (!pending) pending = customerChatOwner(req)
+            .then(async current => {
+              if (current?.id !== owner.id || current.sessionId !== owner.sessionId) return false;
+              if (current.isVisitor) return true;
+              const binding = await readVisitor(db,getTenantId(req),visitorCredential(req));
+              return String(binding?.active_session_id) === String(owner.sessionId);
+            })
+            .finally(() => { pending = null; });
+          return pending;
+        };
+        if (!await res.locals.checkChatStreamOwner()) {
+          return res.status(401).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
+        }
+      }
+      return next();
+    }catch(error){return next(error);}
   });
 
   router.post("/thread/merge", async (req, res) => {
@@ -4387,7 +4434,7 @@ function makeChatTempRouter() {
   router.post("/attachment", attachmentUpload.single("file"), async (req, res) => {
     try {
       const tenantId = getTenantId(req);
-      const clientId = normalizeClientId(req.body?.client_id || req.query?.client_id || 0) || "0";
+      const clientId = req.chatOwner?.id || normalizeClientId(req.body?.client_id || req.query?.client_id || 0) || "0";
       if (!req.file) return res.status(400).json({ ok: false, error: "FILE_REQUIRED" });
       const attachment = await storeChatAttachmentImage({
         file: req.file,
@@ -4517,6 +4564,16 @@ function makeChatTempRouter() {
         timeout: false,
       }));
 
+      if (req.customerChatRequest) {
+        let revision = currentUpdatedAt;
+        subscriber.refresh = async () => {
+          scheduleExpiredGuestThreadsCleanup(tenantId);
+          const next = toIsoOrEmpty((await readThreadMeta(tenantId,clientId))?.updated_at);
+          if (next === revision) return;
+          revision = next;
+          subscriber.send({changed:true,message_changed:true,updated_at:next});
+        };
+      }
       addSseSubscriber(threadSseSubscribers, threadKey, subscriber);
       startSseHeartbeat(subscriber);
 
@@ -4580,6 +4637,7 @@ function makeChatTempRouter() {
       }
 
       const waitResult = await waitForThreadChange(tenantId, clientId, timeoutMs);
+      if(!await requireCurrentChatOwner(req,res))return;
       const nextMeta = await readThreadMeta(tenantId, clientId);
       const nextUpdatedAt = toIsoOrEmpty(nextMeta?.updated_at);
       const nextTyping = getPeerTypingForActor(tenantId, clientId, actorKey);
@@ -4646,7 +4704,7 @@ function makeChatTempRouter() {
       const actorKey = getRequestReactionActor(req);
       const clientIdRaw = req.body?.client_id ?? req.body?.clientId ?? req.query?.client_id ?? "";
       const clientId = normalizePushClientId(
-        clientIdRaw,
+        req.chatOwner?.id || clientIdRaw,
         actorKey
       );
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
@@ -4656,14 +4714,21 @@ function makeChatTempRouter() {
       if (!webPushEnabled && !isExpoToken) {
         return res.status(503).json({ ok: false, error: "PUSH_DISABLED" });
       }
-      await upsertPushSubscription(
-        tenantId,
-        storeId,
-        clientId,
-        actorKey,
-        subscription,
-        String(req.headers["user-agent"] || "")
-      );
+      const userAgent=String(req.headers["user-agent"] || "");
+      if(req.chatOwner){
+        await ensurePushSubscriptionsTable();
+        const conn=await db.getConnection();
+        try{
+          await conn.beginTransaction();
+          await lockCustomerChatOwner(req,conn);
+          await upsertPushSubscription(tenantId,storeId,clientId,actorKey,subscription,userAgent,conn);
+          await conn.query(`UPDATE chat_push_subscriptions SET customer_session_id=?
+            WHERE tenant_id=? AND client_id=? AND actor='in' AND endpoint_hash=?`,
+          [req.chatOwner.sessionId || null,tenantId,clientId,hashPushEndpoint(subscription.endpoint)]);
+          await conn.commit();
+        }catch(error){await conn.rollback();throw error;}
+        finally{conn.release();}
+      }else await upsertPushSubscription(tenantId,storeId,clientId,actorKey,subscription,userAgent);
       return res.json({
         ok: true,
         data: {
@@ -4740,7 +4805,11 @@ function makeChatTempRouter() {
       const subscription = sanitizePushSubscription(req.body?.subscription || req.body || {});
       const endpoint = subscription ? subscription.endpoint : String(req.body?.endpoint || "").trim();
       if (!endpoint) return res.status(400).json({ ok: false, error: "ENDPOINT_REQUIRED" });
-      await deletePushSubscriptionByEndpoint(tenantId, endpoint, actorKey);
+      if(req.chatOwner){
+        await ensurePushSubscriptionsTable();
+        await db.query("DELETE FROM chat_push_subscriptions WHERE tenant_id=? AND client_id=? AND actor='in' AND endpoint_hash=?",
+          [tenantId,req.chatOwner.id,crypto.createHash("sha256").update(endpoint).digest("hex")]);
+      }else await deletePushSubscriptionByEndpoint(tenantId, endpoint, actorKey);
       return res.json({ ok: true, data: { unsubscribed: true } });
     } catch (err) {
       console.error("chat-temp POST /push/unsubscribe error:", err);
@@ -4763,6 +4832,7 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
+      await lockCustomerChatOwner(req,conn);
       const updatedAt = new Date();
 
       await ensureThreadRow(conn, tenantId, clientId, {
@@ -4802,6 +4872,7 @@ function makeChatTempRouter() {
         try { await conn.rollback(); } catch {}
         conn.release();
       }
+      if (err.status === 409) return res.status(409).json({ ok: false, error: "CHAT_IDENTITY_CHANGED" });
       console.error("chat-temp POST /thread/:clientId/messages error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
@@ -4823,6 +4894,7 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
+      await lockCustomerChatOwner(req,conn);
 
       const existingRow = await readSingleMessageRow(tenantId, clientId, messageId, conn);
       if (!existingRow) {
@@ -4883,6 +4955,7 @@ function makeChatTempRouter() {
         try { await conn.rollback(); } catch {}
         conn.release();
       }
+      if(err.status===409)return res.status(409).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
       console.error("chat-temp PATCH /thread/:clientId/messages/:messageId error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
@@ -4905,6 +4978,7 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
+      await lockCustomerChatOwner(req,conn);
 
       const updatedAt = new Date();
       const readAt = new Date();
@@ -4970,6 +5044,7 @@ function makeChatTempRouter() {
         try { await conn.rollback(); } catch {}
         conn.release();
       }
+      if(err.status===409)return res.status(409).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
       console.error("chat-temp POST /thread/:clientId/messages/read error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
@@ -4986,6 +5061,7 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
+      await lockCustomerChatOwner(req,conn);
       const updatedAt = new Date();
 
       const [result] = await conn.query(
@@ -5024,6 +5100,7 @@ function makeChatTempRouter() {
         try { await conn.rollback(); } catch {}
         conn.release();
       }
+      if(err.status===409)return res.status(409).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
       console.error("chat-temp DELETE /thread/:clientId/messages/:messageId error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
@@ -5064,6 +5141,7 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
+      await lockCustomerChatOwner(req,conn);
 
       const existingMetaRow = await readThreadMeta(tenantId, clientId, conn);
       const existingMeta = sanitizeMetaFromDbRow(existingMetaRow);
@@ -5108,6 +5186,7 @@ function makeChatTempRouter() {
         try { await conn.rollback(); } catch {}
         conn.release();
       }
+      if(err.status===409)return res.status(409).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
       console.error("chat-temp PATCH /thread/:clientId/meta error:", err);
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
@@ -5360,6 +5439,16 @@ function makeChatTempRouter() {
         timeout: false,
       }));
 
+      if (req.customerChatRequest) {
+        let previous = snapshot;
+        subscriber.refresh = async () => {
+          scheduleExpiredGuestThreadsCleanup(tenantId);
+          const next = await readClientUnreadSnapshot(tenantId,clientId);
+          if (next.revision === previous.revision && next.total === previous.total) return;
+          previous = next;
+          subscriber.send({changed:true,total:next.total,updated_at:next.updatedAt,revision:next.revision});
+        };
+      }
       addSseSubscriber(unreadSseSubscribers, unreadKey, subscriber);
       startSseHeartbeat(subscriber);
 
@@ -5429,6 +5518,7 @@ function makeChatTempRouter() {
         const waitResult = clientId
           ? await waitForThreadChange(tenantId, clientId, timeoutMs)
           : { timeout: true };
+        if(!await requireCurrentChatOwner(req,res))return;
         const nextSnapshot = await readClientUnreadSnapshot(tenantId, clientId);
         const nextTotal = Number(nextSnapshot.total || 0);
         const nextRevision = Number(nextSnapshot.revision || 0);
@@ -5704,6 +5794,44 @@ function makeChatTempRouter() {
   return router;
 }
 
+async function serveChatAttachment(req, res, next) {
+  res.set("Cache-Control", "private, no-store");
+  const file = req.chatAttachmentPath.match(/^\/([1-9][0-9]*)\/([1-9][0-9]*)\/(\d{4})\/(0[1-9]|1[0-2])\/([0-9]+_[a-f0-9]{10}\.(?:webp|png|gif|avif|jpg|jpeg))$/);
+  if (!file || file[1] !== String(getTenantId(req))) return res.sendStatus(404);
+  try {
+    if (req.customerChatRequest) {
+      const tenantId = getTenantId(req);
+      const owner = await customerChatOwner(req);
+      if (!owner) return res.sendStatus(404);
+      if (!owner.isVisitor) {
+        const binding = await readVisitor(db,tenantId,visitorCredential(req));
+        if (String(binding?.active_session_id) !== String(owner.sessionId)) return res.sendStatus(404);
+      }
+      if (owner.id !== file[2]) {
+        if (owner.isVisitor) return res.sendStatus(404);
+        const [[claimed]] = await db.query(`SELECT 1 FROM chat_visitor_identities
+          WHERE tenant_id=? AND client_id=? AND claimed_customer_id=? AND claimed_at IS NOT NULL`,
+        [tenantId,file[2],owner.id]);
+        if (!claimed) return res.sendStatus(404);
+      }
+      const resource = "/uploads/chat" + req.chatAttachmentPath;
+      const [[message]] = await db.query(`SELECT 1 FROM chat_messages
+        WHERE tenant_id=? AND client_id=? AND
+          RIGHT(JSON_UNQUOTE(JSON_EXTRACT(attachment_json,'$.url')),CHAR_LENGTH(?))=? LIMIT 1`,
+      [tenantId,owner.id,resource,resource]);
+      if (!message) return res.sendStatus(404);
+    }
+    const root = req.chatAttachmentRoot === "uploads" || req.baseUrl.toLowerCase() === "/uploads"
+      ? path.join(__dirname,"..","uploads","chat") : CHAT_UPLOAD_ABSOLUTE_DIR;
+    return res.sendFile(file.slice(1).join("/"), {root,cacheControl:false,lastModified:false}, error => {
+      if (!error) return;
+      if (!res.headersSent && error.status === 404) return res.sendStatus(404);
+      next(error);
+    });
+  } catch (error) { return next(error); }
+}
+
+makeChatTempRouter.serveChatAttachment = serveChatAttachment;
 makeChatTempRouter.handleTenantChatWidgetStateChange = handleTenantChatWidgetStateChange;
 makeChatTempRouter.disconnectTenantChatRuntime = disconnectTenantChatRuntime;
 makeChatTempRouter.setTenantChatWidgetEnabledCache = setTenantChatWidgetEnabledCache;

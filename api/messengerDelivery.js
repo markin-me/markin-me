@@ -191,7 +191,9 @@ async function sendTelegramText(token, providerUserId, text, signal, extra = {},
   return data.result;
 }
 
-async function deliverCode(db, { tenantId, provider, providerUserId, code, purpose, expiresInMinutes, operationId }, options={}) {
+async function deliverCode(db, { tenantId, accountType, provider, providerUserId, code, purpose, expiresInMinutes, operationId }, options={}) {
+  const customer = accountType === 'customer' || (accountType === undefined && options.customer === true);
+  options = { ...options, customer };
   const config = await getTenantBotConfig(db, tenantId, provider,options);
   const { token } = config;
   if (provider === 'tg') await assertTenantTelegramContact(db, config, providerUserId);
@@ -199,11 +201,12 @@ async function deliverCode(db, { tenantId, provider, providerUserId, code, purpo
   const timeout = setTimeout(() => controller.abort(provider === 'tg'
     ? new DOMException('Telegram API deadline exceeded', 'TimeoutError') : undefined), DELIVERY_TIMEOUT_MS);
   try {
-    const baseText = options.customer && purpose === 'login'
+    const fixedCode = customer || accountType === 'employee';
+    const baseText = fixedCode
       ? `${config.brand}: ${code} - Ваш код подтверждения.`
       : codeMessage(purpose, code, expiresInMinutes);
     const serviceText = createServiceTextRenderer(db, config.tenantId, config.storeId, provider);
-    const codeNotice = await serviceText('code_sent', '');
+    const codeNotice = fixedCode ? '' : await serviceText('code_sent', '');
     // The one-time code and its server-owned validity text cannot be edited away.
     const text = codeNotice ? `${codeNotice}\n\n${baseText}` : baseText;
     if (provider === 'max') {

@@ -251,7 +251,10 @@ async function recordCurrentServiceMessage(details) {
       }
     }
     if (!context.operationId) return false;
-    return recordServiceMessage(context.db, { ...details, operationId: context.operationId });
+    const recorded=await recordServiceMessage(context.db, { ...details, operationId: context.operationId });
+    if(details.removesEmployeeReplyKeyboard)await context.db.query(`UPDATE auth_service_messages
+      SET controls_cleared_at=UTC_TIMESTAMP(6) WHERE operation_id=? AND has_reply_keyboard=1 AND controls_cleared_at IS NULL`,[context.operationId]);
+    return recorded;
   });
 }
 
@@ -306,12 +309,13 @@ async function resolveServiceOperation(db, { tenantId, provider, token, provider
   let sourceType = null;
   let row = null;
   try {
-    if (/^[al]_[A-Za-z0-9_-]{40}$/.test(normalizedToken)) {
+    if (/^[al]_[A-Za-z0-9_-]{40}$|^c_[A-Za-z0-9_-]{43}$/.test(normalizedToken)) {
+      const challengeReference = normalizedToken.startsWith('c_');
       const [rows] = await db.query(
         `SELECT public_id,tenant_id,provider,purpose,expires_at,created_at,
                 GREATEST(0,TIMESTAMPDIFF(SECOND,NOW(6),expires_at)) remaining_seconds
-         FROM auth_verification_challenges WHERE token_hash=? AND tenant_id=? AND provider=? LIMIT 1`,
-        [crypto.createHash('sha256').update(normalizedToken).digest(), Number(tenantId), provider]
+         FROM auth_verification_challenges WHERE ${challengeReference?'public_id':'token_hash'}=? AND tenant_id=? AND provider=? LIMIT 1`,
+        [challengeReference?normalizedToken.slice(2):crypto.createHash('sha256').update(normalizedToken).digest(), Number(tenantId), provider]
       );
       row = rows[0] || null;
       sourceType = 'challenge';
@@ -390,6 +394,50 @@ function deletionError(code, permanent = false, retryAfter = 0) {
   return Object.assign(new Error(code), { code, permanent, retryAfter });
 }
 
+async function syncBrowserCleanupDeadline(db, publicId) {
+  await db.query(`UPDATE auth_service_operations o
+    JOIN auth_browser_requests r ON r.public_id=o.source_public_id AND r.tenant_id=o.tenant_id AND r.provider=o.provider
+    SET o.expires_at=TIMESTAMPADD(MICROSECOND,TIMESTAMPDIFF(MICROSECOND,NOW(6),r.expires_at),UTC_TIMESTAMP(6))
+    WHERE o.operation_id=? AND o.status='pending'`,[operationId('browser',publicId)]);
+  await db.query(`UPDATE auth_service_messages m JOIN auth_service_operations o ON o.operation_id=m.operation_id
+    SET m.delete_after=o.expires_at,m.available_at=o.expires_at
+    WHERE o.operation_id=? AND o.status='pending' AND m.status='pending' AND m.available_at>UTC_TIMESTAMP(6) AND m.controls_cleared_at IS NULL`,
+  [operationId('browser',publicId)]);
+}
+
+async function scheduleCurrentControlCleanup(messageId) {
+  const context=currentOperation();
+  if(!context?.operationId || !messageId)return;
+  await context.db.query(`UPDATE auth_service_messages SET delete_after=UTC_TIMESTAMP(6),available_at=UTC_TIMESTAMP(6)
+    WHERE operation_id=? AND message_id=? AND status='pending'`,[context.operationId,String(messageId)]);
+}
+
+async function recordCustomerPrompt(db, {tenantId, provider, reference, phase}) {
+  if(!/^[cr]_[A-Za-z0-9_-]{43}$/.test(reference || ''))return;
+  const id=reference.slice(2);
+  if(reference.startsWith('c_')){
+    await db.query(`UPDATE auth_verification_challenges SET customer_prompt_at=COALESCE(customer_prompt_at,NOW())
+      WHERE tenant_id=? AND provider=? AND public_id=? AND account_type IN ('customer','employee')
+        AND delivery_status='pending' AND consumed_at IS NULL
+        AND customer_contact_phone IS ${phase==='contact'?'':'NOT '}NULL`,[tenantId,provider,id]);
+    return;
+  }
+  const column={contact:'customer_contact_prompt_at',choice:'customer_choice_prompt_at',final:'customer_final_prompt_at'}[phase];
+  if(!column)return;
+  const conn=await db.getConnection();
+  try{
+    await conn.beginTransaction();
+    const [result]=await conn.query(`UPDATE auth_browser_requests SET ${column}=NOW()
+        ${phase==='choice'?', expires_at=DATE_ADD(NOW(),INTERVAL 3 MINUTE)':''}
+      WHERE tenant_id=? AND provider=? AND public_id=? AND account_type IN ('customer','employee')
+        AND state='started' AND expires_at>NOW() AND ${column} IS NULL
+        ${phase==='choice'?'AND phone_consent_at IS NULL':''}`,[tenantId,provider,id]);
+    if(phase==='choice' && result.affectedRows)await syncBrowserCleanupDeadline(conn,id);
+    await conn.commit();
+  }catch(error){await conn.rollback();throw error;}
+  finally{conn.release();}
+}
+
 async function telegramCleanupRequest(token, method, body) {
   const response = await fetchTelegram(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(DELETE_TIMEOUT_MS),
@@ -426,8 +474,18 @@ async function clearTelegramControls(db, token, row, leaseToken) {
         AND o.status='pending' AND o.expires_at>UTC_TIMESTAMP(6) AND TRIM(t.telegram_bot_token)=? LIMIT 1`,
     [row.chat_id, row.id, token]);
     if (!newer.length) {
+      const [[operation]]=await db.query(`SELECT o.status,o.operation_kind,COALESCE(r.account_type,c.account_type) account_type
+        FROM auth_service_operations o
+        LEFT JOIN auth_browser_requests r ON o.source_type='browser' AND r.public_id=o.source_public_id AND r.tenant_id=o.tenant_id
+        LEFT JOIN auth_verification_challenges c ON o.source_type='challenge' AND c.public_id=o.source_public_id AND c.tenant_id=o.tenant_id
+        WHERE o.operation_id=?`,[row.operation_id]);
+      const text=operation?.account_type==='employee'
+        ? operation.status==='expired' ? 'Авторизация прервана. Время ожидания истекло.'
+          : operation.status==='success' ? operation.operation_kind==='link' ? 'Telegram успешно привязан.' : 'Вы успешно авторизовались.'
+          : 'Авторизация отменена.'
+        : 'Запрос завершён.';
       const sent = await requestTelegramApi(`https://api.telegram.org/bot${token}`, 'sendMessage', {
-        chat_id: row.chat_id, text: 'Запрос завершён.', reply_markup: { remove_keyboard: true },
+        chat_id: row.chat_id, text, reply_markup: { remove_keyboard: true },
       });
       row.cleanup_message_id = sent.result.message_id;
       await db.query('UPDATE auth_service_messages SET cleanup_message_id=? WHERE id=? AND lease_token=?',
@@ -456,19 +514,98 @@ async function deleteMaxMessage(token, row) {
   throw deletionError('MAX_DELETE_FAILED');
 }
 
+const customerTerminalNoticeStateSql = `((account_type='employee' AND purpose='login' AND code_challenge_id IS NULL
+      AND provider_user_id IS NOT NULL AND state='consumed' AND login_notified_at IS NULL)
+      OR (account_type='customer' AND purpose IN ('login','profile_link') AND code_challenge_id IS NULL
+      AND provider_user_id IS NOT NULL
+      AND (state='consumed' AND result_session_id IS NOT NULL AND login_notified_at IS NULL
+        OR state='cancelled' AND customer_declined_at IS NOT NULL AND customer_decline_notified_at IS NULL
+        OR (state='started' OR state='cancelled' AND notice_attempts>0)
+          AND customer_declined_at IS NULL AND customer_choice_prompt_at IS NOT NULL AND phone_consent_at IS NULL
+          AND expires_at<=NOW() AND phone_timeout_notified_at IS NULL)))`;
+
 function createMessengerCleanupWorker(db) {
   let stopped = true;
   let timer = null;
   let active = Promise.resolve();
   let lastWorkerErrorAt = 0;
+  async function notifyCustomerTerminal() {
+    const due = `${customerTerminalNoticeStateSql} AND notice_attempts<5
+      AND (notice_retry_at IS NULL OR notice_retry_at<=NOW())`;
+    const [[r]]=await db.query(`SELECT public_id,tenant_id,provider,provider_user_id,state,purpose,account_type,notice_attempts,customer_declined_at
+      FROM auth_browser_requests WHERE ${due} ORDER BY created_at LIMIT 1`);
+    if(!r)return;
+    // Claim and expire before calling either provider. No transaction or pool
+    // connection is held during network I/O. A crash leaves a bounded retry.
+    const [claim]=await db.query(`UPDATE auth_browser_requests SET
+      state=IF(state='consumed','consumed','cancelled'),
+      notice_attempts=notice_attempts+1,notice_retry_at=DATE_ADD(NOW(),INTERVAL 30 SECOND)
+      WHERE public_id=? AND notice_attempts=? AND ${due}`,[r.public_id,r.notice_attempts]);
+    if(!claim.affectedRows)return;
+    try {
+      const success=r.state==='consumed';
+      const declined=Boolean(r.customer_declined_at);
+      const [[tenant]]=await db.query('SELECT telegram_bot_token,max_bot_token FROM ten_tenants WHERE id=? AND is_active=1',[r.tenant_id]);
+      const token=String(r.provider==='tg'?tenant?.telegram_bot_token || '':tenant?.max_bot_token || '').trim();
+      if(!token)throw deletionError('MESSENGER_BOT_TOKEN_UNAVAILABLE',true);
+      const text=success && r.account_type==='employee' ? 'Вы успешно авторизовались.' : success && r.purpose==='profile_link'
+        ? `${r.provider==='tg'?'Telegram':'MAX'} успешно привязан. Вернитесь в магазин.`
+        : success?'Вы успешно авторизовались. Вернитесь в магазин.':declined?'Авторизация отменена.':'Авторизация прервана. Время ожидания истекло.';
+      const id=operationId('browser',r.public_id);
+      let chatId,messageId;
+      if(r.provider==='tg'){
+        const [[otherKeyboard]]=await db.query(`SELECT m.id FROM auth_service_messages m
+          JOIN auth_service_operations o ON o.operation_id=m.operation_id
+          JOIN ten_tenants t ON t.id=m.tenant_id
+          WHERE m.provider='tg' AND m.chat_id=? AND m.has_reply_keyboard=1 AND m.operation_id<>?
+            AND m.status='pending' AND o.status='pending' AND o.expires_at>UTC_TIMESTAMP(6)
+            AND TRIM(t.telegram_bot_token)=? LIMIT 1`,[r.provider_user_id,id,token]);
+        const data=await requestTelegramApi(`https://api.telegram.org/bot${token}`,'sendMessage',
+          {chat_id:r.provider_user_id,text,...(!otherKeyboard?{reply_markup:{remove_keyboard:true}}:{})},
+          {signal:AbortSignal.timeout(10000)});
+        chatId=data.result?.chat?.id;messageId=data.result?.message_id;
+        if(!otherKeyboard)await db.query(`UPDATE auth_service_messages SET controls_cleared_at=UTC_TIMESTAMP(6)
+          WHERE operation_id=? AND has_reply_keyboard=1 AND controls_cleared_at IS NULL`,[id]);
+      }else{
+        const data=await require('./maxIntegration').sendMaxMessage({db,tenantId:r.tenant_id,botToken:token,maxUserId:r.provider_user_id,text,
+          signal:AbortSignal.timeout(10000),requireMessageConfirmation:true});
+        if(data?.ok!==true)throw deletionError('MAX_DELIVERY_FAILED');
+        chatId=data.data?.message?.recipient?.chat_id || data.data?.message?.recipient?.user_id || r.provider_user_id;
+        messageId=data.data?.message?.body?.mid;
+      }
+      await markOperation(db,id,success?'success':declined?'cancelled':'expired');
+      await recordServiceMessage(db,{operationId:id,provider:r.provider,chatId,messageId});
+      const column=success?'login_notified_at':declined?'customer_decline_notified_at':'phone_timeout_notified_at';
+      await db.query(`UPDATE auth_browser_requests SET ${column}=NOW(),notice_retry_at=NULL
+        WHERE public_id=? AND notice_attempts=?`,[r.public_id,Number(r.notice_attempts)+1]);
+    } finally {
+      if(Number(r.notice_attempts)+1>=5) await db.query(
+        'UPDATE auth_browser_requests SET notice_retry_at=NULL WHERE public_id=? AND notice_attempts=5',
+        [r.public_id]);
+    }
+  }
 
   async function tick() {
+    try { await notifyCustomerTerminal(); } catch(error) { logTrackingError('customer_terminal_notice',error); }
     // Browser completion/cancellation can happen without another incoming update.
     const [finished] = await db.query(`SELECT o.operation_id,
-      CASE WHEN r.state IN ('confirmed','consumed') THEN 'success' ELSE 'cancelled' END outcome
+      CASE WHEN r.state IN ('confirmed','consumed') THEN 'success'
+        WHEN r.account_type='customer' AND r.customer_declined_at IS NULL AND r.notice_attempts>0 THEN 'expired'
+        ELSE 'cancelled' END outcome
       FROM auth_service_operations o JOIN auth_browser_requests r ON r.public_id=o.source_public_id AND r.tenant_id=o.tenant_id AND r.provider=o.provider
-      WHERE o.source_type='browser' AND o.status='pending' AND r.state IN ('confirmed','consumed','cancelled') LIMIT 100`);
+      WHERE o.source_type='browser' AND o.status='pending' AND r.state IN ('consumed','cancelled') LIMIT 100`);
     for (const operation of finished) await markOperation(db, operation.operation_id, operation.outcome);
+    const [cancelledLinks]=await db.query(`SELECT o.operation_id FROM auth_service_operations o
+      JOIN auth_verification_challenges c ON c.public_id=o.source_public_id AND c.tenant_id=o.tenant_id AND c.provider=o.provider
+      WHERE o.source_type='challenge' AND o.status='pending' AND c.account_type IN ('customer','employee')
+        AND c.purpose='link' AND c.consumed_at IS NOT NULL AND c.delivery_status='failed' LIMIT 100`);
+    for(const link of cancelledLinks)await markOperation(db,link.operation_id,'cancelled');
+    const [closedCodes]=await db.query(`SELECT o.operation_id FROM auth_service_operations o
+      JOIN auth_verification_challenges c ON c.public_id=o.source_public_id AND c.tenant_id=o.tenant_id AND c.provider=o.provider
+      WHERE o.source_type='challenge' AND o.status='pending'
+        AND (c.account_type='customer' OR c.account_type='employee' AND c.delivery_status='failed')
+        AND c.purpose<>'link' AND c.consumed_at IS NOT NULL LIMIT 100`);
+    for(const code of closedCodes)await markOperation(db,code.operation_id,'cancelled');
     await db.query(
       `UPDATE auth_service_operations SET status='expired',completed_at=expires_at,updated_at=UTC_TIMESTAMP(6)
        WHERE status='pending' AND expires_at<=UTC_TIMESTAMP(6) LIMIT 100`
@@ -548,6 +685,7 @@ function createMessengerCleanupWorker(db) {
 module.exports = {
   createServiceInteractionContext,
   createMessengerCleanupWorker,
+  customerTerminalNoticeStateSql,
   ensureBrowserOperation,
   ensureChallengeOperation,
   markCurrentOperation,
@@ -555,6 +693,9 @@ module.exports = {
   keepCurrentOperationPending,
   operationId,
   recordCurrentServiceMessage,
+  recordCustomerPrompt,
+  scheduleCurrentControlCleanup,
+  syncBrowserCleanupDeadline,
   recordCurrentTelegramUserServiceMessage,
   recordServiceMessage,
   resolveServiceOperation,

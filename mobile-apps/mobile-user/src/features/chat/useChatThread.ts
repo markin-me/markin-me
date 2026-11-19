@@ -8,13 +8,11 @@ import {
   fetchThread,
   fetchThreadDiff,
   markMessagesRead,
-  mergeThreads,
   openThreadStream,
   patchMessage,
   patchThreadMeta,
   setTyping,
   uploadChatImage,
-  waitThread,
 } from './api';
 import {
   buildOrderCardFromCustomerOrder,
@@ -38,17 +36,11 @@ import {
   todayKey,
 } from './helpers';
 import {
-  clearGuestChatClientId,
   readCachedChatSettings,
   readChatThreadCacheSync,
   readChatThreadCache,
-  readLastCustomerChatClientId,
-  readLastCustomerChatClientIdSync,
-  readLastChatProfileSync,
   readLastChatSettingsSync,
-  readStoredGuestChatClientId,
   resolveUserChatProfile,
-  saveLastCustomerChatClientId,
   saveChatThreadCache,
 } from './storage';
 import type {
@@ -96,7 +88,6 @@ export async function preloadUserChatThread() {
     actor: 'in' as const,
     customerToken: String(profile.customerToken || ''),
   };
-  if (!profile.isGuest) await saveLastCustomerChatClientId(clientId).catch(() => undefined);
   const cached = await readChatThreadCache(clientId).catch(() => null);
   if (!cached?.updatedAt) {
     const page = await fetchThread(clientId, { ...requestParams, limit: 40 });
@@ -183,7 +174,7 @@ type UseChatThreadOptions = {
 export function useChatThread(options: UseChatThreadOptions) {
   const actor = options.actor;
   const initialProfile = actor === 'in'
-    ? readLastChatProfileSync()
+    ? null
     : {
       clientId: String(options.clientId || ''),
       customerToken: String(options.customerToken || ''),
@@ -191,7 +182,7 @@ export function useChatThread(options: UseChatThreadOptions) {
       phone: String(options.initialProfile?.phone || ''),
       isGuest: false,
     };
-  const initialClientId = initialProfile?.clientId || options.clientId || (actor === 'in' ? readLastCustomerChatClientIdSync() : '');
+  const initialClientId = initialProfile?.clientId || (actor === 'out' ? options.clientId : '') || '';
   const initialCache = initialClientId ? readChatThreadCacheSync(initialClientId) : null;
   const [profile, setProfile] = useState<ChatProfile | null>(initialProfile);
   const [settings, setSettings] = useState<ChatSettings | null>(readLastChatSettingsSync());
@@ -206,7 +197,6 @@ export function useChatThread(options: UseChatThreadOptions) {
   const [error, setError] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bootstrapComplete, setBootstrapComplete] = useState(false);
-  const [localCacheChecked, setLocalCacheChecked] = useState(Boolean(initialCache));
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const assistantReplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const assistantReplyTokenRef = useRef(0);
@@ -226,7 +216,7 @@ export function useChatThread(options: UseChatThreadOptions) {
   const cacheHydratedRef = useRef(Boolean(initialCache));
   const cacheSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const clientId = profile?.clientId || options.clientId || initialClientId || '';
+  const clientId = profile?.clientId || (actor === 'out' ? options.clientId : '') || '';
   const customerToken = options.customerToken ?? profile?.customerToken ?? '';
   const enabled = options.enabled !== false && !!clientId;
   const chatEnabled = settings ? isChatEnabled(settings) : true;
@@ -312,9 +302,16 @@ export function useChatThread(options: UseChatThreadOptions) {
     cacheHydratedRef.current = false;
   }, []);
 
+  const clearChatIdentity = useCallback(() => {
+    clientIdRef.current = '';
+    profileRef.current = null;
+    resetThreadState();
+    setProfile(null);
+  }, [resetThreadState]);
+
   const hydrateThreadCache = useCallback(async (targetClientId: string) => {
     const cache = await readChatThreadCache(targetClientId).catch(() => null);
-    if (!cache || !mountedRef.current) {
+    if (!cache || !mountedRef.current || clientIdRef.current !== targetClientId) {
       return false;
     }
     clientIdRef.current = targetClientId;
@@ -346,43 +343,6 @@ export function useChatThread(options: UseChatThreadOptions) {
     return true;
   }, [applyPendingReactionOverrides, applyTypingState]);
 
-  useEffect(() => {
-    if (actor !== 'in' || cacheHydratedRef.current) {
-      setLocalCacheChecked(true);
-      return undefined;
-    }
-    let cancelled = false;
-    async function hydrateKnownCache() {
-      try {
-        const ids = [
-          String(readLastChatProfileSync()?.clientId || ''),
-          await readLastCustomerChatClientId().catch(() => ''),
-          await readStoredGuestChatClientId().catch(() => ''),
-        ];
-        const seen = new Set<string>();
-        for (const rawId of ids) {
-          if (cancelled || cacheHydratedRef.current) return;
-          const targetClientId = String(rawId || '').trim();
-          if (!targetClientId || seen.has(targetClientId)) continue;
-          seen.add(targetClientId);
-          const restored = await hydrateThreadCache(targetClientId);
-          if (restored && !cancelled) {
-            setLoading(false);
-            return;
-          }
-        }
-      } finally {
-        if (!cancelled) {
-          setLocalCacheChecked(true);
-        }
-      }
-    }
-    void hydrateKnownCache();
-    return () => {
-      cancelled = true;
-    };
-  }, [actor, hydrateThreadCache]);
-
   const syncProfile = useCallback(async (resolvedProfile?: ChatProfile | null) => {
     const nextProfile = resolvedProfile || (
       actor === 'in'
@@ -396,15 +356,6 @@ export function useChatThread(options: UseChatThreadOptions) {
         }
     );
     if (!nextProfile) return null;
-
-    if (actor === 'in' && !nextProfile.isGuest) {
-      const guestId = await readStoredGuestChatClientId();
-      if (guestId && guestId !== nextProfile.clientId) {
-        await mergeThreads(guestId, nextProfile.clientId, actor);
-        await clearGuestChatClientId(guestId);
-      }
-      await saveLastCustomerChatClientId(nextProfile.clientId).catch(() => undefined);
-    }
 
     if (!mountedRef.current) return nextProfile;
 
@@ -426,6 +377,7 @@ export function useChatThread(options: UseChatThreadOptions) {
       const restored = hydrateThreadCacheSync(nextProfile.clientId);
       if (!restored) {
         const restoredAsync = await hydrateThreadCache(nextProfile.clientId);
+        if (!mountedRef.current || clientIdRef.current !== nextProfile.clientId) return null;
         if (!restoredAsync) resetThreadState();
       }
     }
@@ -441,6 +393,19 @@ export function useChatThread(options: UseChatThreadOptions) {
     hydrateThreadCacheSync,
     resetThreadState,
   ]);
+
+  const handleChatIdentityError = useCallback((error: unknown, requestedClientId: string) => {
+    if (actor !== 'in' || !mountedRef.current || clientIdRef.current !== requestedClientId) return false;
+    const code = error instanceof Error ? error.message : '';
+    if (code !== 'CHAT_IDENTITY_CHANGED' && code !== 'CHAT_THREAD_FORBIDDEN') return false;
+    clearChatIdentity();
+    void syncProfile().catch(nextError => {
+      if (!mountedRef.current || clientIdRef.current) return;
+      setLoading(false);
+      setError(String(nextError.message || nextError));
+    });
+    return true;
+  }, [actor, clearChatIdentity, syncProfile]);
 
   const loadThread = useCallback(async (opts?: LoadThreadOptions) => {
     if (!clientId) return;
@@ -487,13 +452,14 @@ export function useChatThread(options: UseChatThreadOptions) {
         applyTypingState(page.typing);
       }
     } catch (err) {
+      if (handleChatIdentityError(err, requestedClientId)) return;
       if (mountedRef.current && clientIdRef.current === requestedClientId) setError(String(err instanceof Error ? err.message : err));
     } finally {
       if (!mountedRef.current || clientIdRef.current !== requestedClientId) return;
       if (opts?.append) setLoadingMore(false);
       else if (!silent) setLoading(false);
     }
-  }, [applyPendingReactionOverrides, applyTypingState, clientId, requestParams]);
+  }, [applyPendingReactionOverrides, applyTypingState, clientId, handleChatIdentityError, requestParams]);
 
   const loadThreadChanges = useCallback(async (since: string, opts?: LoadThreadChangesOptions) => {
     if (!clientId || !since) {
@@ -610,23 +576,24 @@ export function useChatThread(options: UseChatThreadOptions) {
   useEffect(() => {
     if (actor !== 'in') return undefined;
     return subscribeCustomerPassport(() => {
-      void syncProfile();
+      clearChatIdentity();
+      void syncProfile().catch(error => setError(String(error.message || error)));
     });
-  }, [actor, syncProfile]);
+  }, [actor, clearChatIdentity, syncProfile]);
 
   useEffect(() => {
-    if (!bootstrapComplete || !localCacheChecked || !enabled || !isChatEnabled(settings)) return;
+    if (!bootstrapComplete || !enabled || !isChatEnabled(settings)) return;
     void loadThread({ silent: cacheHydratedRef.current });
-  }, [bootstrapComplete, enabled, loadThread, localCacheChecked, settings]);
+  }, [bootstrapComplete, enabled, loadThread, settings]);
 
   useEffect(() => {
     if (!enabled || !isChatEnabled(settings)) return;
     let stopped = false;
     let fallbackStarted = false;
-    let source: ReturnType<typeof openThreadStream> | null = null;
+    let source: Awaited<ReturnType<typeof openThreadStream>> | null = null;
 
     const applyThreadSignal = async (result: ChatWaitResult) => {
-      if (stopped || !mountedRef.current) return;
+      if (stopped || !mountedRef.current || clientIdRef.current !== clientId) return;
       if (result.typing) {
         const nextTypingUpdatedAt = String(result.typing.updated_at || '');
         typingUpdatedAtRef.current = nextTypingUpdatedAt;
@@ -668,41 +635,34 @@ export function useChatThread(options: UseChatThreadOptions) {
       }
     };
 
-    async function runWaitFallback() {
-      if (fallbackStarted) return;
-      fallbackStarted = true;
-      while (!stopped) {
-        try {
-          const result = await waitThread(clientId, {
-            ...requestParams,
-            since: updatedAtRef.current,
-            typingSince: typingUpdatedAtRef.current,
-            timeoutMs: 20000,
-          });
-          await applyThreadSignal(result);
-        } catch {
-          await new Promise((resolve) => setTimeout(resolve, 2200));
-        }
+    void openThreadStream(clientId, requestParams).then(stream => {
+      if (stopped) {
+        stream.close();
+        return;
       }
-    }
-
-    source = openThreadStream(clientId, requestParams);
-    source.addEventListener('thread', (event) => {
-      if (!event.data) return;
-      try {
-        void applyThreadSignal(JSON.parse(event.data) as ChatWaitResult);
-      } catch {}
-    });
-    source.addEventListener('error', () => {
-      source?.close();
-      void runWaitFallback();
+      source = stream;
+      stream.addEventListener('open', () => {
+        if (!stopped) void loadThreadChanges(updatedAtRef.current, { forceFullOnEmpty: true, silent: true });
+      });
+      stream.addEventListener('thread', event => {
+        if (event.data) void applyThreadSignal(JSON.parse(event.data) as ChatWaitResult);
+      });
+      stream.addEventListener('error', event => {
+        if (stopped || !('xhrStatus' in event)) return;
+        if (event.xhrStatus === 401 || event.xhrStatus === 403) {
+          stream.close();
+          handleChatIdentityError(new Error('CHAT_IDENTITY_CHANGED'), clientId);
+        }
+      });
+    }).catch(error => {
+      if (!stopped) setError(String(error.message || error));
     });
 
     return () => {
       stopped = true;
       source?.close();
     };
-  }, [applyTypingState, clientId, enabled, loadThreadChanges, requestParams, settings]);
+  }, [actor, applyTypingState, clientId, enabled, handleChatIdentityError, loadThreadChanges, requestParams, settings]);
 
   useEffect(() => {
     if (!enabled) return;

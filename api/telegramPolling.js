@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const { setTimeout: delay } = require('timers/promises');
 const { requestTelegramApi, telegramErrorReason } = require('./telegramApi');
 
+const { customerTerminalNoticeStateSql } = require('./messengerCleanup');
+
 const LONG_POLL_SECONDS = 25;
 const LEASE_SECONDS = 75;
 
@@ -26,14 +28,14 @@ function pollingOwnsToken(token, env = process.env) {
 // OTP is entered in the browser and must not keep getUpdates alive.
 const pendingOperationsSql = `
   SELECT r.tenant_id,r.public_id,'browser' source_type,r.token_hash,r.provider_user_id,
-    r.state,UNIX_TIMESTAMP(r.created_at) created_seconds,NULL start_token
+    r.state,UNIX_TIMESTAMP(r.created_at) created_seconds,NULL start_token,r.account_type
   FROM auth_browser_requests r
   LEFT JOIN auth_service_operations o ON o.source_type='browser' AND o.source_public_id=r.public_id
   WHERE r.provider='tg' AND r.state IN ('pending','started') AND r.expires_at>NOW(6)
     AND r.code_challenge_id IS NULL AND (o.operation_id IS NULL OR o.status='pending')
   UNION ALL
   SELECT c.tenant_id,c.public_id,'challenge',c.token_hash,c.completed_provider_user_id,
-    c.delivery_status,UNIX_TIMESTAMP(c.created_at),NULL
+    c.delivery_status,UNIX_TIMESTAMP(c.created_at),NULL,c.account_type
   FROM auth_verification_challenges c
   LEFT JOIN auth_service_operations o ON o.source_type='challenge' AND o.source_public_id=c.public_id
   WHERE c.provider='tg' AND c.consumed_at IS NULL AND c.expires_at>NOW(6)
@@ -41,7 +43,7 @@ const pendingOperationsSql = `
       OR c.purpose='phone_verify' AND c.delivery_status='pending' AND c.token_hash IS NOT NULL AND c.code_hash IS NULL)
     AND (o.operation_id IS NULL OR o.status='pending')
   UNION ALL
-  SELECT s.tenant_id,CAST(s.id AS CHAR),'store',NULL,NULL,'store',UNIX_TIMESTAMP(s.created_at),s.connect_token
+  SELECT s.tenant_id,CAST(s.id AS CHAR),'store',NULL,NULL,'store',UNIX_TIMESTAMP(s.created_at),s.connect_token,NULL
   FROM ten_store_telegram s WHERE s.connect_token IS NOT NULL
     AND (s.connect_token_expires_at IS NULL OR s.connect_token_expires_at>NOW())`;
 
@@ -53,12 +55,36 @@ async function pendingOperations(db, token = null) {
   return rows;
 }
 
+// A cleanup-only task keeps the transport alive but never routes an incoming update.
+async function pollingDemand(db, token = null) {
+  const [rows] = await db.query(`SELECT DISTINCT TRIM(t.telegram_bot_token) bot_token
+    FROM ten_tenants t JOIN (
+      SELECT tenant_id FROM (${pendingOperationsSql}) incoming
+      UNION ALL
+      SELECT tenant_id FROM auth_browser_requests
+      WHERE provider='tg' AND account_type IN ('customer','employee') AND code_challenge_id IS NULL
+        AND ((state='confirmed' AND expires_at>NOW()) OR ((notice_attempts<5 OR notice_retry_at>NOW()) AND ${customerTerminalNoticeStateSql}))
+      UNION ALL
+      SELECT m.tenant_id FROM auth_service_messages m
+      JOIN auth_service_operations o ON o.operation_id=m.operation_id AND o.tenant_id=m.tenant_id AND o.provider=m.provider
+      LEFT JOIN auth_browser_requests r ON o.source_type='browser' AND r.public_id=o.source_public_id
+        AND r.tenant_id=o.tenant_id AND r.provider=o.provider
+      LEFT JOIN auth_verification_challenges c ON o.source_type='challenge' AND c.public_id=o.source_public_id
+        AND c.tenant_id=o.tenant_id AND c.provider=o.provider
+      WHERE m.provider='tg' AND m.message_type='service' AND m.status IN ('pending','processing')
+        AND (r.account_type IN ('customer','employee') OR c.account_type IN ('customer','employee'))
+    ) demand ON demand.tenant_id=t.id AND t.is_active=1
+    WHERE TRIM(COALESCE(t.telegram_bot_token,''))<>'' ${token ? 'AND TRIM(t.telegram_bot_token)=?' : ''}`,
+  token ? [token] : []);
+  return rows;
+}
+
 // Only a live CRM token (or an unambiguous contact bound by that token) may
 // choose a tenant. Ordinary /start, old callbacks and unsolicited contacts are ignored.
 async function resolveTelegramOperation(db, token, update) {
   const text = String(update?.message?.text || '').trim();
   const start = text.match(/^\/start(?:@\w+)?\s+([abl]_[A-Za-z0-9_-]{40})$/i)?.[1];
-  const callback = String(update?.callback_query?.data || '').match(/^auth:([br]_[A-Za-z0-9_-]{40,43})$/)?.[1];
+  const callback = String(update?.callback_query?.data || '').match(/^auth:([bcr]_[A-Za-z0-9_-]{40,43})(?::(?:yes|no))?$/)?.[1];
   const contact = update?.message?.contact;
   const storeStart = text.match(/^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{1,64})$/i)?.[1];
   if (!start && !callback && !contact && !storeStart) return null;
@@ -72,17 +98,23 @@ async function resolveTelegramOperation(db, token, update) {
   }
   if (msg.chat?.type !== 'private' || String(msg.chat.id) !== String(from.id)) return null;
   const raw = start || callback;
-  const hash = raw && !raw.startsWith('r_') ? crypto.createHash('sha256').update(raw).digest() : null;
+  const hash = raw && !['r_','c_'].includes(raw.slice(0,2)) ? crypto.createHash('sha256').update(raw).digest() : null;
   const candidates = rows.filter(row => {
     if (row.source_type === 'store') return false;
     if (row.provider_user_id && String(row.provider_user_id) !== String(from.id)) return false;
     // Queued contacts from an earlier operation cannot verify a newer request.
     if (contact) return row.provider_user_id && row.state !== 'sent'
       && Number(update.message.date) >= Number(row.created_seconds);
+    if (callback && raw.startsWith('c_'))return row.source_type==='challenge' && row.account_type==='customer'
+      && row.state==='pending' && row.public_id===raw.slice(2);
     if (callback && (row.source_type !== 'browser' || row.state !== 'started')) return false;
     return raw.startsWith('r_') ? row.public_id === raw.slice(2)
       : Buffer.isBuffer(row.token_hash) && row.token_hash.equals(hash);
   });
+  if(contact && candidates.length>1 && candidates.some(row=>row.account_type==='customer')
+    && candidates.every(row=>row.tenant_id===candidates[0].tenant_id)){
+    return {tenantId:Number(candidates[0].tenant_id),token:null,source:null};
+  }
   if (candidates.length !== 1) return null;
   return { tenantId: Number(candidates[0].tenant_id), token: raw, source: candidates[0] };
 }
@@ -126,7 +158,7 @@ function createTelegramPolling(db, handleUpdate, options = {}) {
       let offset = Number(state.next_offset), failures = 0;
       const base = `https://api.telegram.org/bot${token}`;
       while (!signal.aborted) {
-        if (!(await pendingOperations(db, token)).length) break;
+        if (!(await pollingDemand(db, token)).length) break;
         try {
           if (!worker.ready) {
             const info = await request(base, 'getWebhookInfo', {}, { signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) });
@@ -146,7 +178,9 @@ function createTelegramPolling(db, handleUpdate, options = {}) {
             if (!Number.isSafeInteger(update.update_id) || update.update_id < 0) throw new Error('TELEGRAM_UPDATE_INVALID');
             if (update.update_id < offset) continue;
             // The dispatcher acknowledges only successful handling or intentional ignore.
-            await handleUpdate(token, update);
+            worker.handlingUpdate = true;
+            try { await handleUpdate(token, update); }
+            finally { worker.handlingUpdate = false; }
             const next = update.update_id + 1;
             const [saved] = await conn.query(`UPDATE auth_telegram_polling SET next_offset=?,lease_until=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL ? SECOND)
               WHERE bot_key=? AND owner=? AND lease_until>UTC_TIMESTAMP(6)`, [next, LEASE_SECONDS, key, owner]);
@@ -191,13 +225,13 @@ function createTelegramPolling(db, handleUpdate, options = {}) {
   }
 
   async function reconcile() {
-    const pending = await pendingOperations(db);
+    const pending = await pollingDemand(db);
     const desired = new Map();
     for (const row of pending) {
       if (pollingOwnsToken(row.bot_token, env)) desired.set(botIdentity(row.bot_token), row.bot_token);
     }
     for (const [id, worker] of workers) {
-      if (!desired.has(id) || desired.get(id) !== worker.token) worker.controller.abort();
+      if ((!desired.has(id) && !worker.handlingUpdate) || (desired.has(id) && desired.get(id) !== worker.token)) worker.controller.abort();
       else if (worker.claimed && !worker.controller.signal.aborted) {
         try {
           const [renewed] = await worker.conn.query(`UPDATE auth_telegram_polling SET lease_until=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL ? SECOND)

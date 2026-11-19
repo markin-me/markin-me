@@ -798,6 +798,23 @@ if (compression) {
 }
 
 // Статика: долгий кэш для изображений, короткий/по умолчанию — для остального
+app.use(['/static', '/uploads'], (req, res, next) => {
+  let decoded;
+  try { decoded = decodeURIComponent(req.path); } catch { return res.sendStatus(400); }
+  const normalized = path.win32.normalize(decoded.replace(/\//g,'\\')).replace(/\\/g,'/');
+  const prefix = req.baseUrl.toLowerCase() === '/static' ? '/uploads/chat' : '/chat';
+  const canonical = normalized.split('/').map(part => part.replace(/[ .]+$/g,'')).join('/');
+  if (!canonical.toLowerCase().startsWith(prefix + '/') && canonical.toLowerCase() !== prefix) return next();
+  res.set('Cache-Control', 'private, no-store');
+  if (!['GET','HEAD'].includes(req.method)) return res.sendStatus(405);
+  if (decoded !== canonical) return res.sendStatus(404);
+  req.chatAttachmentPath = canonical.slice(prefix.length);
+  if (!req.cookies?.token && !req.headers.authorization) req.headers['x-chat-actor'] = 'in';
+  return requireChatPermission(req, res, error => {
+    if (error) return next(error);
+    return makeChatTempRouter.serveChatAttachment(req, res, next);
+  });
+});
 app.use('/static', express.static(path.join(__dirname, 'static'), {
   setHeaders(res, filePath) {
     const isImage = /\.(avif|gif|jpe?g|png|webp|svg|ico)$/i.test(filePath);
@@ -1564,9 +1581,7 @@ const serviceWorkerScript = `
 var SW_VERSION = ${JSON.stringify(SERVICE_WORKER_VERSION)};
 var STATIC_CACHE = 'admin-static-' + SW_VERSION;
 var PAGE_CACHE = 'admin-pages-' + SW_VERSION;
-var OWNED_CACHE_PREFIXES = ['admin-static-', 'admin-pages-'];
-var CHAT_IMAGE_CACHE_NAME = 'chat-images-v1';
-var CHAT_IMAGE_CACHE_MAX_ITEMS = 180;
+var OWNED_CACHE_PREFIXES = ['admin-static-', 'admin-pages-', 'chat-images-'];
 var PRECACHE_URLS = ${JSON.stringify(serviceWorkerPrecacheUrls)};
 var COURIER_SHELL_PATH = '/dashboard/courier-screen';
 
@@ -1606,42 +1621,6 @@ function isChatImageRequest(request, url) {
   if (!request || request.method !== 'GET' || !url) return false;
   if (url.origin !== self.location.origin) return false;
   return /^\\/(?:uploads|static\\/uploads)\\/chat\\//i.test(String(url.pathname || ''));
-}
-
-async function pruneChatImageCache(cache) {
-  try {
-    var keys = await cache.keys();
-    if (!Array.isArray(keys) || keys.length <= CHAT_IMAGE_CACHE_MAX_ITEMS) return;
-    var overflow = keys.length - CHAT_IMAGE_CACHE_MAX_ITEMS;
-    for (var i = 0; i < overflow; i += 1) {
-      await cache.delete(keys[i]);
-    }
-  } catch (err) {}
-}
-
-async function putChatImageIntoCache(cache, request, response) {
-  if (!cache || !request || !response || !response.ok) return;
-  try {
-    await cache.put(request, response.clone());
-    await pruneChatImageCache(cache);
-  } catch (err) {}
-}
-
-async function handleChatImageFetch(request) {
-  var cache = await caches.open(CHAT_IMAGE_CACHE_NAME);
-  var cached = null;
-  try {
-    cached = await cache.match(request, { ignoreVary: true });
-  } catch (err) {
-    cached = null;
-  }
-  if (cached) return cached;
-
-  var response = await fetch(request);
-  if (response && response.ok) {
-    putChatImageIntoCache(cache, request, response).catch(function () {});
-  }
-  return response;
 }
 
 async function cacheStaticAssets() {
@@ -1769,7 +1748,7 @@ self.addEventListener('fetch', function (event) {
   }
 
   if (isChatImageRequest(request, url)) {
-    event.respondWith(handleChatImageFetch(request));
+    event.respondWith(fetch(request, {cache: "no-store"}));
     return;
   }
 
@@ -2356,7 +2335,21 @@ function isCustomerChatRequest(req) {
 }
 
 function requireChatPermission(req, res, next) {
-  if (isCustomerChatRequest(req)) return next();
+  if (isCustomerChatRequest(req)) {
+    return (async () => {
+      const localTest = process.env.DB_NAME==='a1186497_test'
+        && ['localhost','127.0.0.1','::1'].includes(getRequestRoutingHost(req));
+      if (!localTest && !await isTenantHost(req)) return res.status(404).json({ok:false,error:'TENANT_NOT_FOUND'});
+      const tenantId = Number(req._resolvedTenant?.id || 1);
+      const requestedTenant = req.headers['x-tenant-id'] ?? req.query?.tenant_id;
+      if (requestedTenant!=null && Number(requestedTenant)!==tenantId) {
+        return res.status(403).json({ok:false,error:'TENANT_SCOPE_MISMATCH'});
+      }
+      req.headers['x-tenant-id'] = String(tenantId);
+      req.customerChatRequest = true;
+      return next();
+    })().catch(next);
+  }
   return authMiddleware(req, res, () => {
     const method = String(req.method || '').toUpperCase();
     const route = String(req.path || '').toLowerCase();

@@ -38,7 +38,16 @@ async function updateGuestProfile(db,tenantId,token,changes,storeId=1){
 }
 async function revokeGuest(db,tenantId,token){
   if(!/^g_[A-Za-z0-9_-]{43}$/.test(String(token)))return;
-  await db.query('UPDATE cust_guest_sessions SET revoked_at=NOW() WHERE tenant_id=? AND token_hash=? AND revoked_at IS NULL',[tenantId,guestHash(token)]);
+  const conn=await db.getConnection();
+  const hash=guestHash(token);
+  try{
+    await conn.beginTransaction();
+    await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[tenantId]);
+    await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND account_type='customer' AND guest_session_hash=? AND state IN ('pending','started','confirmed')",[tenantId,hash]);
+    await conn.query('UPDATE cust_guest_sessions SET revoked_at=NOW() WHERE tenant_id=? AND token_hash=? AND revoked_at IS NULL',[tenantId,hash]);
+    await conn.commit();
+  }catch(error){await conn.rollback();throw error;}
+  finally{conn.release();}
 }
 async function guestStoreOffset(db,tenantId,storeId){
   const [[store]]=await db.query(`SELECT s.timezone,t.timezone tenant_timezone FROM ten_stores s

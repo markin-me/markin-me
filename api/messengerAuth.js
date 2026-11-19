@@ -5,6 +5,7 @@ const { ensureEmployeeCustomer } = require('./helpers/employeeCustomer');
 const {
   ensureBrowserOperation,
   ensureChallengeOperation,
+  syncBrowserCleanupDeadline,
   markOperation,
   operationId: cleanupOperationId,
 } = require('./messengerCleanup');
@@ -121,7 +122,9 @@ async function assertAccountActive(queryable, scope) {
      FROM app_users u
      JOIN ten_tenants t ON t.id=u.tenant_id
      WHERE u.tenant_id=? AND u.id=? AND u.is_active=1 AND u.employee_status='active' AND t.is_active=1
-     LIMIT 1`,
+       AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id
+         WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)
+     LIMIT 1 FOR UPDATE`,
     [scope.tenantId, scope.accountId]
   );
   if (!rows.length) throw new MessengerAuthError('ACCOUNT_NOT_AVAILABLE', 403);
@@ -263,14 +266,81 @@ async function getAccountChannels(db, rawScope, options = {}) {
   }));
 }
 
-async function createLinkChallenge(db, rawScope, rawProvider) {
+async function assertEmployeeSessionVersion(conn,scope,authVersion){
+  const [[employee]]=await conn.query('SELECT auth_version FROM app_users WHERE tenant_id=? AND id=? FOR UPDATE',[scope.tenantId,scope.accountId]);
+  if(!employee || !Number.isFinite(Number(authVersion)) || Number(employee.auth_version)!==Number(authVersion))
+    throw new MessengerAuthError('SESSION_REVOKED',401);
+}
+
+async function createLinkChallenge(db, rawScope, rawProvider, {sessionToken,authVersion} = {}) {
+  const scope=normalizeScope(rawScope);
+  if(scope.accountType!=='customer'){
+    const conn=await db.getConnection();
+    try{
+      await conn.beginTransaction();
+      await assertEmployeeSessionVersion(conn,scope,authVersion);
+      const result=await createLinkChallengeLocked(conn,scope,rawProvider,null,true);
+      await conn.commit();return result;
+    }catch(error){await conn.rollback();throw error;}finally{conn.release();}
+  }
+  const conn=await db.getConnection();
+  try{
+    await conn.beginTransaction();
+    await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[scope.tenantId]);
+    const [[session]]=await conn.query(`SELECT id FROM cust_customer_sessions
+      WHERE tenant_id=? AND customer_id=? AND token=? AND auth_strength='strong' AND is_active=1
+        AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP()) FOR UPDATE`,
+    [scope.tenantId,scope.accountId,sessionToken || '']);
+    if(!session)throw new MessengerAuthError('STRONG_AUTH_REQUIRED',403);
+    const result=await createLinkChallengeLocked(conn,scope,rawProvider,session.id);
+    await conn.commit();
+    return result;
+  }catch(error){await conn.rollback();throw error;}finally{conn.release();}
+}
+
+// Called under the tenant lock. Browser OTP and employee operations have their own lifecycle.
+async function activateCustomerOperation(conn, {tenantId, provider, uid, browserId = '', challengeId = '', accountType='customer'}) {
+  if(accountType==='employee'){
+    const [[customer]]=await conn.query(`SELECT public_id FROM auth_browser_requests
+      WHERE tenant_id=? AND provider=? AND provider_user_id=? AND account_type='customer'
+        AND state='started' AND expires_at>NOW() AND code_challenge_id IS NULL
+      UNION ALL SELECT public_id FROM auth_verification_challenges
+      WHERE tenant_id=? AND provider=? AND completed_provider_user_id=? AND account_type='customer'
+        AND purpose='link' AND consumed_at IS NULL AND expires_at>NOW() LIMIT 1`,[tenantId,provider,uid,tenantId,provider,uid]);
+    if(customer)throw new MessengerAuthError('CONTACT_REQUEST_AMBIGUOUS',409);
+  }
+  const [browser]=await conn.query(`SELECT public_id,state FROM auth_browser_requests
+    WHERE tenant_id=? AND provider=? AND provider_user_id=? AND account_type=?
+      AND code_challenge_id IS NULL AND public_id<>?`,[tenantId,provider,uid,accountType,browserId]);
+  const [links]=await conn.query(`SELECT public_id,consumed_at,delivery_status FROM auth_verification_challenges
+    WHERE tenant_id=? AND provider=? AND completed_provider_user_id=? AND account_type=?
+      AND purpose='link' AND public_id<>?`,[tenantId,provider,uid,accountType,challengeId]);
+  const waiting=browser.filter(row=>row.state==='started').map(row=>row.public_id);
+  const linking=links.filter(row=>!row.consumed_at && row.delivery_status==='pending').map(row=>row.public_id);
+  if(waiting.length)await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE public_id IN (?) AND state='started'",[waiting]);
+  if(linking.length)await conn.query("UPDATE auth_verification_challenges SET consumed_at=NOW(),delivery_status='failed' WHERE public_id IN (?) AND consumed_at IS NULL",[linking]);
+  // A previous native keyboard may still be usable. Its contact can supply
+  // phone proof but only a button bound to this operation can finish it.
+  if(accountType==='employee')return Boolean(waiting.length || linking.length);
+  await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND provider=? AND provider_user_id=? AND account_type='employee' AND code_challenge_id IS NULL AND state='started'",[tenantId,provider,uid]);
+  await conn.query("UPDATE auth_verification_challenges SET consumed_at=NOW(),delivery_status='failed' WHERE tenant_id=? AND provider=? AND completed_provider_user_id=? AND account_type='employee' AND purpose='link' AND consumed_at IS NULL",[tenantId,provider,uid]);
+  if(browser.length || links.length)return true;
+  const [[previousEmployeeContact]]=await conn.query(`SELECT 1 FROM auth_browser_requests
+    WHERE tenant_id=? AND provider=? AND provider_user_id=? AND account_type='employee' AND code_challenge_id IS NULL
+    UNION ALL SELECT 1 FROM auth_verification_challenges
+    WHERE tenant_id=? AND provider=? AND completed_provider_user_id=? AND account_type='employee' AND purpose='link'
+    LIMIT 1`,[tenantId,provider,uid,tenantId,provider,uid]);
+  return Boolean(previousEmployeeContact);
+}
+
+async function createLinkChallengeLocked(db, rawScope, rawProvider, sessionId = null, deferredCleanup = false) {
   const scope = normalizeScope(rawScope);
   const provider = normalizeProvider(rawProvider);
   await assertAccountActive(db, scope);
   const token = randomLinkToken();
   const publicId = randomPublicId();
   const expiresAt = new Date(Date.now() + LINK_TTL_MS);
-  const [replacedChallenges] = await db.query(
+  const [replacedChallenges] = sessionId ? [[]] : await db.query(
     `SELECT public_id FROM auth_verification_challenges
      WHERE tenant_id=? AND account_type=? AND account_id=? AND purpose='link'
        AND provider=? AND consumed_at IS NULL`,
@@ -278,7 +348,7 @@ async function createLinkChallenge(db, rawScope, rawProvider) {
   );
   await db.query(
     `UPDATE auth_verification_challenges
-     SET consumed_at=NOW()
+     SET consumed_at=NOW(),delivery_status='failed'
      WHERE tenant_id=? AND account_type=? AND account_id=? AND purpose='link'
        AND provider=? AND consumed_at IS NULL`,
     [scope.tenantId, scope.accountType, scope.accountId, provider]
@@ -286,22 +356,34 @@ async function createLinkChallenge(db, rawScope, rawProvider) {
   await db.query(
     `INSERT INTO auth_verification_challenges
      (public_id, tenant_id, account_type, account_id, purpose, provider, token_hash,
-      delivery_status, expires_at, resend_after)
+      delivery_status, expires_at, resend_after ${sessionId?',customer_session_id':''})
      VALUES (?, ?, ?, ?, 'link', ?, ?, 'sent',
-       DATE_ADD(NOW(6), INTERVAL 10 MINUTE), DATE_ADD(NOW(6), INTERVAL 10 MINUTE))`,
-    [publicId, scope.tenantId, scope.accountType, scope.accountId, provider, tokenHash(token)]
+       DATE_ADD(NOW(6), INTERVAL 10 MINUTE), DATE_ADD(NOW(6), INTERVAL 10 MINUTE)${sessionId?',?':''})`,
+    [publicId, scope.tenantId, scope.accountType, scope.accountId, provider, tokenHash(token),...(sessionId?[sessionId]:[])]
   );
   await ensureChallengeOperation(db, {
     publicId, tenantId: scope.tenantId, provider, purpose: 'link', expiresInSeconds: LINK_TTL_MS / 1000,
   });
-  for (const replaced of replacedChallenges) {
+  if(scope.accountType!=='customer' && !deferredCleanup)for (const replaced of replacedChallenges) {
     await markOperation(db, cleanupOperationId('challenge', replaced.public_id), 'cancelled');
   }
   return { token, publicId, provider, expiresAt, context: scope.accountType === 'customer' ? 'PROFILE_LINK' : 'EMPLOYEE_LINK' };
 }
 
+async function adoptUnlinkedCustomerChannel(conn, channel, personId, provider, uid) {
+  if (channel.revoked_at) throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
+  const column = provider === 'tg' ? 'telegram_user_id' : 'max_user_id';
+  const [[binding]] = await conn.query('SELECT 1 FROM auth_account_messenger_links WHERE channel_id=? LIMIT 1 FOR UPDATE',[channel.id]);
+  const [[identity]] = await conn.query('SELECT 1 FROM cust_customer_auth_identities WHERE provider=? AND provider_user_id=? LIMIT 1 FOR UPDATE',[provider,uid]);
+  const [[legacy]] = await conn.query(`SELECT 1 FROM cust_customers WHERE ${column}=? LIMIT 1 FOR UPDATE`,[uid]);
+  if (binding || identity || legacy) throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+  await conn.query('UPDATE auth_messenger_channels SET person_id=? WHERE id=? AND revoked_at IS NULL',[personId,channel.id]);
+  channel.person_id = personId;
+}
+
 async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, expectedTenantId, options = {}) {
   let failedContactChallengeId=null;
+  let resultContext=null;
   const provider = normalizeProvider(rawProvider);
   const normalizedProviderUserId = String(providerUserId || '').trim();
   if(!/^[1-9][0-9]{0,19}$/.test(normalizedProviderUserId))return {matched:true,ok:false,error:'INVALID_PROVIDER_ID'};
@@ -325,20 +407,30 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
     confirmedPhone = require('./helpers').normalizePhone(contact.contact.phone_number);
     if (!/^\d{10,15}$/.test(confirmedPhone)) return { matched: true, ok: false, error: 'CONTACT_INVALID' };
   }
-  if (!normalizedProviderUserId || (!contact && !/^a_[A-Za-z0-9_-]{40}$/.test(linkToken))) return { matched: false };
+  const reference = /^c_[A-Za-z0-9_-]{43}$/.test(linkToken);
+  if (!normalizedProviderUserId || (!contact && !reference && !/^a_[A-Za-z0-9_-]{40}$/.test(linkToken))) return { matched: false };
 
   const conn = await db.getConnection();
   try {
+    const lookup = contact ? 'completed_provider_user_id' : reference ? 'public_id' : 'token_hash';
+    const lookupValue = contact ? normalizedProviderUserId : reference ? linkToken.slice(2) : tokenHash(linkToken);
+    const customerOnly = options.customerOnly || reference;
+    const [[customerOperation]] = options.employeeOnly ? [[]] : await conn.query(`SELECT id FROM auth_verification_challenges
+      WHERE tenant_id=? AND account_type='customer' AND provider=? AND purpose='link' AND ${lookup}=? LIMIT 1`,
+    [expectedTenantId,provider,lookupValue]);
     await conn.beginTransaction();
+    if(customerOperation || customerOnly)await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[expectedTenantId]);
+    const contactTarget = contact && options.contactTarget;
     const [challengeRows] = await conn.query(
-      `SELECT id, tenant_id, account_type, account_id, consumed_at, expires_at,
-              (expires_at>NOW(6)) expires_valid, completed_provider_user_id
+      `SELECT id, public_id, tenant_id, account_type, account_id, consumed_at, expires_at, delivery_status,
+              (expires_at>NOW(6)) expires_valid, completed_provider_user_id,
+              customer_contact_phone, customer_contact_fenced, customer_prompt_at, customer_session_id
        FROM auth_verification_challenges
-       WHERE provider=? AND purpose='link' ${options.customerOnly ? "AND account_type='customer'" : ''} AND ${contact
-         ? "tenant_id=? AND completed_provider_user_id=? AND delivery_status='pending' AND consumed_at IS NULL AND expires_at>NOW()"
-         : 'token_hash=?'}
-       LIMIT 2 FOR UPDATE`,
-      contact ? [provider, Number(expectedTenantId), normalizedProviderUserId] : [provider, tokenHash(linkToken)]
+       WHERE provider=? AND purpose='link' ${customerOnly ? "AND account_type='customer'" : ''}
+         ${options.employeeOnly ? "AND account_type='employee'" : ''} AND ${lookup}=?
+         ${contact ? "AND tenant_id=? AND delivery_status='pending' AND consumed_at IS NULL AND expires_at>NOW()" : ''}
+         ${contactTarget ? 'AND public_id=?' : ''} LIMIT 2 FOR UPDATE`,
+      [provider, lookupValue,...(contact ? [Number(expectedTenantId)] : []),...(contactTarget ? [contactTarget] : [])]
     );
     if (challengeRows.length !== 1) {
       await conn.rollback();
@@ -346,12 +438,13 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
       return { matched: true, ok: false, error: 'LINK_INVALID_OR_EXPIRED' };
     }
     const challenge = challengeRows[0];
-    if(contact)failedContactChallengeId=challenge.id;
+    if(contact || reference || challenge.account_type==='customer')failedContactChallengeId=challenge.id;
     if (Number(expectedTenantId) !== Number(challenge.tenant_id)) {
       await conn.rollback();
       return { matched: true, ok: false, error: 'LINK_INVALID_OR_EXPIRED' };
     }
     if (challenge.consumed_at || !Number(challenge.expires_valid)) {
+      if(challenge.account_type==='customer') { await conn.rollback();return {matched:true,ok:true,silent:true,context:'PROFILE_LINK'}; }
       await conn.rollback();
       return { matched: true, ok: false, error: 'LINK_INVALID_OR_EXPIRED' };
     }
@@ -361,9 +454,58 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
       accountId: challenge.account_id,
     });
     const context = scope.accountType === 'customer' ? 'PROFILE_LINK' : 'EMPLOYEE_LINK';
+    resultContext=context;
+    if(scope.accountType==='employee' && provider==='tg' && contact
+        && (!contactTarget || !challenge.customer_prompt_at || challenge.customer_contact_phone
+          || !Number.isFinite(Number(contact.date))
+          || Number(contact.date)<Math.floor(new Date(challenge.customer_prompt_at).getTime()/1000))){
+      await conn.rollback();return {ok:true,silent:true,context};
+    }
+    if(scope.accountType==='customer'){
+      if(!(await require('./helpers/customerAuth').settings(conn,scope.tenantId))[provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
+      if (provider==='tg' && contact
+          && (!contactTarget || !challenge.customer_prompt_at || challenge.customer_contact_phone
+            || !Number.isFinite(Number(contact.date))
+            || Number(contact.date)<Math.floor(new Date(challenge.customer_prompt_at).getTime()/1000))) {
+        await conn.rollback();
+        return {matched:true,ok:true,silent:true,context};
+      }
+      if(challenge.completed_provider_user_id && String(challenge.completed_provider_user_id)!==normalizedProviderUserId){
+        await conn.rollback();
+        return {matched:true,ok:true,silent:true,context};
+      }
+      const [[session]]=await conn.query(`SELECT id FROM cust_customer_sessions
+        WHERE tenant_id=? AND customer_id=? AND id=? AND auth_strength='strong' AND is_active=1
+          AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP()) FOR UPDATE`,
+      [scope.tenantId,scope.accountId,challenge.customer_session_id]);
+      if(!session)throw new MessengerAuthError('STRONG_AUTH_REQUIRED',403);
+      if(reference){
+        confirmedPhone=challenge.customer_contact_phone;
+        if(!confirmedPhone || challenge.delivery_status!=='pending')throw new MessengerAuthError('REQUEST_NOT_STARTED');
+      }else if(!contact){
+        const fenced=await activateCustomerOperation(conn,{tenantId:scope.tenantId,provider,uid:normalizedProviderUserId,challengeId:challenge.public_id});
+        if(challenge.delivery_status!=='pending'){
+          await conn.query('UPDATE auth_verification_challenges SET customer_contact_fenced=? WHERE id=?',[fenced?1:0,challenge.id]);
+        }else{
+          await conn.commit();
+          if(challenge.customer_prompt_at)return {matched:true,ok:true,silent:true,context};
+          return {matched:true,ok:true,context,contactRequired:!challenge.customer_contact_phone,
+            linkConfirmation:Boolean(challenge.customer_contact_phone),reference:`c_${challenge.public_id}`};
+        }
+      }
+    }
     await assertAccountActive(conn, scope);
     if (scope.accountType === 'employee') {
       if(options.employeeEnabled===false)throw new MessengerAuthError('ACCOUNT_NOT_AVAILABLE',403);
+      if(!contact && !reference){
+        await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[scope.tenantId]);
+        await activateCustomerOperation(conn,{tenantId:scope.tenantId,provider,uid:normalizedProviderUserId,challengeId:challenge.public_id,accountType:'employee'});
+      }
+      if(contact){
+        const [[employee]]=await conn.query('SELECT phone FROM app_users WHERE tenant_id=? AND id=? FOR UPDATE',[scope.tenantId,scope.accountId]);
+        if(!confirmedPhone || require('./helpers').normalizePhone(employee?.phone)!==confirmedPhone)
+          throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
+      }
       const [roles] = await conn.query(
         `SELECT ur.role_id FROM user_roles ur JOIN tenant_roles r ON r.tenant_id=ur.tenant_id AND r.id=ur.role_id
          WHERE ur.tenant_id=? AND ur.user_id=? LIMIT 1`, [scope.tenantId, scope.accountId]
@@ -371,18 +513,18 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
       if (!roles.length) throw new MessengerAuthError('ROLE_NOT_ASSIGNED', 403);
     }
     const account = await loadAccountLink(conn, scope, true);
-    if ((scope.accountType === 'customer' || scope.accountType === 'employee' || provider === 'tg' && options.requireContact) && !contact) {
+    if ((scope.accountType === 'customer' || scope.accountType === 'employee' || provider === 'tg' && options.requireContact) && !contact && !reference) {
       const [proof] = await conn.query(
         `SELECT c.id FROM auth_account_links a
          JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider=?
          JOIN auth_messenger_channels c ON c.id=m.channel_id AND c.person_id=a.person_id AND c.revoked_at IS NULL
          WHERE a.tenant_id=? AND a.account_type=? AND a.account_id=? AND c.provider_user_id=?
            AND ${scope.accountType === 'employee'
-             ? "EXISTS (SELECT 1 FROM auth_employee_customer_links ec WHERE ec.tenant_id=a.tenant_id AND ec.employee_id=a.account_id AND ec.phone_verified_at IS NOT NULL AND ec.conflict_code IS NULL)"
+             ? "m.verified_at IS NOT NULL AND c.verified_at IS NOT NULL"
              : "EXISTS (SELECT 1 FROM cust_customers cc WHERE cc.tenant_id=a.tenant_id AND cc.id=a.account_id AND cc.phone_verified_at IS NOT NULL)"}
          LIMIT 1`, [provider, scope.tenantId, scope.accountType, scope.accountId, normalizedProviderUserId]
       );
-      if (!proof.length || scope.accountType === 'employee') {
+      if (!proof.length) {
         if (challenge.completed_provider_user_id && String(challenge.completed_provider_user_id) !== normalizedProviderUserId) {
           throw new MessengerAuthError('LINK_USER_CONFLICT', 409);
         }
@@ -391,7 +533,7 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
           [normalizedProviderUserId, Number(challenge.id)]
         );
         await conn.commit();
-        return { matched: true, ok: true, contactRequired: true, context };
+        return { matched: true, ok: true, contactRequired: true, context, accountType:scope.accountType, reference:`c_${challenge.public_id}` };
       }
     }
     if (confirmedPhone && scope.accountType === 'customer') {
@@ -407,16 +549,53 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
         throw new MessengerAuthError('PHONE_OWNERSHIP_REVIEW_REQUIRED', 409);
       }
     }
+    if(contact && scope.accountType==='customer' && Number(challenge.customer_contact_fenced)===1){
+      if(challenge.customer_contact_phone && challenge.customer_contact_phone!==confirmedPhone)throw new MessengerAuthError('CONTACT_CONFLICT');
+      if(!challenge.customer_contact_phone)await conn.query('UPDATE auth_verification_challenges SET customer_contact_phone=?,customer_prompt_at=NULL WHERE id=?',[confirmedPhone,challenge.id]);
+      await conn.commit();
+      return {matched:true,ok:true,context,linkConfirmation:true,reference:`c_${challenge.public_id}`,
+        silent:Boolean(challenge.customer_contact_phone && challenge.customer_prompt_at)};
+    }
     const [channelRows] = await conn.query(
-      `SELECT id, person_id FROM auth_messenger_channels
+      `SELECT id, person_id, revoked_at FROM auth_messenger_channels
        WHERE provider=? AND provider_user_id=?
        LIMIT 1 FOR UPDATE`,
       [provider, normalizedProviderUserId]
     );
     const existingChannel = channelRows[0] || null;
+    if(existingChannel?.revoked_at)throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
 
     if (account && existingChannel && Number(account.person_id) !== Number(existingChannel.person_id)) {
-      throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT', 409);
+      await adoptUnlinkedCustomerChannel(conn,existingChannel,account.person_id,provider,normalizedProviderUserId);
+    }
+    if(scope.accountType==='customer'){
+      const column=provider==='tg'?'telegram_user_id':'max_user_id';
+      const [[legacy]]=await conn.query(`SELECT ${column} provider_user_id FROM cust_customers
+        WHERE tenant_id=? AND id=? FOR UPDATE`,[scope.tenantId,scope.accountId]);
+      const [identities]=await conn.query(`SELECT provider_user_id FROM cust_customer_auth_identities
+        WHERE tenant_id=? AND customer_id=? AND provider=? FOR UPDATE`,[scope.tenantId,scope.accountId,provider]);
+      if([legacy,...identities].some(row=>row?.provider_user_id && String(row.provider_user_id)!==normalizedProviderUserId)){
+        throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+      }
+      const [[other]]=await conn.query(`SELECT c.id FROM cust_customers c WHERE c.tenant_id=? AND c.id<>? AND
+        (c.${column}=? OR EXISTS(SELECT 1 FROM cust_customer_auth_identities i WHERE i.tenant_id=c.tenant_id
+          AND i.customer_id=c.id AND i.provider=? AND i.provider_user_id=?)
+        OR EXISTS(SELECT 1 FROM auth_account_links a JOIN auth_account_messenger_links m ON m.account_link_id=a.id
+          WHERE a.tenant_id=c.tenant_id AND a.account_type='customer' AND a.account_id=c.id AND m.channel_id=?))
+        LIMIT 1 FOR UPDATE`,
+      [scope.tenantId,scope.accountId,normalizedProviderUserId,provider,normalizedProviderUserId,existingChannel?.id || null]);
+      if(other)throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+    }
+    if(account){
+      const [prior]=await conn.query('SELECT c.provider_user_id FROM auth_account_messenger_links m JOIN auth_messenger_channels c ON c.id=m.channel_id WHERE m.account_link_id=? AND m.provider=? FOR UPDATE',[account.id,provider]);
+      if(prior.some(row=>String(row.provider_user_id)!==normalizedProviderUserId))throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+    }
+    if(scope.accountType==='employee' && existingChannel){
+      const [[other]]=await conn.query(`SELECT a.id FROM auth_account_links a
+        JOIN auth_account_messenger_links m ON m.account_link_id=a.id
+        WHERE a.tenant_id=? AND a.account_type='employee' AND a.account_id<>? AND m.channel_id=? LIMIT 1 FOR UPDATE`,
+      [scope.tenantId,scope.accountId,existingChannel.id]);
+      if(other)throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
     }
     let personId = Number(account?.person_id || existingChannel?.person_id || 0);
     if (!personId) {
@@ -461,9 +640,9 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
       [normalizedProviderUserId, Number(challenge.id)]
     );
     await conn.query(
-      `UPDATE auth_verification_challenges SET consumed_at=NOW()
+      `UPDATE auth_verification_challenges SET consumed_at=NOW(),delivery_status='failed'
        WHERE tenant_id=? AND account_type=? AND account_id=? AND provider=?
-         AND id<>? AND consumed_at IS NULL`,
+         AND id<>? AND consumed_at IS NULL ${scope.accountType==='customer' ? "AND purpose='link'" : ''}`,
       [scope.tenantId, scope.accountType, scope.accountId, provider, Number(challenge.id)]
     );
     if (scope.accountType === 'customer') {
@@ -494,7 +673,7 @@ async function completeLinkChallenge(db, rawProvider, providerUserId, rawToken, 
     try { await conn.rollback(); } catch (_) {}
     if (error instanceof MessengerAuthError) {
       if(failedContactChallengeId)await conn.query("UPDATE auth_verification_challenges SET delivery_status='failed',consumed_at=NOW() WHERE id=? AND purpose='link' AND consumed_at IS NULL",[failedContactChallengeId]);
-      return { matched: true, ok: false, error: error.code };
+      return { matched: true, ok: false, error: error.code, context:resultContext };
     }
     throw error;
   } finally {
@@ -509,21 +688,42 @@ async function unlinkAccountChannel(db, rawScope, rawProvider, options = {}) {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
+    if(scope.accountType==='employee'){
+      await assertEmployeeSessionVersion(conn,scope,options.authVersion);
+      await assertAccountActive(conn,scope);
+    }
+    if(scope.accountType==='customer'){
+      await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[scope.tenantId]);
+      const [[session]]=await conn.query(`SELECT id FROM cust_customer_sessions
+        WHERE tenant_id=? AND customer_id=? AND token=? AND auth_strength='strong' AND is_active=1
+          AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP()) FOR UPDATE`,
+      [scope.tenantId,scope.accountId,options.sessionToken || '']);
+      if(!session)throw new MessengerAuthError('STRONG_AUTH_REQUIRED',403);
+    }
     await assertAccountActive(conn, scope);
     const account = await loadAccountLink(conn, scope, true);
     if (!account) {
+      if(scope.accountType==='employee'){
+        await conn.query("UPDATE auth_verification_challenges SET consumed_at=NOW(),delivery_status='failed' WHERE tenant_id=? AND account_type='employee' AND account_id=? AND provider=? AND consumed_at IS NULL",[scope.tenantId,scope.accountId,provider]);
+        await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND account_type='employee' AND account_id=? AND provider=? AND state IN ('pending','started','confirmed')",[scope.tenantId,scope.accountId,provider]);
+      }
       await conn.commit();
       return { ok: true, linked: false };
     }
+    const [unlinkedChannels]=await conn.query('SELECT ch.provider_user_id,ch.revoked_at FROM auth_account_messenger_links m JOIN auth_messenger_channels ch ON ch.id=m.channel_id WHERE m.account_link_id=? AND m.provider=? FOR UPDATE',[account.id,provider]);
+    if(unlinkedChannels.some(channel=>channel.revoked_at))throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
     await conn.query(
       'DELETE FROM auth_account_messenger_links WHERE account_link_id=? AND provider=?',
       [Number(account.id), provider]
     );
     await conn.query(
-      `UPDATE auth_verification_challenges SET consumed_at=NOW()
+      `UPDATE auth_verification_challenges SET consumed_at=NOW()${scope.accountType==='customer'?",delivery_status=IF(purpose='link','failed',delivery_status)":",delivery_status='failed'"}
        WHERE tenant_id=? AND account_type=? AND account_id=? AND provider=? AND consumed_at IS NULL`,
       [scope.tenantId, scope.accountType, scope.accountId, provider]
     );
+    if(scope.accountType==='employee')await conn.query(`UPDATE auth_browser_requests SET state='cancelled'
+      WHERE tenant_id=? AND account_type='employee' AND (account_id=? OR provider_user_id=?) AND provider=? AND state IN ('pending','started','confirmed')`,
+    [scope.tenantId,scope.accountId,unlinkedChannels[0]?.provider_user_id || null,provider]);
     const [[remaining]] = await conn.query(
       'SELECT COUNT(*) AS count FROM auth_account_messenger_links WHERE account_link_id=?',
       [Number(account.id)]
@@ -532,6 +732,10 @@ async function unlinkAccountChannel(db, rawScope, rawProvider, options = {}) {
       await conn.query('DELETE FROM auth_account_links WHERE id=?', [Number(account.id)]);
     }
     if (scope.accountType === 'customer') {
+      await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND account_type='customer' AND (account_id=? OR provider_user_id=?) AND provider=? AND state IN ('pending','started','confirmed')",[scope.tenantId,scope.accountId,unlinkedChannels[0]?.provider_user_id || null,provider]);
+      await conn.query(`UPDATE auth_browser_requests SET result_session_id=NULL
+        WHERE tenant_id=? AND account_type='customer' AND account_id=? AND provider=? AND state='consumed' AND result_session_id IS NOT NULL`,
+      [scope.tenantId,scope.accountId,provider]);
       const column = provider === 'max' ? 'max_user_id' : 'telegram_user_id';
       await conn.query(
         `UPDATE cust_customers SET ${column}=NULL, updated_at=NOW() WHERE tenant_id=? AND id=?`,
@@ -666,25 +870,43 @@ async function issueCodeChallengeLocked(db, options) {
   const expiresAt = new Date(Date.now() + codeTtlMs);
   const resendAfter = new Date(Date.now() + RESEND_DELAY_MS);
   let result;
-  if (pending) {
-    await db.query(
-      `UPDATE auth_verification_challenges SET code_hash=?, code_salt=?,
-         expires_at=DATE_ADD(NOW(6),INTERVAL 3 MINUTE),resend_after=DATE_ADD(NOW(6),INTERVAL 60 SECOND)
-       WHERE id=? AND delivery_status='pending' AND consumed_at IS NULL`,
-      [digest, salt, pending.id]
+  const customerConnection=scope.accountType==='customer'?await db.getConnection():null;
+  try{
+    if(customerConnection){
+      await customerConnection.beginTransaction();
+      await customerConnection.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[scope.tenantId]);
+      const [[current]]=await customerConnection.query(`SELECT c.id FROM auth_account_links a
+        JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider=?
+        JOIN auth_messenger_channels c ON c.id=m.channel_id AND c.person_id=a.person_id AND c.revoked_at IS NULL
+        WHERE a.tenant_id=? AND a.account_type='customer' AND a.account_id=? AND c.id=? LIMIT 1`,
+      [channel.provider,scope.tenantId,scope.accountId,channel.channelId]);
+      if(!current)throw new MessengerAuthError('MESSENGER_NOT_LINKED',409);
+    }
+    if (pending) {
+      const [updated]=await db.query(
+        `UPDATE auth_verification_challenges SET code_hash=?, code_salt=?,
+           expires_at=DATE_ADD(NOW(6),INTERVAL 3 MINUTE),resend_after=DATE_ADD(NOW(6),INTERVAL 60 SECOND)
+         WHERE id=? AND delivery_status='pending' AND consumed_at IS NULL`,
+        [digest, salt, pending.id]
+      );
+      if(scope.accountType==='customer' && !updated.affectedRows)throw new MessengerAuthError('BOT_LOGIN_INVALID_OR_EXPIRED',409);
+      result = { insertId: pending.id };
+    } else {
+    [result] = await db.query(
+      `INSERT INTO auth_verification_challenges
+       (public_id, tenant_id, account_type, account_id, purpose, provider, channel_id,
+        code_hash, code_salt, max_attempts, delivery_status, requested_ip_hash, expires_at, resend_after, token_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?,
+          DATE_ADD(NOW(6),INTERVAL 3 MINUTE),DATE_ADD(NOW(6),INTERVAL 60 SECOND),?)`,
+      [publicId, scope.tenantId, scope.accountType, scope.accountId, purpose, channel.provider,
+        channel.channelId, digest, salt, MAX_CODE_ATTEMPTS, requestedIpHash, startToken ? tokenHash(startToken) : null]
     );
-    result = { insertId: pending.id };
-  } else {
-  [result] = await db.query(
-    `INSERT INTO auth_verification_challenges
-     (public_id, tenant_id, account_type, account_id, purpose, provider, channel_id,
-      code_hash, code_salt, max_attempts, delivery_status, requested_ip_hash, expires_at, resend_after, token_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?,
-        DATE_ADD(NOW(6),INTERVAL 3 MINUTE),DATE_ADD(NOW(6),INTERVAL 60 SECOND),?)`,
-    [publicId, scope.tenantId, scope.accountType, scope.accountId, purpose, channel.provider,
-      channel.channelId, digest, salt, MAX_CODE_ATTEMPTS, requestedIpHash, startToken ? tokenHash(startToken) : null]
-  );
-  }
+    }
+    if(customerConnection)await customerConnection.commit();
+  }catch(error){
+    if(customerConnection)await customerConnection.rollback();
+    throw error;
+  }finally{customerConnection?.release();}
   const cleanupId = await ensureChallengeOperation(db, {
     publicId, tenantId: scope.tenantId, provider: channel.provider, purpose, expiresInSeconds: CODE_TTL_MS / 1000,
   });
@@ -705,17 +927,19 @@ async function issueCodeChallengeLocked(db, options) {
   try {
     await options.deliver({
       tenantId: scope.tenantId,
+      accountType: scope.accountType,
       provider: channel.provider,
       providerUserId: channel.providerUserId,
       code,
       purpose,
       expiresInMinutes: Math.round(codeTtlMs / 60000),
       operationId: cleanupId,
-    });
-    await db.query(
-      `UPDATE auth_verification_challenges SET delivery_status='sent' WHERE id=?`,
-      [Number(result.insertId)]
+    }, scope.accountType==='customer'?db:undefined);
+    const [sent]=await db.query(
+      `UPDATE auth_verification_challenges SET delivery_status='sent' WHERE id=?
+        ${scope.accountType==='customer'?'AND consumed_at IS NULL':''}`,[Number(result.insertId)]
     );
+    if(scope.accountType==='customer' && !sent.affectedRows)throw new MessengerAuthError('MESSENGER_NOT_LINKED',409);
     await db.query(
       `UPDATE auth_verification_challenges SET consumed_at=NOW()
        WHERE tenant_id=? AND account_type=? AND account_id=? AND purpose=?
@@ -723,6 +947,7 @@ async function issueCodeChallengeLocked(db, options) {
       [scope.tenantId, scope.accountType, scope.accountId, purpose, Number(result.insertId)]
     );
   } catch (error) {
+    if(scope.accountType==='customer' && error.code==='MESSENGER_NOT_LINKED')throw error;
     console.error('AUTH_CODE_DELIVERY_FAILED', {
       provider: channel.provider, tenantId: scope.tenantId,
       reason: channel.provider === 'tg' ? telegramErrorReason(error)
@@ -788,6 +1013,7 @@ async function verifyCodeChallenge(db, options) {
   let cleanupOutcome = null;
   try {
     await conn.beginTransaction();
+    if(scope.accountType==='customer')await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[scope.tenantId]);
     const [rows] = await conn.query(
       `SELECT *,expires_at>NOW() AND (account_type<>'customer' OR purpose<>'login' OR DATE_ADD(created_at,INTERVAL 3 MINUTE)>NOW()) expires_valid FROM auth_verification_challenges
        WHERE public_id=? AND tenant_id=? AND account_type=? AND account_id=? AND purpose=?
@@ -919,13 +1145,13 @@ async function processWebhookEvent(db, rawProvider, update, handler, namespace =
   }
 }
 
-function browserBinding(req, res) {
+function browserBinding(req, res, accountType = 'employee') {
   let binding = String(req.cookies?.messenger_browser || '');
   if (!/^[A-Za-z0-9_-]{43}$/.test(binding)) {
     binding = randomPublicId();
   }
   res.cookie('messenger_browser', binding, { httpOnly: true, sameSite: 'strict', secure: req.secure,
-    path: '/api', maxAge: 10 * 60 * 1000 });
+    path: '/api', maxAge: (accountType === 'customer' ? 30 : 10) * 60 * 1000 });
   return binding;
 }
 
@@ -936,25 +1162,11 @@ async function assertBrowserSchema(db) {
 }
 
 async function findPhoneCustomer(conn,tenantId,phone) {
-  const [rows]=await conn.query('SELECT id,phone,is_active,phone_verified_at,guest_bonus_only FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 2 FOR UPDATE',[tenantId,phone]);
+  const [rows]=await conn.query('SELECT id,phone,is_active FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 2 FOR UPDATE',[tenantId,phone]);
   const matches=rows.filter(c=>require('./helpers').normalizePhone(c.phone)===phone);
   if(matches.length>1)throw new MessengerAuthError('CUSTOMER_PHONE_CONFLICT',409);
   if(matches[0] && Number(matches[0].is_active)!==1)throw new MessengerAuthError('ACCOUNT_NOT_AVAILABLE',403);
   return matches[0] || null;
-}
-
-async function assertCustomerRelink(conn,tenantId,customerId,provider,uid,phone) {
-  const [active]=await conn.query(`SELECT m.id FROM auth_account_links a
-    JOIN auth_account_messenger_links m ON m.account_link_id=a.id
-    JOIN auth_messenger_channels c ON c.id=m.channel_id AND c.revoked_at IS NULL
-    WHERE a.tenant_id=? AND a.account_type='customer' AND a.account_id=? LIMIT 1 FOR UPDATE`,[tenantId,customerId]);
-  if(active.length)throw new MessengerAuthError('CUSTOMER_CODE_REQUIRED',409);
-  // Native contact alone must not transfer an established account to a new messenger ID.
-  const [history]=await conn.query(`SELECT public_id FROM auth_browser_requests
-    WHERE tenant_id=? AND account_type='customer' AND account_id=? AND provider=?
-      AND provider_user_id=? AND contact_phone=? AND contact_verified_at IS NOT NULL
-      AND state IN ('confirmed','consumed') LIMIT 1`,[tenantId,customerId,provider,uid,phone]);
-  if(!history.length)throw new MessengerAuthError('CUSTOMER_RELINK_PROOF_REQUIRED',409);
 }
 
 async function hasBrowserAccountBinding(conn,{tenantId,accountType,provider,uid}){
@@ -970,23 +1182,27 @@ async function hasBrowserAccountBinding(conn,{tenantId,accountType,provider,uid}
   return legacy.length===1;
 }
 
-async function restoreVerifiedBrowserContact(conn, request, uid) {
-  // Reuse phone proof only through the same active account/channel binding.
-  // Guest profile linking still requires the native contact for that operation.
-  if (request.contact_verified_at || request.guest_session_hash || request.purpose === 'profile_link') return;
+async function readVerifiedBrowserPhone(conn, request, uid) {
   const customer = request.account_type === 'customer';
-  const [accounts] = await conn.query(`SELECT DISTINCT u.id,u.phone,${customer ? 'u.phone_verified_at' : 'ec.phone_verified_at'} verified_at
+  const [accounts] = await conn.query(`SELECT DISTINCT u.id,u.phone,${customer ? 'u.phone_verified_at' : 'm.verified_at'} verified_at
     FROM auth_account_links a
     JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.verified_at IS NOT NULL
     JOIN auth_messenger_channels c ON c.id=m.channel_id AND c.person_id=a.person_id AND c.revoked_at IS NULL AND c.verified_at IS NOT NULL
     JOIN ${customer ? 'cust_customers' : 'app_users'} u ON u.tenant_id=a.tenant_id AND u.id=a.account_id AND u.is_active=1
-    ${customer ? '' : "JOIN auth_employee_customer_links ec ON ec.tenant_id=u.tenant_id AND ec.employee_id=u.id AND ec.conflict_code IS NULL AND u.employee_status='active'"}
+    ${customer ? '' : "JOIN ten_tenants et ON et.id=u.tenant_id AND et.is_active=1 AND u.employee_status='active'"}
     WHERE a.tenant_id=? AND a.account_type=? AND c.provider=? AND c.provider_user_id=? LIMIT 2`,
   [request.tenant_id, request.account_type, request.provider, uid]);
   if (accounts.length !== 1 || !accounts[0].verified_at) return;
   const phone = require('./helpers').normalizePhone(accounts[0].phone);
-  if (!/^\d{10,15}$/.test(phone) || request.requested_phone && request.requested_phone !== phone
+  if (!/^\d{10,15}$/.test(phone) || request.account_type !== 'customer' && request.requested_phone && request.requested_phone !== phone
       || request.account_id && Number(request.account_id) !== Number(accounts[0].id)) return;
+  return phone;
+}
+
+async function restoreVerifiedBrowserContact(conn, request, uid) {
+  if (request.contact_verified_at || request.purpose === 'profile_link') return;
+  const phone = await readVerifiedBrowserPhone(conn, request, uid);
+  if (!phone) return;
   await conn.query('UPDATE auth_browser_requests SET contact_phone=?,contact_verified_at=NOW() WHERE public_id=?', [phone, request.public_id]);
   request.contact_phone = phone;
   request.contact_verified_at = true;
@@ -1014,36 +1230,68 @@ async function createBrowserRequest(db, { tenantId, accountType, provider, bindi
   return { requestId: publicId, token };
 }
 
-async function browserBotAction(db, { tenantId, provider, token, providerUserId, confirm = false, contact = null, employeeEnabled=true }) {
+async function browserBotAction(db, { tenantId, provider, token, providerUserId, confirm = false, contact = null, employeeEnabled=true, phoneChoice = null, contactTarget = null, employeeOnly = false }) {
   try{await assertBrowserSchema(db);}catch(error){if(error instanceof MessengerAuthError)return {ok:false,error:error.code};throw error;}
   const reference = /^r_[A-Za-z0-9_-]{43}$/.test(String(token));
   if ((!contact && !reference && !/^b_[A-Za-z0-9_-]{40}$/.test(String(token))) || !/^[1-9][0-9]{0,19}$/.test(String(providerUserId))) return { ok: false,error:'INVALID_PROVIDER_ID' };
   const conn = await db.getConnection();
-  let relinkedCustomerId=null;
   let guestRequestId=null;
-  let profileLinkResolvedAsLogin=false;
+  let customerAction=false;
+  let employeeRequestId=null;
+  let terminalCustomerRequest=null;
   try {
+    const [[customerOperation]]=employeeOnly ? [[]] : await conn.query(`SELECT public_id FROM auth_browser_requests WHERE tenant_id=? AND provider=? AND account_type='customer' AND ${contact?'provider_user_id=?':reference?'public_id=?':'token_hash=?'} LIMIT 1`,[tenantId,provider,contact?String(providerUserId):reference?token.slice(2):tokenHash(token)]);
     await conn.beginTransaction();
+    if(customerOperation || contactTarget)await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[tenantId]);
     const [rows] = await conn.query(`SELECT *, (expires_at>NOW()) AS valid FROM auth_browser_requests WHERE ${contact
       ? "provider_user_id=? AND state='started' AND expires_at>NOW()"
-      : reference ? 'public_id=?' : 'token_hash=?'} AND tenant_id=? AND provider=? LIMIT 2 FOR UPDATE`,
-      [contact ? String(providerUserId) : reference ? token.slice(2) : tokenHash(token),tenantId,provider]);
+      : reference ? 'public_id=?' : 'token_hash=?'} AND tenant_id=? AND provider=?
+      ${contactTarget ? `AND account_type='${employeeOnly?'employee':'customer'}' AND public_id=?` : employeeOnly ? "AND account_type='employee'" : ''} LIMIT 2 FOR UPDATE`,
+      [contact ? String(providerUserId) : reference ? token.slice(2) : tokenHash(token),tenantId,provider,...(contactTarget?[contactTarget]:[])]);
     if (contact && !rows.length) { await conn.rollback(); return {ok:false,matched:false}; }
     if (contact && rows.length !== 1) throw new MessengerAuthError('CONTACT_REQUEST_AMBIGUOUS');
     const r = rows[0], uid = String(providerUserId);
+    customerAction=r?.account_type==='customer';
+    if(r?.account_type==='employee')employeeRequestId=r.public_id;
     if(r?.purpose==='profile_link')guestRequestId=r.public_id;
+    if(r?.account_type==='employee'&&phoneChoice)throw new MessengerAuthError('REQUEST_NOT_STARTED');
     if(r?.account_type==='employee'&&!employeeEnabled)throw new MessengerAuthError('MESSENGER_LOGIN_DISABLED',403);
     const customerPolicy=r?.account_type==='customer'?await require('./helpers/customerAuth').settings(conn,tenantId):null;
     if(customerPolicy&&!customerPolicy[provider])throw new MessengerAuthError('CUSTOMER_CHANNEL_DISABLED',403);
+    if (customerAction && (['cancelled','consumed'].includes(r.state) || confirm && !Number(r.valid))) {
+      await conn.rollback();
+      return {ok:true,silent:true,accountType:'customer'};
+    }
+    if(customerAction && r.provider_user_id && String(r.provider_user_id)!==uid){
+      await conn.rollback();return {ok:true,silent:true,accountType:'customer'};
+    }
     if (!r || Number(r.valid)!==1 || ['cancelled','consumed'].includes(r.state)
         || (r.provider_user_id && r.provider_user_id !== uid)) throw new MessengerAuthError('REQUEST_EXPIRED');
+    if(r.account_type==='employee' && (r.purpose==='login' || r.account_id)){
+      await assertAccountActive(conn,{tenantId,accountType:'employee',accountId:Number(r.account_id)});
+      const [[employee]]=await conn.query('SELECT phone FROM app_users WHERE tenant_id=? AND id=? FOR UPDATE',[tenantId,r.account_id]);
+      if(!r.requested_phone || require('./helpers').normalizePhone(employee?.phone)!==r.requested_phone)
+        throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
+    }
     if(r.guest_session_hash){
       const [[guest]]=await conn.query('SELECT phone,revoked_at,(expires_at IS NULL OR expires_at>UTC_TIMESTAMP()) valid FROM cust_guest_sessions WHERE tenant_id=? AND token_hash=? FOR UPDATE',[tenantId,r.guest_session_hash]);
-      if(!guest || guest.revoked_at || !Number(guest.valid))throw new MessengerAuthError('GUEST_SESSION_EXPIRED',409);
+      if(!guest || guest.revoked_at || !Number(guest.valid)){
+        terminalCustomerRequest=customerAction?r.public_id:null;
+        throw new MessengerAuthError('GUEST_SESSION_EXPIRED',409);
+      }
       if(r.purpose==='profile_link')r.guest_profile_phone=require('./helpers').normalizePhone(guest.phone);
       // A guest's typed phone is not proof of identity. The verified native
       // contact below supplies the authoritative phone for account discovery.
     }
+    if ((customerAction || r.account_type==='employee') && provider==='tg' && contact
+        && (!contactTarget || !r.customer_contact_prompt_at || r.contact_verified_at
+          || !Number.isFinite(Number(contact.messageDate))
+          || r.phone_choice_at || r.customer_final_prompt_at
+          || Number(contact.messageDate)<Math.floor(new Date(r.customer_contact_prompt_at).getTime()/1000))) {
+      await conn.rollback();
+      return {ok:true,silent:true,accountType:r.account_type};
+    }
+    if ((customerAction || r.account_type==='employee') && r.state==='started' && (contact || confirm))terminalCustomerRequest=r.public_id;
     if (contact) {
       const phone = require('./helpers').normalizePhone(contact.phone);
       if (!/^\d{10,15}$/.test(phone)) throw new MessengerAuthError('CONTACT_INVALID');
@@ -1051,19 +1299,84 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
       if(r.account_type==='customer'&&r.code_challenge_id)throw new MessengerAuthError('CUSTOMER_CODE_REQUIRED',409);
       // The webhook adapter verifies native contact ownership before calling this function.
       if (r.contact_phone && r.contact_phone !== phone) throw new MessengerAuthError('CONTACT_CONFLICT');
-      await conn.query("UPDATE auth_browser_requests SET contact_phone=?,contact_name=?,contact_verified_at=NOW(),requested_phone=IF(account_type='customer',?,requested_phone) WHERE public_id=?",
-        [phone,String(contact.name || '').replace(/[\p{C}]/gu,'').trim().slice(0,100) || null,phone,r.public_id]);
-      if(r.account_type==='customer')r.requested_phone=phone;
+      await conn.query("UPDATE auth_browser_requests SET contact_phone=?,contact_name=?,contact_verified_at=NOW() WHERE public_id=?",
+        [phone,String(contact.name || '').replace(/[\p{C}]/gu,'').trim().slice(0,100) || null,r.public_id]);
       if(r.account_type==='employee'&&r.requested_phone&&r.requested_phone!==phone)throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
       r.contact_phone=phone;r.contact_name=String(contact.name || '').replace(/[\p{C}]/gu,'').trim().slice(0,100);r.contact_verified_at=true;confirm=true;
     }
+    const customerLogin = customerAction && r.purpose === 'login';
+    if(r.account_type==='employee' && !confirm && !contact && r.state==='pending'){
+      await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[tenantId]);
+      await activateCustomerOperation(conn,{tenantId,provider,uid,browserId:r.public_id,accountType:'employee'});
+    }
+    if(customerLogin && confirm && !contact && !phoneChoice){
+      await conn.rollback();return {ok:true,silent:true,accountType:'customer'};
+    }
+    if(customerAction && !confirm && r.state==='pending'){
+      const fenced=await activateCustomerOperation(conn,{tenantId,provider,uid,browserId:r.public_id});
+      if(fenced && !customerLogin){
+        await conn.query('UPDATE auth_browser_requests SET contact_confirmation_required=1 WHERE public_id=?',[r.public_id]);
+        r.contact_confirmation_required=1;
+      }
+    }
+    if (customerAction && r.state === 'confirmed') { await conn.commit(); return {ok:true,silent:true,accountType:'customer'}; }
+    if (customerLogin && r.contact_verified_at && r.requested_phone && r.requested_phone !== r.contact_phone) {
+      if (phoneChoice && (!reference || r.state !== 'started' || r.provider_user_id !== uid || !r.phone_choice_at)){
+        await conn.rollback();return {ok:true,silent:true,accountType:'customer'};
+      }
+      if (phoneChoice === 'no' && !r.phone_consent_at) {
+        await conn.query("UPDATE auth_browser_requests SET state='cancelled',customer_declined_at=NOW() WHERE public_id=?",[r.public_id]);
+        await conn.commit(); return {ok:true,cancelled:true,silent:true,accountType:'customer'};
+      }
+      if (!r.phone_consent_at) {
+        if(!phoneChoice && r.customer_choice_prompt_at){await conn.commit();return {ok:true,silent:true,accountType:'customer'};}
+        if (phoneChoice === 'yes') {
+          await conn.query('UPDATE auth_browser_requests SET phone_consent_at=NOW(),expires_at=DATE_ADD(NOW(),INTERVAL 3 MINUTE) WHERE public_id=?',[r.public_id]);
+          await syncBrowserCleanupDeadline(conn,r.public_id);
+          r.phone_consent_at=true;
+          confirm=true;
+        } else {
+          if (!r.phone_choice_at){
+            await conn.query("UPDATE auth_browser_requests SET state='started',provider_user_id=?,phone_choice_at=NOW(),expires_at=DATE_ADD(NOW(),INTERVAL 3 MINUTE) WHERE public_id=?",[uid,r.public_id]);
+            await syncBrowserCleanupDeadline(conn,r.public_id);
+          }
+          await conn.commit(); return {ok:true,phoneChoiceRequired:true,accountType:'customer',reference:`r_${r.public_id}`};
+        }
+      }
+      if (phoneChoice === 'no' || contact) {
+        await conn.commit();return {ok:true,silent:true,accountType:'customer'};
+      }
+      // The operation-bound Yes callback is the final consent to use this phone.
+
+    } else if (phoneChoice) { await conn.rollback();return {ok:true,silent:true,accountType:'customer'}; }
+    if(customerAction && !customerLogin && contact && Number(r.contact_confirmation_required)===1){
+      await conn.commit();
+      return {ok:true,consentAccepted:true,purpose:r.purpose,accountType:'customer',reference:`r_${r.public_id}`,
+        silent:Boolean(r.customer_final_prompt_at)};
+    }
     if (!confirm) {
+      if(customerAction && r.state==='started'){
+        await conn.commit();
+        return {ok:true,accountType:'customer',purpose:r.purpose,reference:`r_${r.public_id}`,
+          contactRequired:!r.contact_verified_at,silent:Boolean(r.contact_verified_at?r.customer_final_prompt_at:r.customer_contact_prompt_at)};
+      }
       if (r.state === 'confirmed') { await conn.commit(); return { ok: true, confirmed: true, purpose:r.purpose }; }
-      const known=await hasBrowserAccountBinding(conn,{tenantId,accountType:r.account_type,provider,uid});
-      if (known && provider === 'tg') await restoreVerifiedBrowserContact(conn, r, uid);
+      const known=!customerAction && await hasBrowserAccountBinding(conn,{tenantId,accountType:r.account_type,provider,uid});
+      if(known && r.account_type==='employee' && r.purpose==='password_reset' && !r.account_id){
+        const [accounts]=await conn.query(`SELECT u.id,u.phone FROM auth_account_links a
+          JOIN auth_account_messenger_links m ON m.account_link_id=a.id
+          JOIN auth_messenger_channels c ON c.id=m.channel_id AND c.person_id=a.person_id AND c.revoked_at IS NULL
+          JOIN app_users u ON u.tenant_id=a.tenant_id AND u.id=a.account_id
+          WHERE a.tenant_id=? AND a.account_type='employee' AND c.provider=? AND c.provider_user_id=? LIMIT 2 FOR UPDATE`,[tenantId,provider,uid]);
+        if(accounts.length!==1)throw new MessengerAuthError('EMPLOYEE_CONTACT_CONFLICT',403);
+        r.account_id=accounts[0].id;r.requested_phone=require('./helpers').normalizePhone(accounts[0].phone);
+        await assertAccountActive(conn,{tenantId,accountType:'employee',accountId:r.account_id});
+        await conn.query('UPDATE auth_browser_requests SET account_id=?,requested_phone=? WHERE public_id=?',[r.account_id,r.requested_phone,r.public_id]);
+      }
+      if (known) await restoreVerifiedBrowserContact(conn, r, uid);
       await conn.query("UPDATE auth_browser_requests SET state='started',provider_user_id=? WHERE public_id=?", [uid,r.public_id]);
       if(!known && r.purpose==='password_reset')throw new MessengerAuthError('EMPLOYEE_MESSENGER_NOT_LINKED');
-      await conn.commit(); return { ok: true, purpose:r.purpose,contactRequired:!r.contact_verified_at };
+      await conn.commit(); return { ok: true, purpose:r.purpose,accountType:r.account_type,reference:`r_${r.public_id}`,contactRequired:!r.contact_verified_at };
     }
     if (r.state === 'confirmed') { await conn.commit(); return { ok: true, confirmed: true, purpose:r.purpose }; }
     if (r.state !== 'started' || r.provider_user_id !== uid) throw new MessengerAuthError('REQUEST_NOT_STARTED');
@@ -1084,6 +1397,7 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
           AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)
         LIMIT 2`, [tenantId,provider,uid]);
       if(employees.length===1){
+        if(r.account_id && Number(r.account_id)!==Number(employees[0].id))throw new MessengerAuthError('EMPLOYEE_CONTACT_CONFLICT',403);
         if(require('./helpers').normalizePhone(employees[0].phone)!==r.contact_phone)throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
         accountId=Number(employees[0].id);
       }
@@ -1096,11 +1410,17 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
         const matches=candidates.filter(employee=>require('./helpers').normalizePhone(employee.phone)===r.contact_phone);
         if(matches.length!==1)throw new MessengerAuthError('EMPLOYEE_CONTACT_CONFLICT',403);
         accountId=Number(matches[0].id);
+        if(r.account_id && Number(r.account_id)!==accountId)throw new MessengerAuthError('EMPLOYEE_CONTACT_CONFLICT',403);
         const [other]=await conn.query(`SELECT a.account_id FROM auth_account_links a JOIN auth_account_messenger_links m ON m.account_link_id=a.id
           JOIN auth_messenger_channels c ON c.id=m.channel_id WHERE a.tenant_id=? AND a.account_type='employee' AND a.account_id<>? AND c.provider=? AND c.provider_user_id=?`,[tenantId,accountId,provider,uid]);
         if(other.length)throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
         const existing=await loadAccountLink(conn,{tenantId,accountType:'employee',accountId},true);
-        if(existing&&channel&&Number(existing.person_id)!==Number(channel.person_id))throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+        if(existing){
+          const [prior]=await conn.query(`SELECT c.provider_user_id FROM auth_account_messenger_links m
+            JOIN auth_messenger_channels c ON c.id=m.channel_id WHERE m.account_link_id=? AND m.provider=? FOR UPDATE`,[existing.id,provider]);
+          if(prior.some(row=>String(row.provider_user_id)!==uid))throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
+        }
+        if(existing&&channel&&Number(existing.person_id)!==Number(channel.person_id))await adoptUnlinkedCustomerChannel(conn,channel,existing.person_id,provider,uid);
         let personId=Number(existing?.person_id||channel?.person_id||0);
         if(!personId){const [person]=await conn.query('INSERT INTO auth_people (created_at,updated_at) VALUES (NOW(),NOW())');personId=Number(person.insertId);}
         if(!channel){const [createdChannel]=await conn.query('INSERT INTO auth_messenger_channels (person_id,provider,provider_user_id,verified_at) VALUES (?,?,?,NOW())',[personId,provider,uid]);channel={id:createdChannel.insertId,person_id:personId};}
@@ -1120,37 +1440,11 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
           WHERE a.tenant_id=c.tenant_id AND a.account_type='customer' AND a.account_id=c.id AND ch.provider=? AND ch.provider_user_id=?))
         LIMIT 2 FOR UPDATE`, [tenantId,uid,provider,uid,provider,uid]);
       if (customers.length > 1) throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT');
-      if(r.purpose==='profile_link' && customers.length){
-        // Existing identity, not a phone match, proves which account is being entered.
-        // Keep the guest/browser binding, but never overwrite this account's profile.
-        r.purpose='login';
-        await conn.query("UPDATE auth_browser_requests SET purpose='login' WHERE public_id=?",[r.public_id]);
-      }
       if (customers.length) accountId = Number(customers[0].id);
       else {
         if (!r.contact_verified_at || !r.contact_phone) throw new MessengerAuthError('CONTACT_REQUIRED');
         const candidate=await findPhoneCustomer(conn,tenantId,r.contact_phone);
-        if(r.purpose==='profile_link' && candidate && Number(candidate.guest_bonus_only)!==1){
-          r.purpose='login';
-          profileLinkResolvedAsLogin=true;
-          await conn.query("UPDATE auth_browser_requests SET purpose='login' WHERE public_id=?",[r.public_id]);
-        }
-        if(candidate){
-          if(Number(candidate.guest_bonus_only)===1){
-            const [[owned]]=await conn.query(`SELECT
-              EXISTS(SELECT 1 FROM order_orders WHERE tenant_id=? AND customer_id=?) orders,
-              EXISTS(SELECT 1 FROM cust_customer_addresses WHERE tenant_id=? AND customer_id=?) addresses,
-              EXISTS(SELECT 1 FROM cust_customer_sessions WHERE tenant_id=? AND customer_id=?) sessions`,
-              [tenantId,candidate.id,tenantId,candidate.id,tenantId,candidate.id]);
-            if(candidate.phone_verified_at||Number(owned.orders)||Number(owned.addresses)||Number(owned.sessions))throw new MessengerAuthError('GUEST_PROFILE_CONFLICT',409);
-          }
-          if(candidate.phone_verified_at&&!profileLinkResolvedAsLogin){await assertCustomerRelink(conn,tenantId,candidate.id,provider,uid,r.contact_phone);relinkedCustomerId=Number(candidate.id);}
-          const [priorIdentities]=await conn.query('SELECT id FROM cust_customer_auth_identities WHERE tenant_id=? AND customer_id=? LIMIT 1',[tenantId,candidate.id]);
-          const [priorLinks]=await conn.query("SELECT m.id FROM auth_account_links a JOIN auth_account_messenger_links m ON m.account_link_id=a.id WHERE a.tenant_id=? AND a.account_type='customer' AND a.account_id=? LIMIT 1",[tenantId,candidate.id]);
-          const [[legacyCandidate]]=await conn.query('SELECT telegram_user_id,max_user_id FROM cust_customers WHERE tenant_id=? AND id=?',[tenantId,candidate.id]);
-          if(priorIdentities.length || priorLinks.length || legacyCandidate.telegram_user_id || legacyCandidate.max_user_id)throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
-          accountId=Number(candidate.id);
-        }
+        if(candidate) accountId=Number(candidate.id);
         else{
           const [created] = await conn.query("INSERT INTO cust_customers (tenant_id,name,phone,phone_verified_at,is_active,registration_date) VALUES (?,?,?,NOW(),1,CURDATE())", [tenantId,r.contact_name || 'Клиент',r.contact_phone]);
           accountId = Number(created.insertId);
@@ -1159,7 +1453,8 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
       await assertAccountActive(conn,{tenantId,accountType:'customer',accountId});
       const phoneMatch=await findPhoneCustomer(conn,tenantId,r.contact_phone);
       if(phoneMatch && Number(phoneMatch.id)!==accountId)throw new MessengerAuthError('CUSTOMER_PHONE_CONFLICT',409);
-      const [legacy]=await conn.query(`SELECT ${column} provider_user_id FROM cust_customers WHERE tenant_id=? AND id=? FOR UPDATE`,[tenantId,accountId]);
+      const [legacy]=await conn.query(`SELECT ${column} provider_user_id,phone FROM cust_customers WHERE tenant_id=? AND id=? FOR UPDATE`,[tenantId,accountId]);
+      if(legacy[0]?.phone && require('./helpers').normalizePhone(legacy[0].phone)!==r.contact_phone)throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
       const [identities]=await conn.query('SELECT provider_user_id FROM cust_customer_auth_identities WHERE tenant_id=? AND customer_id=? AND provider=? FOR UPDATE',[tenantId,accountId,provider]);
       if([...legacy,...identities].some(c=>c.provider_user_id && String(c.provider_user_id)!==uid))throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT',409);
       const existing = await loadAccountLink(conn,{tenantId,accountType:'customer',accountId},true);
@@ -1167,30 +1462,32 @@ async function browserBotAction(db, { tenantId, provider, token, providerUserId,
         const [prior]=await conn.query('SELECT c.provider_user_id FROM auth_account_messenger_links m JOIN auth_messenger_channels c ON c.id=m.channel_id WHERE m.account_link_id=? AND m.provider=?',[existing.id,provider]);
         if(prior.some(c=>String(c.provider_user_id)!==uid))throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT');
       }
-      if (existing && channel && Number(existing.person_id)!==Number(channel.person_id)) throw new MessengerAuthError('ACCOUNT_PERSON_CONFLICT');
+      if (existing && channel && Number(existing.person_id)!==Number(channel.person_id)) {
+        await adoptUnlinkedCustomerChannel(conn,channel,existing.person_id,provider,uid);
+      }
       let personId = Number(channel?.person_id || existing?.person_id || 0);
       if (!personId) { const [p] = await conn.query('INSERT INTO auth_people (created_at,updated_at) VALUES (NOW(),NOW())'); personId=Number(p.insertId); }
       if (!channel) { const [c] = await conn.query('INSERT INTO auth_messenger_channels (person_id,provider,provider_user_id,verified_at) VALUES (?,?,?,NOW())',[personId,provider,uid]); channel={id:c.insertId,person_id:personId}; }
       let accountLinkId=existing?.id;
       if (!accountLinkId) { const [a] = await conn.query("INSERT INTO auth_account_links (person_id,tenant_id,account_type,account_id,linked_at) VALUES (?,?,'customer',?,NOW())",[personId,tenantId,accountId]); accountLinkId=a.insertId; }
       await conn.query('INSERT INTO auth_account_messenger_links (account_link_id,channel_id,provider,verified_at) VALUES (?,?,?,NOW()) ON DUPLICATE KEY UPDATE channel_id=VALUES(channel_id),verified_at=NOW()',[accountLinkId,channel.id,provider]);
-      await conn.query(`UPDATE cust_customers SET ${column}=?,phone=?,phone_verified_at=NOW(),guest_bonus_only=0,updated_at=NOW() WHERE tenant_id=? AND id=?`,[uid,r.contact_phone,tenantId,accountId]);
+      await conn.query(`UPDATE cust_customers SET ${column}=?,phone_verified_at=NOW(),guest_bonus_only=0,updated_at=NOW() WHERE tenant_id=? AND id=?`,[uid,tenantId,accountId]);
       await conn.query("UPDATE cust_customer_sessions SET is_active=0,revoked_at=NOW() WHERE tenant_id=? AND customer_id=? AND auth_strength='weak'",[tenantId,accountId]);
       await conn.query(`UPDATE cust_customer_sessions SET expires_at=NULL
         WHERE tenant_id=? AND customer_id=? AND auth_strength='strong' AND is_active=1 AND revoked_at IS NULL
         AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP())`,[tenantId,accountId]);
       await conn.query('INSERT INTO cust_customer_auth_identities (tenant_id,customer_id,provider,provider_user_id,linked_at) VALUES (?,?,?,?,NOW()) ON DUPLICATE KEY UPDATE provider_user_id=VALUES(provider_user_id)',[tenantId,accountId,provider,uid]);
     }
-    await conn.query("UPDATE auth_browser_requests SET state='confirmed',account_id=?,expires_at=IF(account_type='customer' AND guest_session_hash IS NULL,DATE_ADD(NOW(),INTERVAL 10 MINUTE),expires_at) WHERE public_id=?",[accountId,r.public_id]);
+    await conn.query("UPDATE auth_browser_requests SET state='confirmed',account_id=?,expires_at=IF(account_type='customer',DATE_ADD(NOW(),INTERVAL 10 MINUTE),expires_at) WHERE public_id=?",[accountId,r.public_id]);
+    if(customerAction)await syncBrowserCleanupDeadline(conn,r.public_id);
     await conn.commit();
-    if(relinkedCustomerId)console.info('CUSTOMER_MESSENGER_RELINKED',{tenantId,provider,accountRef:crypto.createHash('sha256').update(`${tenantId}:${relinkedCustomerId}`).digest('hex').slice(0,16)});
     return { ok:true,confirmed:true,purpose:r.purpose,accountType:r.account_type,context:r.purpose==='profile_link'?'PROFILE_LINK':r.account_type==='customer'?'LOGIN':undefined,guestConfirmed:r.purpose==='profile_link',autoConfirmed:Boolean(contact) };
   } catch (error) {
     await conn.rollback();
     if (error instanceof MessengerAuthError) {
       console.warn('BROWSER_BOT_ACTION_REJECTED',{tenantId,provider,reason:error.code});
-      if(guestRequestId)await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE public_id=? AND state IN ('pending','started')",[guestRequestId]);
-      return {ok:false,error:error.code,...(guestRequestId?{context:'PROFILE_LINK'}:{})};
+      if(terminalCustomerRequest || employeeRequestId)await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE public_id=? AND state IN ('pending','started')",[terminalCustomerRequest || employeeRequestId]);
+      return {ok:false,error:error.code,...(customerAction?{accountType:'customer'}:{}),...(guestRequestId?{context:'PROFILE_LINK'}:{})};
     }
     throw error;
   } finally { conn.release(); }
@@ -1246,35 +1543,46 @@ async function consumeBrowserRequest(db, { tenantId, accountType, requestId, bin
   let cleanupOutcome = null;
   try {
     await conn.beginTransaction();
+    if(accountType==='customer')await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[tenantId]);
     const [rows]=await conn.query('SELECT *, (expires_at>NOW()) AS valid FROM auth_browser_requests WHERE public_id=? AND tenant_id=? AND account_type=? FOR UPDATE',[requestId,tenantId,accountType]);
     const r=rows[0];
     if (!r || !safeEqual(r.browser_hash,tokenHash(binding || ''))) throw new MessengerAuthError('REQUEST_INVALID',403);
     if(r.guest_session_hash){
-      const guest=await require('./helpers/customerAuth').getGuest(conn,tenantId,guestToken,true,storeId);
-      if(!guest || !safeEqual(r.guest_session_hash,guest.token_hash))throw new MessengerAuthError('GUEST_SESSION_MISMATCH',403);
+      if(accountType==='customer' && r.state==='consumed' && r.result_session_id){
+        const [[session]]=await conn.query('SELECT id FROM cust_customer_sessions WHERE tenant_id=? AND customer_id=? AND id=? AND token=? AND is_active=1 AND revoked_at IS NULL',[tenantId,r.account_id,r.result_session_id,guestToken]);
+        if(!session && !safeEqual(r.guest_session_hash,tokenHash(guestToken || '')))throw new MessengerAuthError('GUEST_SESSION_MISMATCH',403);
+      }else{
+        const guest=await require('./helpers/customerAuth').getGuest(conn,tenantId,guestToken,true,storeId);
+        if(!guest || !safeEqual(r.guest_session_hash,guest.token_hash))throw new MessengerAuthError('GUEST_SESSION_MISMATCH',403);
+      }
     }
     if (cancel) {
-      await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE public_id=? AND state IN ('pending','started','confirmed')",[requestId]);
+      await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE public_id=? AND state IN ('pending','started','confirmed') AND (account_type<>'customer' OR expires_at>NOW() OR phone_choice_at IS NULL OR phone_consent_at IS NOT NULL)",[requestId]);
       await conn.commit();
       cleanupOutcome = 'cancelled';
       return {ok:true,state:'cancelled'};
     }
-    if (Number(r.valid)!==1 || ['consumed','cancelled'].includes(r.state)) {
+    if(accountType==='customer' && (r.state==='cancelled' || Number(r.valid)!==1)){
+      await conn.commit();
+      if(!Number(r.valid) && r.state!=='cancelled')cleanupOutcome='expired';
+      return {ok:true,state:r.state==='cancelled' && !r.phone_timeout_notified_at?'cancelled':'expired'};
+    }
+    if (Number(r.valid)!==1 || (r.state==='cancelled' || r.state==='consumed' && !(accountType==='customer' && r.result_session_id))) {
       if (Number(r.valid)!==1) cleanupOutcome = 'expired';
       throw new MessengerAuthError('REQUEST_EXPIRED',409);
     }
-    if(r.state!=='confirmed'){
+    if(r.state!=='confirmed' && !(accountType==='customer' && r.state==='consumed' && r.result_session_id)){
+      if(accountType==='customer'){
+        const requiredAction=r.phone_choice_at && !r.phone_consent_at ? 'choose_phone_in_bot'
+          : r.state==='started' && !r.contact_verified_at ? 'share_contact' : 'confirm_in_bot';
+        await conn.commit();
+        return {ok:true,state:'pending',required_action:requiredAction};
+      }
       let requiredAction='confirm_in_bot';
       if(r.state==='started'){
         const linked=await hasBrowserAccountBinding(conn,{tenantId,accountType,provider:r.provider,uid:r.provider_user_id});
         if(!linked){
           requiredAction = !r.contact_verified_at ? 'share_contact' : 'confirm_in_bot';
-          if(accountType==='customer' && r.contact_verified_at){
-            const candidate=await findPhoneCustomer(conn,tenantId,r.contact_phone);
-            if(candidate){
-              requiredAction='share_contact';
-            }
-          }
         }
       }
       await conn.commit();return {ok:true,state:'pending',required_action:requiredAction};
@@ -1287,7 +1595,11 @@ async function consumeBrowserRequest(db, { tenantId, accountType, requestId, bin
       [tenantId,accountType,r.account_id,r.provider,r.provider_user_id]);
     if(!currentLinks.length)throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
     const value=await onVerified(conn,r);
-    await conn.query("UPDATE auth_browser_requests SET state='consumed' WHERE public_id=?",[requestId]);
+    if(accountType==='customer' && !r.result_session_id){
+      const [[session]]=await conn.query('SELECT id FROM cust_customer_sessions WHERE tenant_id=? AND customer_id=? AND token=? AND is_active=1 AND revoked_at IS NULL',[tenantId,r.account_id,value.token]);
+      if(!session)throw new MessengerAuthError('REQUEST_INVALID',403);
+      await conn.query("UPDATE auth_browser_requests SET state='consumed',result_session_id=? WHERE public_id=?",[session.id,requestId]);
+    }else await conn.query("UPDATE auth_browser_requests SET state='consumed' WHERE public_id=?",[requestId]);
     await conn.commit();
     cleanupOutcome = 'success';
     return {ok:true,state:'confirmed',...value};
@@ -1331,7 +1643,7 @@ async function verifyCustomerBrowserCode(db,options){
 async function verifyEmployeeBrowserCode(db,options){
   return verifyBrowserCode(db,{...options,accountType:'employee',validateAccount:async(conn,current,challenge)=>{
     await require('./messengerDelivery').getTenantBotConfig(conn,options.tenantId,current.provider);
-    const [links]=await conn.query(`SELECT u.id FROM app_users u
+    const [links]=await conn.query(`SELECT u.id,u.phone FROM app_users u
       JOIN ten_tenants t ON t.id=u.tenant_id AND t.is_active=1
       JOIN auth_account_links a ON a.tenant_id=u.tenant_id AND a.account_type='employee' AND a.account_id=u.id
       JOIN auth_account_messenger_links m ON m.account_link_id=a.id AND m.provider=? AND m.channel_id=?
@@ -1339,6 +1651,7 @@ async function verifyEmployeeBrowserCode(db,options){
       WHERE u.tenant_id=? AND u.id=? AND u.is_active=1 AND u.employee_status='active'
         AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)
       LIMIT 1`,[current.provider,challenge.channel_id,options.tenantId,current.account_id]);
+    if(links.length && require('./helpers').normalizePhone(links[0].phone)!==current.requested_phone)throw new MessengerAuthError('CONTACT_PHONE_MISMATCH',409);
     if(!links.length)throw new MessengerAuthError('MESSENGER_NOT_LINKED',403);
   }});
 }

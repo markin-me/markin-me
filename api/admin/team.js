@@ -279,6 +279,20 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
     return Number(req.user && req.user.tenantId || 0);
   }
 
+  async function cancelEmployeeAuthOperations(conn,scopeTenantId,userId,oldPhone){
+        await conn.query(`UPDATE auth_browser_requests r SET r.state='cancelled'
+          WHERE r.tenant_id=? AND r.account_type='employee' AND r.state IN ('pending','started','confirmed')
+            AND (r.account_id=? OR r.requested_phone=? OR EXISTS (
+              SELECT 1 FROM auth_account_links a
+              JOIN auth_account_messenger_links m ON m.account_link_id=a.id
+              JOIN auth_messenger_channels c ON c.id=m.channel_id
+              WHERE a.tenant_id=r.tenant_id AND a.account_type='employee' AND a.account_id=?
+                AND c.provider=r.provider AND c.provider_user_id=r.provider_user_id))`,
+        [scopeTenantId, userId, oldPhone, userId]);
+        await conn.query(`UPDATE auth_verification_challenges SET consumed_at=NOW(),delivery_status='failed'
+          WHERE tenant_id=? AND account_type='employee' AND account_id=? AND consumed_at IS NULL`, [scopeTenantId, userId]);
+  }
+
   function uniqueIds(value) {
     return Array.from(new Set((Array.isArray(value) ? value : [])
       .map((item) => Number(item))
@@ -769,6 +783,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
             AND LOWER(COALESCE(s.code,'')) NOT IN ('canceled','cancelled') LIMIT 1 FOR UPDATE`, [currentTenantId, userId]);
         if (orders.length) { await conn.rollback(); return teamError(res, 409, 'EMPLOYEE_HAS_OPEN_ORDERS'); }
       }
+      if(nextStatus!=='active')await cancelEmployeeAuthOperations(conn,currentTenantId,userId,null);
       await conn.query('UPDATE app_users SET employee_status=?, is_active=?, auth_version=auth_version+1 WHERE tenant_id=? AND id=?', [nextStatus, nextStatus === 'active' ? 1 : 0, currentTenantId, userId]);
       const users = await loadUsers(conn, currentTenantId, userId);
       await conn.commit();
@@ -962,12 +977,20 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
         await conn.rollback();
         return teamError(res, 409, 'LOGIN_EXISTS');
       }
+      const phoneChanged = helpers.normalizePhone(existing.phone) !== helpers.normalizePhone(profile.phone);
       await conn.query(
         `UPDATE app_users SET name=?, last_name=?, first_name=?, patronymic=?, phone=?, login=?, login_local=?, comment=?, is_active=?,
          employee_photo=IF(?, ?, employee_photo), photo_revision=IF(?, ?, photo_revision)
          WHERE tenant_id=? AND id=?`,
         [profile.name, profile.last_name, profile.first_name, profile.patronymic, profile.phone, login || null, local, comment, isActive, photoProvided, photo, photoProvided, photo ? crypto.randomBytes(16).toString('hex') : null, currentTenantId, userId]
       );
+      if (phoneChanged) {
+        await conn.query('UPDATE app_users SET auth_version=auth_version+1 WHERE tenant_id=? AND id=?', [currentTenantId, userId]);
+        await cancelEmployeeAuthOperations(conn,currentTenantId,userId,helpers.normalizePhone(existing.phone));
+        await conn.query(`DELETE m FROM auth_account_messenger_links m
+          JOIN auth_account_links a ON a.id=m.account_link_id
+          WHERE a.tenant_id=? AND a.account_type='employee' AND a.account_id=?`, [currentTenantId, userId]);
+      }
       if (passwordProvided) {
         const passwordHash = await bcrypt.hash(password, 10);
         await conn.query('UPDATE app_users SET password_hash=?, must_change_password=0 WHERE tenant_id=? AND id=?', [passwordHash, currentTenantId, userId]);
@@ -978,6 +1001,7 @@ function makeAdminTeamRouter({ db, helpers, requirePermission }) {
       }
       await ensureEmployeeCustomer(conn, currentTenantId, userId);
       await conn.commit();
+      if (phoneChanged) revokeUserStreams(currentTenantId, userId);
       const users = await loadUsers(db, currentTenantId, userId);
       return res.json({ ok: true, user: users[0] });
     } catch (error) {

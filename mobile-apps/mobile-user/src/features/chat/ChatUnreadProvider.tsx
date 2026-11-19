@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { PropsWithChildren } from 'react';
 
-import { fetchImportantMessages, fetchImportantMessagesRevision, fetchUnread, openUnreadStream, waitUnread } from './api';
+import { fetchImportantMessages, fetchImportantMessagesRevision, openUnreadStream } from './api';
 import {
   countUnreadImportantMessages,
   markImportantMessageRead,
@@ -11,7 +11,7 @@ import {
   saveChatUnreadCache,
   saveImportantMessagesCache,
 } from './storage';
-import type { ImportantMessage } from './types';
+import type { ChatUnreadSnapshot, ImportantMessage } from './types';
 import { subscribeCustomerPassport } from '../../shared/api';
 
 type ChatUnreadContextValue = {
@@ -44,6 +44,7 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
   const [promoReloadKey, setPromoReloadKey] = useState(0);
   const [promoCacheRevision, setPromoCacheRevision] = useState(0);
   const stoppedRef = useRef(false);
+  const passportRevision = useRef(0);
   const totalUnread = Math.max(0, chatUnread) + Math.max(0, promoUnread);
 
   useEffect(() => {
@@ -55,9 +56,10 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     let cancelled = false;
-    let source: ReturnType<typeof openUnreadStream> | null = null;
+    const identity = passportRevision.current;
     async function loop() {
       const profile = await resolveUserChatProfile().catch(() => null);
+      if (cancelled || !profile) return;
       const params = {
         actor: 'in' as const,
         clientId: profile?.clientId || '',
@@ -74,73 +76,41 @@ export function ChatUnreadProvider({ children }: PropsWithChildren) {
         setChatUnread(0);
         setRevision(0);
       }
-      const initial = await fetchUnread(params).catch(() => null);
-      if (cancelled) return;
-      if (initial) {
-        const nextTotal = Number(initial.total ?? initial.unread_total ?? 0);
-        const nextRevision = Number(initial.revision || 0);
-        setChatUnread(nextTotal);
-        setRevision(nextRevision);
-        saveChatUnreadCache(params.clientId, nextTotal, nextRevision);
+      const source = await openUnreadStream(params);
+      if (cancelled) {
+        source.close();
+        return;
       }
-
-      let currentTotal = Number(initial?.total ?? initial?.unread_total ?? cachedUnread?.total ?? 0);
-      let currentRevision = Number(initial?.revision ?? cachedUnread?.revision ?? 0);
-      let fallbackStarted = false;
-
-      const runWaitFallback = async () => {
-        if (fallbackStarted) return;
-        fallbackStarted = true;
-        while (!cancelled) {
-          const next = await waitUnread({
-            ...params,
-            total: currentTotal,
-            revision: currentRevision,
-            timeoutMs: 20000,
-          }).catch(() => null);
-          if (cancelled) return;
-          if (next) {
-            currentTotal = Number(next.total ?? next.unread_total ?? currentTotal);
-            currentRevision = Number(next.revision ?? currentRevision);
-            setChatUnread(currentTotal);
-            setRevision(currentRevision);
-            saveChatUnreadCache(params.clientId, currentTotal, currentRevision);
-          } else {
-            await new Promise((resolve) => setTimeout(resolve, 2500));
-          }
-        }
-      };
-
-      source = openUnreadStream(params);
-      source.addEventListener('unread', (event) => {
-        if (cancelled || !event.data) return;
-        try {
-          const next = JSON.parse(event.data);
-          currentTotal = Number(next.total ?? next.unread_total ?? currentTotal);
-          currentRevision = Number(next.revision ?? currentRevision);
-          setChatUnread(currentTotal);
-          setRevision(currentRevision);
-          saveChatUnreadCache(params.clientId, currentTotal, currentRevision);
-        } catch {}
+      stream = source;
+      source.addEventListener('unread', event => {
+        if (cancelled || identity !== passportRevision.current || !event.data) return;
+        const snapshot = JSON.parse(event.data) as ChatUnreadSnapshot;
+        const total = Number(snapshot.total ?? snapshot.unread_total ?? 0);
+        const revision = Number(snapshot.revision || 0);
+        setChatUnread(total);
+        setRevision(revision);
+        saveChatUnreadCache(params.clientId, total, revision);
       });
-      source.addEventListener('error', () => {
-        source?.close();
-        void runWaitFallback();
+      source.addEventListener('error', event => {
+        if (cancelled || !('xhrStatus' in event) || ![401, 403].includes(event.xhrStatus)) return;
+        source.close();
+        setChatUnread(0);
+        setRevision(0);
       });
-
-      while (!cancelled) {
-        await new Promise((resolve) => setTimeout(resolve, 60000));
-      }
-      source?.close();
     }
-    void loop();
+    void loop().catch(error => {
+      if (!cancelled) console.warn('CHAT_UNREAD_STREAM_UNAVAILABLE', error);
+    });
     return () => {
       cancelled = true;
-      source?.close();
+      stream?.close();
     };
   }, [reloadKey]);
 
   useEffect(() => subscribeCustomerPassport(() => {
+    passportRevision.current += 1;
+    setChatUnread(0);
+    setRevision(0);
     setReloadKey((key) => key + 1);
   }), []);
 

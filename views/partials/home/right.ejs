@@ -415,14 +415,14 @@
             <div class="field-hint">Если выключить, мобильное приложение не будет подписывать клиента на push-уведомления чата.</div>
           </div>
           <div class="settings-site-field">
-            <label class="field-label">ВРЕМЯ ЖИЗНИ ВСЕХ ЧАТОВ (ДНЕЙ)</label>
+            <label class="field-label">Время жизни клиентских чатов (дней)</label>
             <input class="control" type="number" min="0" max="365" step="1" id="settingsChatThreadTtlDaysInput" data-tenant-input="chat_thread_ttl_days" placeholder="0" />
-            <div class="field-hint">0 или пусто: хранить всегда. Значение 1-365: удалять историю всех чатов без активности старше указанного срока.</div>
+            <div class="field-hint">Чаты гостей и авторизованных клиентов будут удаляться автоматически после указанного количества дней без активности. 0 или пустое поле — бессрочное хранение.</div>
           </div>
           <div class="settings-site-field">
-            <label class="field-label">ВРЕМЯ ЖИЗНИ ГОСТЕВЫХ ЧАТОВ (ДНЕЙ)</label>
-            <input class="control" type="number" min="1" max="365" step="1" id="settingsChatGuestThreadTtlDaysInput" data-tenant-input="chat_guest_thread_ttl_days" placeholder="7" />
-            <div class="field-hint">Чаты гостей будут удаляться автоматически после указанного количества дней без активности.</div>
+            <label class="field-label">Время жизни анонимных чатов (дней)</label>
+            <input class="control" type="number" min="0" max="365" step="1" id="settingsChatGuestThreadTtlDaysInput" data-tenant-input="chat_guest_thread_ttl_days" placeholder="0" />
+            <div class="field-hint">Чаты анонимных посетителей будут удаляться автоматически после указанного количества дней без активности. 0 или пустое поле — бессрочное хранение.</div>
           </div>
         </div>
         <div class="panel-footer">
@@ -591,13 +591,6 @@
       </div>
 <div class="info-card settings-right-panel settings-right-panel-fixed-footer hidden" id="settingsTelegramAppPanel">
         <div class="settings-site-form settings-panel-scroll">
-          <fieldset class="settings-site-field" id="customerAuthSettings" disabled>
-            <legend class="field-label">АВТОРИЗАЦИЯ ПОКУПАТЕЛЕЙ</legend>
-            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="tg" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Telegram для покупателей</span></label>
-            <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="max" /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">MAX для покупателей</span></label>
-            <button class="btn btn-primary" type="button" id="customerAuthSave">Сохранить авторизацию</button>
-          </fieldset>
-          <div class="muted" role="status" id="customerAuthNotice"></div>
           <div class="settings-auth-top">
             <div class="settings-auth-photo-column">
               <div class="settings-site-field">
@@ -608,12 +601,16 @@
             </div>
             <div class="settings-auth-meta-column">
               <div class="settings-site-field">
-                <label class="field-label">ВХОД ЧЕРЕЗ TELEGRAM</label>
+                <label class="field-label">АВТОРИЗАЦИЯ</label>
+                <div style="display:grid;gap:8px">
                 <label class="switch">
                   <input class="switch-input" type="checkbox" id="tenantTelegramLoginEnabled" />
                   <span class="switch-ui" aria-hidden="true"></span>
-                  <span class="switch-text">Включено</span>
+                  <span class="switch-text">Сотрудников</span>
                 </label>
+                <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="tg" disabled /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Клиентов</span></label>
+                </div>
+                <div class="muted" role="status" data-customer-auth-notice="tg"></div>
               </div>
               <div class="settings-site-field">
                 <label class="field-label">ИМЯ БОТА</label>
@@ -676,12 +673,16 @@
             </div>
             <div class="settings-auth-meta-column">
               <div class="settings-site-field">
-                <label class="field-label">ВХОД ЧЕРЕЗ MAX</label>
+                <label class="field-label">АВТОРИЗАЦИЯ</label>
+                <div style="display:grid;gap:8px">
                 <label class="switch">
                   <input class="switch-input" type="checkbox" id="tenantMaxLoginEnabled" />
                   <span class="switch-ui" aria-hidden="true"></span>
-                  <span class="switch-text">Включено</span>
+                  <span class="switch-text">Сотрудников</span>
                 </label>
+                <label class="switch"><input class="switch-input" type="checkbox" data-customer-auth="max" disabled /><span class="switch-ui" aria-hidden="true"></span><span class="switch-text">Клиентов</span></label>
+                </div>
+                <div class="muted" role="status" data-customer-auth-notice="max"></div>
               </div>
               <div class="settings-site-field">
                 <label class="field-label">ИМЯ БОТА MAX</label>

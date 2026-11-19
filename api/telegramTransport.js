@@ -9,7 +9,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 const FALLBACK_CODES = new Set([
-  'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH',
+  'ENOTFOUND', 'ENOENT', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH',
   'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT',
 ]);
 const SAFE_CODES = new Set([
@@ -271,7 +271,18 @@ function createTelegramTransport(dependencies = {}) {
   return { fetchTelegram, close, agents };
 }
 
-const defaultTransport = createTelegramTransport();
+const proxyUrl = String(process.env.TELEGRAM_HTTPS_PROXY || '').trim();
+let proxyOptions;
+if (proxyUrl) {
+  const parsed = new URL(proxyUrl);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('TELEGRAM_PROXY_PROTOCOL_INVALID');
+  const { HttpsProxyAgent } = require('https-proxy-agent');
+  proxyOptions = { createAgent: options => {
+    const { family, ...agentOptions } = options;
+    return new HttpsProxyAgent(parsed, agentOptions);
+  } };
+}
+const defaultTransport = createTelegramTransport(proxyOptions);
 
 module.exports = {
   fetchTelegram: defaultTransport.fetchTelegram,

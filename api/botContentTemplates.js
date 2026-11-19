@@ -146,7 +146,32 @@ async function resetTemplate(db, tenantId, storeId, providerValue, key) {
   );
 }
 
+function employeeAuthResponse(result, provider) {
+  if (result.accountType !== 'employee' && result.context !== 'EMPLOYEE_LINK' && result.scope?.accountType !== 'employee') return null;
+  if (result.silent || result.confirmed || result.autoConfirmed || result.matched === false) return {};
+  const name = provider === 'tg' ? 'Telegram' : 'MAX';
+  const link = result.context === 'EMPLOYEE_LINK';
+  if (result.error === 'CONTACT_PHONE_MISMATCH') return {
+    text: `Номер телефона в ${name} отличается от номера, указанного в вашем профиле. ${link ? 'Привязка' : 'Авторизация'} невозможна.`
+  };
+  if (!result.ok) {
+    if (['REQUEST_EXPIRED','LINK_INVALID_OR_EXPIRED','BOT_LOGIN_INVALID_OR_EXPIRED'].includes(result.error)) return {};
+    if (['ACCOUNT_PERSON_CONFLICT','LINK_USER_CONFLICT','EMPLOYEE_CONTACT_CONFLICT','MESSENGER_NOT_LINKED'].includes(result.error)) return {
+      text: 'Обнаружена другая подтверждённая привязка. Доступ не выдан; требуется безопасное разрешение конфликта администратором.'
+    };
+    return {};
+  }
+  if (link && !result.contactRequired) return { text: `${name} успешно привязан.` };
+  return {
+    text: link ? 'Для привязки мессенджера нажмите кнопку „Привязать“.' : 'Для авторизации нажмите кнопку „Авторизоваться“.',
+    button: link ? 'Привязать' : 'Авторизоваться',
+    contact: Boolean(result.contactRequired), reference: result.reference,
+    phase: result.contactRequired ? 'contact' : 'final'
+  };
+}
+
 module.exports = {
+  employeeAuthResponse,
   createServiceTextRenderer,
   TEMPLATE_DEFINITIONS,
   listTemplates,

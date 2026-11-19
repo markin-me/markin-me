@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, Image, PanResponder, Pressable, StyleSheet, Text as NativeText, type GestureResponderEvent, type StyleProp, View, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { getChatImageSource } from '../../../features/chat/api';
 
 import {
   formatChatTime,
@@ -43,6 +44,7 @@ type ChatMessageBubbleProps = {
   contextClone?: boolean;
   contextHidden?: boolean;
   message: ChatMessage;
+  mediaHeaders?: Record<string, string>;
   onLongPress: (message: ChatMessage, layout?: ChatMessageBubbleLayout) => void;
   onDoublePress?: (message: ChatMessage) => void;
   onOpenImage: (uri: string) => void;
@@ -65,6 +67,7 @@ const CHAT_LONG_PRESS_DELAY_MS = 280;
 const CHAT_ATTACHMENT_OPEN_DELAY_MS = 330;
 
 function ChatMessageBubbleComponent({
+  mediaHeaders,
   actor,
   contextClone,
   contextHidden,
@@ -450,7 +453,7 @@ function ChatMessageBubbleComponent({
                 onPressIn={measureBubble}
                 style={styles.attachment}
               >
-                <Image source={{ uri: imageUri }} style={styles.image} />
+                <Image source={getChatImageSource(imageUri, mediaHeaders)} style={styles.image} />
               </Pressable>
             ) : null}
 
@@ -526,6 +529,7 @@ function areChatMessageBubblePropsEqual(prev: ChatMessageBubbleProps, next: Chat
     && prev.contextClone === next.contextClone
     && prev.contextHidden === next.contextHidden
     && prev.message === next.message
+    && prev.mediaHeaders === next.mediaHeaders
     && prev.onDoublePress === next.onDoublePress
     && prev.onLongPress === next.onLongPress
     && prev.onOpenImage === next.onOpenImage

@@ -166,7 +166,6 @@
   const CHAT_THREAD_SSE_PULL_DEBOUNCE_MS = 100;
   const CHAT_UNREAD_WAIT_TIMEOUT_MS = 25000;
   const CHAT_UNREAD_WAIT_RETRY_MS = 1400;
-  const CHAT_SSE_ENABLED = typeof window.EventSource === "function";
   const CHAT_THREAD_EAGER_IMAGE_COUNT = 4;
   const CHAT_THREAD_PAGE_SIZE = 60;
   const CHAT_THREAD_PAGE_MAX_SIZE = 200;
@@ -209,6 +208,7 @@
   const IMAGE_OPTIMIZE_MIN_QUALITY = 0.58;
   const IMAGE_OPTIMIZE_SCALE_STEP = 0.84;
   const isAdminClientChatMode = !!(document.body && document.body.classList.contains("page-clients"));
+  const CHAT_SSE_ENABLED = !isAdminClientChatMode || typeof window.EventSource === "function";
   function getChatActor() {
     if (isAdminClientChatMode) return "out";
     return "in";
@@ -401,7 +401,6 @@
   let sharedMutationQueue = Promise.resolve();
   let sharedMutationPendingCount = 0;
   let sharedThreadMutationVersion = 0;
-  let profileMergeInFlight = false;
   let chatBodyScrollLockState = null;
   let chatBodyScrollLockY = 0;
   let feedScrollRaf = 0;
@@ -2606,9 +2605,11 @@
   const tenantId = getTenantId();
   const customerTokenKey = "shop_customer_token_t" + tenantId;
   const customerCacheKey = "shop_customer_cache_t" + tenantId;
-  const guestChatClientKey = "shop_company_chat_guest_id_t" + tenantId;
-  const customerChatClientIdByTokenPrefix = "shop_company_chat_customer_id_for_token_t" + tenantId + "_";
-  const customerChatClientIdByIdentityPrefix = "shop_company_chat_customer_id_for_identity_t" + tenantId + "_";
+  let chatIdentity = null;
+  const privateChatImages = new Map();
+  let chatIdentityRequest = null;
+  let chatIdentityGeneration = 0;
+
   const webPushVapidStorageKey = "shop_company_chat_push_vapid_t" + tenantId;
   const chatNotificationsStorageKey = "shop_company_chat_notifications_enabled_t" + tenantId;
   const webPushPermissionPromptStorageKey = "shop_push_permission_prompted_t" + tenantId;
@@ -3459,15 +3460,6 @@
     }
   }
 
-  function hashToStableInt(value) {
-    const str = String(value || "");
-    let hash = 0;
-    for (let i = 0; i < str.length; i += 1) {
-      hash = ((hash * 31) + str.charCodeAt(i)) >>> 0;
-    }
-    return hash;
-  }
-
   function normalizePhoneIdentity(value) {
     const digits = String(value || "").replace(/\D+/g, "");
     return digits.length >= 10 ? digits : "";
@@ -3485,48 +3477,6 @@
     const normalized = normalizeNameIdentity(value);
     if (!normalized) return false;
     return /^\u0433\u043e\u0441\u0442\u044c\b/.test(normalized);
-  }
-
-  function getStableCustomerChatClientId(token, directIdCandidate, customerCandidate) {
-    const tokenHash = hashToStableInt(token);
-    const mappingKey = customerChatClientIdByTokenPrefix + String(tokenHash);
-    const directId = Number(directIdCandidate || 0);
-    const customer = customerCandidate && typeof customerCandidate === "object"
-      ? customerCandidate
-      : null;
-    const identityPhone = normalizePhoneIdentity(customer && customer.phone);
-    const identityKey = identityPhone
-      ? (customerChatClientIdByIdentityPrefix + String(hashToStableInt(identityPhone)))
-      : "";
-    let storedToken = 0;
-    let storedIdentity = 0;
-
-    try {
-      storedToken = Number(localStorage.getItem(mappingKey) || 0);
-    } catch {}
-    if (identityKey) {
-      try {
-        storedIdentity = Number(localStorage.getItem(identityKey) || 0);
-      } catch {}
-    }
-
-    let resolved = 0;
-    if (Number.isFinite(directId) && directId > 0) {
-      resolved = Math.trunc(directId);
-    } else if (Number.isFinite(storedIdentity) && storedIdentity > 0) {
-      resolved = Math.trunc(storedIdentity);
-    } else if (Number.isFinite(storedToken) && storedToken > 0) {
-      resolved = Math.trunc(storedToken);
-    } else {
-      const identityHash = identityPhone ? hashToStableInt(identityPhone) : tokenHash;
-      resolved = Math.trunc(800000000 + (identityHash % 99999999));
-    }
-
-    try { localStorage.setItem(mappingKey, String(resolved)); } catch {}
-    if (identityKey) {
-      try { localStorage.setItem(identityKey, String(resolved)); } catch {}
-    }
-    return resolved;
   }
 
   function stableSerialize(value) {
@@ -3606,18 +3556,73 @@
     return out;
   }
 
-  function ensureGuestChatClientId(forceNew) {
-    const rotate = forceNew === true;
-    let storedGuestId = rotate ? 0 : Number(localStorage.getItem(guestChatClientKey) || 0);
-    if (!Number.isFinite(storedGuestId) || storedGuestId <= 0) {
-      storedGuestId = 900000000 + Math.floor(Math.random() * 99999999);
-    }
-    try { localStorage.setItem(guestChatClientKey, String(storedGuestId)); } catch {}
-    return Math.trunc(storedGuestId);
+  function syncServerChatIdentity() {
+    if (isAdminClientChatMode) return;
+    const token = getCustomerToken();
+    if (chatIdentity?.token === token || chatIdentityRequest?.token === token) return;
+    const generation = ++chatIdentityGeneration;
+    const previous = chatIdentity;
+    const drain = previous?.isVisitor ? sharedMutationQueue : Promise.resolve();
+    const request = async () => {
+      await drain;
+      if (generation !== chatIdentityGeneration || token !== getCustomerToken()) return;
+      const result = await chatApiJson(CHAT_TEMP_API_BASE + "/identity", {
+        method: "POST", customerToken: token, signal: AbortSignal.timeout(15000),
+      });
+      if (generation !== chatIdentityGeneration || token !== getCustomerToken()) return;
+      const mergedFrom = Number(result.data.merged_from || 0);
+      if (mergedFrom) {
+        const draft = Number(chatClientProfile?.id) === mergedFrom ? input?.value : undefined;
+        transferPersistedComposerDraft(mergedFrom, result.data.client_id, draft);
+      }
+      chatIdentity = { id: Number(result.data.client_id), isVisitor: result.data.is_visitor, token };
+      const open = isSupportChatOpen();
+      if (!refreshChatClientProfileIfNeeded({ pull: open })) {
+        stopSharedThreadSseConnection();
+        stopUnreadSseConnection();
+        if (open) startSharedThreadPolling();
+        else startUnreadPolling();
+      }
+      flushPendingPushChatOpenRequest();
+    };
+    // Bootstrap is serialized across tabs before a new HttpOnly cookie is issued.
+    const pending = lockChatIdentityBootstrap(request);
+    chatIdentityRequest = { token, pending };
+    void pending.catch(error => {
+      if (error.name !== "AbortError") console.warn("CHAT_IDENTITY_UNAVAILABLE", error.message);
+    }).finally(() => {
+      if (chatIdentityRequest?.pending === pending) chatIdentityRequest = null;
+    });
   }
 
-  function resolveChatClientProfile(options) {
-    const opts = options || {};
+  async function lockChatIdentityBootstrap(request) {
+    const name = "shop-chat-identity:" + tenantId;
+    if (navigator.locks) return navigator.locks.request(name, request);
+    const draftDb = await openAttachmentDraftDb();
+    if (!draftDb) throw new Error("CHAT_IDENTITY_STORAGE_UNAVAILABLE");
+    return new Promise((resolve,reject) => {
+      const transaction = draftDb.transaction(CHAT_ATTACHMENT_DRAFT_STORE,"readwrite");
+      const store = transaction.objectStore(CHAT_ATTACHMENT_DRAFT_STORE);
+      let running = false;
+      let finished = false;
+      let failure;
+      transaction.oncomplete = () => failure ? reject(failure) : resolve();
+      transaction.onabort = () => reject(transaction.error || new Error("CHAT_IDENTITY_LOCK_ABORTED"));
+      const keepAlive = () => {
+        const lock = store.get(name);
+        lock.onsuccess = () => {
+          if (!running) {
+            running = true;
+            void request().catch(error => { failure=error; }).finally(() => { finished=true; });
+          }
+          if (!finished) keepAlive();
+        };
+      };
+      keepAlive();
+    });
+  }
+
+  function resolveChatClientProfile() {
     const forced = isAdminClientChatMode ? window.__shopCompanyChatClientProfile : null;
     if (forced && typeof forced === "object") {
       const forcedId = Number(forced.id);
@@ -3630,25 +3635,18 @@
         };
       }
     }
-    const customer = getCustomerCache();
     const token = getCustomerToken();
-    const directId = Number(customer && customer.id);
-    if (token) {
-      const stableCustomerId = getStableCustomerChatClientId(token, directId, customer);
-      return {
-        id: Math.trunc(stableCustomerId),
-        name: String((customer && customer.name) || "\u041a\u043b\u0438\u0435\u043d\u0442"),
-        phone: String((customer && customer.phone) || ""),
-        isGuest: false,
-      };
-    }
-
-    const guestId = ensureGuestChatClientId(opts.forceNewGuest === true);
+    const customer = getCustomerCache();
+    const identity = chatIdentity?.token === token
+      || chatIdentity?.isVisitor && (!token || token.startsWith("g_") || chatIdentityRequest?.token === token)
+      ? chatIdentity : null;
+    const ownsCustomer = identity && !identity.isVisitor && Number(customer?.id) === identity.id;
+    const isGuestProfile = identity?.isVisitor && token.startsWith("g_") && customer?.is_guest === true;
     return {
-      id: Math.trunc(guestId),
-      name: "\u0413\u043e\u0441\u0442\u044c",
-      phone: "",
-      isGuest: true,
+      id: identity?.id || 0,
+      name: String((ownsCustomer || isGuestProfile ? customer?.name : "") || (identity?.isVisitor ? "Гость" : "")),
+      phone: ownsCustomer || isGuestProfile ? String(customer?.phone || "") : "",
+      isGuest: identity?.isVisitor !== false,
     };
   }
 
@@ -3838,32 +3836,11 @@
     lastWelcomeDay: "",
   };
 
-  async function mergeGuestThreadIntoCustomerThread(guestClientId, customerClientId) {
-    const fromId = Number(guestClientId || 0);
-    const toId = Number(customerClientId || 0);
-    if (!Number.isFinite(fromId) || fromId <= 0) return false;
-    if (!Number.isFinite(toId) || toId <= 0) return false;
-    if (fromId === toId) return false;
-
-    await chatApiJson(CHAT_TEMP_API_BASE + "/thread/merge", {
-      method: "POST",
-      body: {
-        from_client_id: fromId,
-        to_client_id: toId,
-      },
-    });
-    return true;
-  }
-
   function refreshChatClientProfileIfNeeded(options) {
     const opts = options || {};
     const currentProfile = normalizeChatClientProfile(chatClientProfile);
-    let nextProfile = normalizeChatClientProfile(resolveChatClientProfile());
-
-    // After logout a new guest must start with a fresh chat id.
-    if (!currentProfile.isGuest && nextProfile.isGuest) {
-      nextProfile = normalizeChatClientProfile(resolveChatClientProfile({ forceNewGuest: true }));
-    }
+    syncServerChatIdentity();
+    const nextProfile = normalizeChatClientProfile(resolveChatClientProfile());
 
     if (isSameChatClientProfile(currentProfile, nextProfile)) {
       chatClientProfile = nextProfile;
@@ -3893,26 +3870,7 @@
       return false;
     }
 
-    const shouldMergeGuestIntoCustomer = (
-      currentProfile.isGuest === true
-      && nextProfile.isGuest === false
-      && Number(currentProfile.id) > 0
-      && Number(nextProfile.id) > 0
-      && Number(currentProfile.id) !== Number(nextProfile.id)
-    );
-    const currentPhoneIdentity = normalizePhoneIdentity(currentProfile.phone);
-    const nextPhoneIdentity = normalizePhoneIdentity(nextProfile.phone);
-    const shouldMergeCustomerAliasIntoCustomer = (
-      currentProfile.isGuest === false
-      && nextProfile.isGuest === false
-      && Number(currentProfile.id) > 0
-      && Number(nextProfile.id) > 0
-      && Number(currentProfile.id) !== Number(nextProfile.id)
-      && !!currentPhoneIdentity
-      && currentPhoneIdentity === nextPhoneIdentity
-    );
-    const currentDraft = persistComposerDraft(currentProfile.id);
-
+    persistComposerDraft(currentProfile.id);
     stopLocalTypingSession({ flush: true });
     clearPeerTypingHideTimer();
     peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
@@ -3921,9 +3879,6 @@
 
     chatClientProfile = nextProfile;
     clearPendingOrderPhoneLookup();
-    if (shouldMergeGuestIntoCustomer || shouldMergeCustomerAliasIntoCustomer) {
-      transferPersistedComposerDraft(currentProfile.id, nextProfile.id, currentDraft);
-    }
     syncModalTitleWithActiveProfile();
     localHiddenMessagesKey = buildLocalHiddenMessagesKey(chatClientProfile.id);
     localHiddenMessageIds = loadLocalHiddenMessageIds();
@@ -3952,6 +3907,12 @@
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
+    if (isMessageImageViewerOpen()) closeMessageImageViewer();
+    for (const image of privateChatImages.values()) {
+      image.controller.abort();
+      if (image.url) URL.revokeObjectURL(image.url);
+    }
+    privateChatImages.clear();
     closeAttachPreview({
       focusComposer: false,
       clearItems: true,
@@ -4020,17 +3981,7 @@
         });
     };
 
-    if (shouldMergeGuestIntoCustomer || shouldMergeCustomerAliasIntoCustomer) {
-      profileMergeInFlight = true;
-      mergeGuestThreadIntoCustomerThread(currentProfile.id, nextProfile.id)
-        .catch(function () {})
-        .finally(function () {
-          profileMergeInFlight = false;
-          finalizeProfileSwitch();
-        });
-    } else {
-      finalizeProfileSwitch();
-    }
+    if (nextProfile.id) finalizeProfileSwitch();
     return true;
   }
 
@@ -4107,27 +4058,14 @@
     } catch {}
   }
 
-  function syncGuestProfileFromPushChatRequest(request) {
-    const normalized = normalizePushChatOpenRequest(request);
-    if (!normalized || !normalized.clientId) return false;
-    if (getCustomerToken()) return false;
-    const currentProfile = normalizeChatClientProfile(chatClientProfile);
-    if (currentProfile.isGuest !== true) return false;
-    if (String(currentProfile.id || "") === normalized.clientId) return false;
-    try {
-      localStorage.setItem(guestChatClientKey, normalized.clientId);
-    } catch {}
-    refreshChatClientProfileIfNeeded({ pull: false });
-    return true;
-  }
-
   function flushPendingPushChatOpenRequest() {
     const request = normalizePushChatOpenRequest(pendingPushChatOpenRequest);
     if (!request) return false;
+    if (!getActiveChatClientId()) return false;
     if (chatRuntimeSettings.isEnabled === false) return false;
     pendingPushChatOpenRequest = null;
     clearPushChatOpenRequestFromLocation();
-    syncGuestProfileFromPushChatRequest(request);
+    if (request.clientId && request.clientId !== getActiveChatClientId()) return false;
     if (request.messageId) {
       queuePendingPushMessageFocus(request.messageId, request.clientId || getActiveChatClientId());
     }
@@ -4281,8 +4219,13 @@
     if (!isChatSettingsRequest && !isPushSettingsRequest && chatRuntimeSettings.isEnabled === false) {
       throw createChatDisabledAbortError();
     }
-    const customerToken = getCustomerToken();
+    const customerToken = options.customerToken ?? (isAdminClientChatMode ? getCustomerToken() : chatIdentity?.token);
     if (customerToken) headers["x-customer-token"] = customerToken;
+    const clientId = getActiveChatClientId();
+    const isIdentityRequest = requestUrl.startsWith(CHAT_TEMP_API_BASE + "/identity");
+    if (!isAdminClientChatMode && !isIdentityRequest && requestUrl.startsWith(CHAT_TEMP_API_BASE) && !clientId) {
+      throw new DOMException("Chat identity is not loaded", "AbortError");
+    }
 
     const res = await fetch(requestUrl, {
       method: options.method || "GET",
@@ -4295,6 +4238,16 @@
     });
 
     const json = await res.json().catch(function () { return null; });
+    if (!isAdminClientChatMode && !isIdentityRequest && requestUrl.startsWith(CHAT_TEMP_API_BASE)) {
+      if (clientId !== getActiveChatClientId() || customerToken !== chatIdentity?.token) {
+        throw new DOMException("Chat identity changed", "AbortError");
+      }
+      if (["CHAT_IDENTITY_CHANGED", "CHAT_THREAD_FORBIDDEN"].includes(json?.error)) {
+        chatIdentity = null;
+        refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
+        throw new DOMException("Chat identity changed", "AbortError");
+      }
+    }
     if (!json || json.ok !== true) {
       const errorCode = String((json && json.error) || ("API_ERROR (" + res.status + ")"));
       if (errorCode === "CHAT_DISABLED") {
@@ -4585,7 +4538,7 @@
     if (sharedThreadSsePullTimer) return;
     sharedThreadSsePullTimer = setTimeout(function () {
       sharedThreadSsePullTimer = 0;
-      if (sharedThreadSsePullInFlight || profileMergeInFlight) return;
+      if (sharedThreadSsePullInFlight) return;
       if (String(getActiveChatClientId() || "") !== activeClientId) return;
 
       sharedThreadSsePullInFlight = true;
@@ -4599,6 +4552,63 @@
           }
         });
     }, CHAT_THREAD_SSE_PULL_DEBOUNCE_MS);
+  }
+
+  function openChatEventSource(url) {
+    if (isAdminClientChatMode) return new EventSource(url);
+    const identity = chatIdentity;
+    const controller = new AbortController();
+    const listeners = new EventTarget();
+    const source = {
+      addEventListener: listeners.addEventListener.bind(listeners),
+      close() { controller.abort(); },
+    };
+    const stillCurrent = () => !controller.signal.aborted && identity === chatIdentity
+      && identity?.token === getCustomerToken();
+    void (async function connect() {
+      while (stillCurrent()) {
+        try {
+          const response = await fetch(url, {
+            signal: controller.signal,
+            headers: { Accept: "text/event-stream", "x-customer-token": identity.token },
+          });
+          if (response.status === 401 || response.status === 403) {
+            const error = await response.json();
+            if (!stillCurrent()) return;
+            if (error.error === "CHAT_DISABLED") handleChatFeatureDisabledByServer();
+            else {
+              chatIdentity = null;
+              refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
+            }
+            return;
+          }
+          if (!response.ok || !response.body) throw new Error("CHAT_STREAM_UNAVAILABLE");
+          const reader = response.body.getReader();
+          listeners.dispatchEvent(new Event("open"));
+          const decoder = new TextDecoder();
+          let buffer = "";
+          try {
+            while (stillCurrent()) {
+              const { value, done } = await reader.read();
+              if (done || !stillCurrent()) break;
+              buffer += decoder.decode(value, { stream: true });
+              let boundary;
+              while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+                const frame = buffer.slice(0, boundary);
+                buffer = buffer.slice(boundary + 2);
+                const type = frame.match(/^event: (.+)$/m)?.[1];
+                const data = frame.match(/^data: (.+)$/m)?.[1];
+                if (type && data && stillCurrent()) listeners.dispatchEvent(new MessageEvent(type, { data }));
+              }
+            }
+          } finally { void reader.cancel().catch(() => {}); }
+        } catch (error) {
+          if (stillCurrent()) console.warn("CHAT_STREAM_UNAVAILABLE", error.message);
+        }
+        if (stillCurrent()) await sleepMs(1500);
+      }
+    })();
+    return source;
   }
 
   function startSharedThreadSseConnection() {
@@ -4615,7 +4625,7 @@
 
     stopSharedThreadSseConnection();
 
-    const source = new EventSource(
+    const source = openChatEventSource(
       buildChatSseUrl(
         CHAT_TEMP_API_BASE + "/thread/" + encodeURIComponent(activeClientId) + "/stream",
         getChatActor()
@@ -4623,6 +4633,7 @@
     );
     source.__clientId = String(activeClientId);
     sharedThreadEventSource = source;
+    if (!isAdminClientChatMode) source.addEventListener("open", () => scheduleSharedThreadSsePull(activeClientId));
 
     source.addEventListener("thread", function (event) {
       const payload = parseChatSsePayload(event);
@@ -4678,7 +4689,7 @@
 
     stopUnreadSseConnection();
 
-    const source = new EventSource(
+    const source = openChatEventSource(
       buildChatSseUrl(
         CHAT_TEMP_API_BASE + "/unread/stream",
         getChatActor(),
@@ -4709,10 +4720,15 @@
 
   function enqueueSharedMutation(mutator) {
     if (typeof mutator !== "function") return Promise.resolve();
+    const scope = chatIdentity;
+    const clientId = getActiveChatClientId();
     sharedMutationPendingCount += 1;
     sharedMutationQueue = sharedMutationQueue
       .catch(function () {})
-      .then(function () { return mutator(); })
+      .then(function () {
+        if (!isAdminClientChatMode && (!clientId || scope !== chatIdentity || clientId !== getActiveChatClientId())) return;
+        return mutator();
+      })
       .catch(function (err) { console.error(err); })
       .finally(function () {
         sharedMutationPendingCount = Math.max(0, sharedMutationPendingCount - 1);
@@ -4909,16 +4925,6 @@
     };
   }
 
-  function syncChatProfileFromUnreadSnapshot(snapshot) {
-    const normalizedClientId = String(snapshot && snapshot.clientId || "").trim();
-    if (!normalizedClientId) return;
-    const token = getCustomerToken();
-    if (!token) return;
-    getStableCustomerChatClientId(token, normalizedClientId, getCustomerCache());
-    if (String(getActiveChatClientId() || "") === normalizedClientId && chatClientProfile.isGuest !== true) return;
-    refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
-  }
-
   async function fetchUnreadSnapshot(options) {
     const opts = options || {};
     const requestClientId = String(getActiveChatClientId() || "").trim();
@@ -4995,7 +5001,6 @@
   function applyUnreadSnapshot(snapshot, options) {
     const opts = options || {};
     const normalized = normalizeUnreadSnapshot(snapshot || {});
-    syncChatProfileFromUnreadSnapshot(normalized);
     const prevTotal = Math.max(0, Number(unreadServerTotal || 0));
     unreadServerTotal = normalized.total;
     unreadServerRevision = normalized.revision;
@@ -5238,7 +5243,6 @@
   }
 
   async function pullSharedThreadFromServer(options) {
-    if (profileMergeInFlight) return false;
     if (sharedPullInFlight) return false;
     if (sharedHistoryLoading) return false;
     const localMutationVersionBeforePull = sharedThreadMutationVersion;
@@ -5291,7 +5295,6 @@
   }
 
   async function loadOlderSharedMessagesFromServer(options) {
-    if (profileMergeInFlight) return false;
     if (sharedPullInFlight) return false;
     if (sharedHistoryLoading) return false;
     if (sharedHistoryHasMore !== true) return false;
@@ -5402,7 +5405,6 @@
 
   async function pullSharedThreadFromServerIfChanged(options) {
     const opts = options || {};
-    if (profileMergeInFlight) return false;
     if (opts.force === true) {
       return pullSharedThreadFromServer({
         ...opts,
@@ -5476,7 +5478,7 @@
         }
         refreshChatClientProfileIfNeeded({ pull: false });
         const activeClientId = getActiveChatClientId();
-        if (!activeClientId || profileMergeInFlight) {
+        if (!activeClientId) {
           await sleepMs(CHAT_THREAD_WAIT_RETRY_MS);
           continue;
         }
@@ -5496,7 +5498,6 @@
             sharedThreadWaitAbortController = null;
           }
           if (!sharedThreadWaitLoopStarted || loopToken !== sharedThreadWaitLoopToken) break;
-          if (profileMergeInFlight) continue;
           if (String(activeClientId) !== String(getActiveChatClientId())) continue;
           if (waited.typing && typeof waited.typing === "object") {
             applyPeerTypingState(waited.typing);
@@ -6350,6 +6351,46 @@
     return isImageAttachment(entry.attachment) ? entry.attachment : null;
   }
 
+  function setChatAttachmentImageSource(img, src) {
+    const url = new URL(src, location.href);
+    const local = url.origin === location.origin && url.pathname.match(/^\/(static\/)?uploads\/chat\/(.+)$/);
+    if (isAdminClientChatMode || !local) {
+      if (img.getAttribute("src") !== src) img.src = src;
+      return;
+    }
+    if (img.dataset.chatAttachmentSrc === src) return;
+    img.dataset.chatAttachmentSrc = src;
+    img.removeAttribute("src");
+    const identity = chatIdentity;
+    if (!identity || identity.token !== getCustomerToken()) return;
+    let image = privateChatImages.get(src);
+    if (!image) {
+      const controller = new AbortController();
+      image = {controller, url: ""};
+      const resource = CHAT_TEMP_API_BASE + "/media/" + (local[1] ? "static/" : "uploads/") + local[2];
+      image.promise = fetch(withChatActorQuery(resource,"in"), {
+        cache: "no-store",
+        signal: controller.signal,
+        headers: {"x-customer-token":identity.token},
+      }).then(response => {
+        if (!response.ok) throw new Error("CHAT_ATTACHMENT_UNAVAILABLE");
+        return response.blob();
+      }).then(blob => {
+        if (!controller.signal.aborted) image.url = URL.createObjectURL(blob);
+        return image.url;
+      }).catch(error => {
+        if (privateChatImages.get(src) === image) privateChatImages.delete(src);
+        if (error.name !== "AbortError") console.warn("CHAT_ATTACHMENT_UNAVAILABLE", error.message);
+      });
+      privateChatImages.set(src,image);
+    }
+    void image.promise.then(blobUrl => {
+      if (img.dataset.chatAttachmentSrc !== src) return;
+      if (blobUrl && chatIdentity === identity && identity.token === getCustomerToken()) img.src = blobUrl;
+      else delete img.dataset.chatAttachmentSrc;
+    });
+  }
+
   function applyAttachmentImageNodeState(img, attachment) {
     if (!(img instanceof HTMLImageElement) || !isImageAttachment(attachment)) return false;
     const nextSrc = String(getAttachmentImageSrc(attachment) || "").trim();
@@ -6367,10 +6408,7 @@
     img.draggable = false;
     img.loading = "lazy";
     img.decoding = "async";
-    if (String(img.getAttribute("src") || "").trim() !== nextSrc) {
-      img.setAttribute("src", nextSrc);
-      img.src = nextSrc;
-    }
+    setChatAttachmentImageSource(img, nextSrc);
     return true;
   }
 
@@ -10529,7 +10567,7 @@
       const attachmentWidth = Math.max(0, Number(imageAttachment.width || 0));
       const attachmentHeight = Math.max(0, Number(imageAttachment.height || 0));
       img.className = "shop-company-chat-attachment-image";
-      img.src = getAttachmentImageSrc(imageAttachment);
+      setChatAttachmentImageSource(img, getAttachmentImageSrc(imageAttachment));
       img.alt = String(imageAttachment.name || "\u0424\u043e\u0442\u043e");
       if (attachmentWidth > 0 && attachmentHeight > 0) {
         img.width = attachmentWidth;
@@ -13775,6 +13813,7 @@
   }
 
   function sendUserMessage(text, options) {
+    if (!isAdminClientChatMode && (!chatIdentity?.id || chatIdentity.token !== getCustomerToken())) return false;
     const opts = options || {};
     const trimmed = normalizeComposerText(text);
     const attachment = isImageAttachment(opts.attachment) ? opts.attachment : null;
@@ -14150,6 +14189,8 @@
     clearReplyDraft();
     playOutgoingMessageSendTone();
 
+    const uploadIdentity = chatIdentity;
+    const uploadClientId = getActiveChatClientId();
     Promise.allSettled(tasks.map(async function (task) {
       if (!task || !task.messageId || !(task.file instanceof File)) return;
       let finalAttachment = null;
@@ -14163,15 +14204,16 @@
       }
       if (!isImageAttachment(finalAttachment)) return;
 
-      const nextSrc = String(getAttachmentImageSrc(finalAttachment) || "");
-      updateMessageAttachmentById(task.messageId, finalAttachment, { keepBottom: true });
-      if (task.previewUrl && task.previewUrl !== nextSrc) {
-        try { URL.revokeObjectURL(task.previewUrl); } catch {}
-      }
+      if (uploadIdentity !== chatIdentity || uploadClientId !== getActiveChatClientId()) return;
       const entry = findMessageEntry(task.messageId);
       if (!entry) return;
-      enqueueSharedMutation(function () {
-        return remoteCreateSharedMessage(entry);
+      enqueueSharedMutation(async function () {
+        await remoteCreateSharedMessage({ ...entry, attachment: finalAttachment });
+        if (uploadIdentity !== chatIdentity || uploadClientId !== getActiveChatClientId()) return;
+        updateMessageAttachmentById(task.messageId, finalAttachment, { keepBottom: true });
+        if (task.previewUrl && task.previewUrl !== getAttachmentImageSrc(finalAttachment)) {
+          URL.revokeObjectURL(task.previewUrl);
+        }
       });
     })).catch(function () {});
 
@@ -14647,7 +14689,7 @@
       queueWebPushSubscriptionSync({ clientId: getActiveChatClientId(), force: true, immediate: true });
       return;
     }
-    if (key && key !== customerTokenKey && key !== customerCacheKey && key !== guestChatClientKey) return;
+    if (key && key !== customerTokenKey && key !== customerCacheKey) return;
     refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
     if (!isAdminClientChatMode && (!key || key === customerTokenKey || key === customerCacheKey)) {
       const scopeChanged = syncImportantMessagesCacheScope();
@@ -15811,5 +15853,6 @@
     unsubscribeWebPushNotifications().catch(function () {});
   }
   scheduleNotificationPermissionPrompt();
+  syncServerChatIdentity();
 })();
 

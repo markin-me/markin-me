@@ -115,6 +115,19 @@
     const retryButton=document.createElement('button');retryButton.type='button';retryButton.className=recovery?'btn hidden':'btn btn-primary';retryButton.textContent='Продолжить';retryButton.disabled=employee?!/^7\d{10}$/.test(employeePhone.value.replace(/\D/g,'')):!/^7\d{10}$/.test(identity.value.replace(/\D/g,''));root.insertBefore(retryButton,form);
     const phoneInput=employee?employeePhone:identity;
     const customerError=error=>{
+      if (employee && !recovery && Array.isArray(error.payload?.channels)) {
+        customerStep('methods');methods.classList.remove('hidden');
+        alternative.classList.remove('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');
+        buttons.forEach(button=>{
+          button.classList.toggle('hidden',!error.payload.channels.includes(button.dataset.provider));
+          button.dataset.codeChannel=String(error.payload.code_channels?.includes(button.dataset.provider)===true);
+          button.disabled=false;
+        });
+        message.textContent=error.message==='TELEGRAM_BOT_START_REQUIRED'
+          ? 'Откройте Telegram-бота магазина и нажмите Start, затем повторите отправку кода.'
+          : 'Не удалось отправить код. Повторите отправку через выбранный мессенджер или используйте логин и пароль.';
+        return;
+      }
       if(employee&&!recovery&&!['PHONE_REQUIRED','EMPLOYEE_NOT_FOUND','CODE_INVALID','CODE_EXPIRED','CODE_ALREADY_USED','CODE_ATTEMPTS_EXCEEDED','CODE_RESEND_TOO_SOON','LOGIN_RATE_LIMITED'].includes(error.message)){
         customerStep('methods');methods.classList.remove('hidden');
         buttons.forEach(button=>button.classList.add('hidden'));
@@ -137,13 +150,6 @@
         if(employee)methods.classList.add('hidden');
         buttons.forEach(button=>button.classList.add('hidden'));
         alternative.classList.add('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');
-      }
-      if(error.message==='CUSTOMER_MESSENGER_NOT_AVAILABLE'){
-        message.textContent='Номер уже подтверждён, но нет доступного привязанного мессенджера. Обратитесь в магазин для восстановления доступа.';
-        customerStep('methods');methods.classList.remove('hidden');
-        buttons.forEach(button=>button.classList.add('hidden'));
-        alternative.classList.add('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');
-        guestButton.classList.remove('hidden');return;
       }
       message.textContent=({PHONE_REQUIRED:'Введите номер телефона.',CODE_INVALID:'Неверный четырёхзначный код.',CODE_EXPIRED:'Код истёк. Запросите новый.',CODE_ALREADY_USED:'Этот код уже использован.',CODE_ATTEMPTS_EXCEEDED:'Лимит попыток исчерпан. Запросите новый код.',CODE_DELIVERY_FAILED:'Код не доставлен. Повторите отправку или выберите другой доступный канал.',TELEGRAM_BOT_START_REQUIRED:'Откройте Telegram-бота магазина и нажмите Start, затем повторите отправку.',CUSTOMER_CODE_REQUIRED:'Для подтверждённого номера нужен код. Начните вход заново.',CONTACT_PHONE_MISMATCH:'Поделитесь контактом с тем же номером, который указан в карточке входа.'})[error.message]||errorText(error.message);
       if(error.payload?.fallback_available){methods.classList.remove('hidden');buttons.forEach(b=>b.classList.add('hidden'));alternative.classList.add('hidden');switchButton.classList.remove('hidden');switchButton.dataset.provider='tg';switchButton.textContent='Отправить в Telegram';}
@@ -192,7 +198,7 @@
         });
         codeMeta.textContent=`Код отправлен в ${result.provider==='max'?'MAX':'Telegram'}.`;message.textContent='';codeInputs[0]?.focus();
         startCodeCountdown(result.expires_in);
-      }else{customerStep('methods');root.dataset.existingUnverified=String((employee?result.employee_exists:result.customer_exists)===true);resendButton.classList.add('hidden');switchButton.classList.add('hidden');message.textContent=result.relink_required?'':employee?'Подтвердите номер в мессенджере.':'Подтвердите номер в мессенджере или продолжите как гость.';}
+      }else{customerStep('methods');root.dataset.existingUnverified=String((employee?result.employee_exists:result.customer_exists)===true);resendButton.classList.add('hidden');switchButton.classList.add('hidden');message.textContent=employee?(result.relink_required?'':'Подтвердите номер в мессенджере.'):'Подтвердите номер в мессенджере или продолжите как гость.';}
     };
     const remember=()=>{if(recovery)return;try{if(requestId)sessionStorage.setItem(pendingKey(context),JSON.stringify({id:requestId,at:Date.now()}));else sessionStorage.removeItem(pendingKey(context));}catch(error){console.warn('AUTH_PENDING_STORAGE_UNAVAILABLE');}};
     const endpoint=employee?'/api/auth/messenger-browser':'/api/public/auth/messenger-browser';
@@ -219,16 +225,25 @@
       const checkedId=requestId;
       try{
         for(const id of otherProviderRequests){
-          const previous=await api(endpoint+'/status',{method:'POST',signal:AbortSignal.timeout(15000),body:{request_id:id,chat_guest_client_id:d.getGuestChatClientIdForAuth?.()}});
+          const previous=await api(endpoint+'/status',{method:'POST',signal:AbortSignal.timeout(15000),body:{request_id:id}}).catch(error=>{
+            if(['REQUEST_INVALID','GUEST_SESSION_MISMATCH','MESSENGER_NOT_LINKED'].includes(error.message))return {state:'cancelled'};
+            throw error;
+          });
           if(disposed||requestId!==checkedId)return;
           if(previous.state==='confirmed'){otherProviderRequests.delete(id);otherProviderRequests.add(checkedId);await finish(previous);return;}
           if(['cancelled','expired','consumed'].includes(previous.state))otherProviderRequests.delete(id);
         }
-        const result=await api(endpoint+'/status',{method:'POST',signal:AbortSignal.timeout(15000),body:{request_id:checkedId,new_password:recovery?identity.value:undefined,chat_guest_client_id:employee?undefined:d.getGuestChatClientIdForAuth?.()}});
+        const result=await api(endpoint+'/status',{method:'POST',signal:AbortSignal.timeout(15000),body:{request_id:checkedId,new_password:recovery?identity.value:undefined}});
         if(disposed || requestId!==checkedId)return;
         if(result.state==='confirmed')await finish(result);
+        else if(!employee && ['cancelled','expired'].includes(result.state)){
+          requestId=otherProviderRequests.values().next().value || '';
+          otherProviderRequests.delete(requestId);
+          remember();activeProviderLink=null;progress.textContent='';
+          message.textContent=requestId?'':result.state==='expired'?errorText('REQUEST_EXPIRED'):'Авторизация отменена.';
+        }
         else if(result.required_action){
-          progress.textContent=employee?({share_contact:'В боте поделитесь собственным контактом системной кнопкой. На компьютере можно открыть ту же ссылку на телефоне, не закрывая эту вкладку.',confirm_in_bot:'Подтвердите этот запрос кнопкой «Авторизоваться» в боте.'})[result.required_action] || '':'';
+          progress.textContent=!employee?({choose_phone_in_bot:'Выберите в мессенджере, авторизоваться ли под другим номером.',confirm_in_bot:'Подтвердите авторизацию в мессенджере.',share_contact:'Нажмите «Авторизоваться» в мессенджере.'})[result.required_action] || '':({share_contact:'В боте поделитесь собственным контактом системной кнопкой. На компьютере можно открыть ту же ссылку на телефоне, не закрывая эту вкладку.',confirm_in_bot:'Подтвердите этот запрос кнопкой «Авторизоваться» в боте.'})[result.required_action] || '';
         }
       }catch(e){
         if(disposed || requestId!==checkedId)return;
@@ -251,7 +266,7 @@
       methods.append(button);buttons.push(button);
       button.addEventListener('click',async()=>{
         if(disposed)return;
-        if(!recovery&&customerPhase==='code'&&button.dataset.codeChannel==='true'){
+        if(!recovery&&(customerPhase==='code'||employee&&customerPhase==='methods')&&button.dataset.codeChannel==='true'){
           if(busy)return;busy=true;button.disabled=true;button.classList.add('is-loading');
           try{await customerStart(provider);}catch(error){customerError(error);}
           finally{busy=false;button.disabled=false;button.classList.remove('is-loading');}

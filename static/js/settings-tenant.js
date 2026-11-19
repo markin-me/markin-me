@@ -1,14 +1,26 @@
 (() => {
   async function initCustomerAuthSettings(){
-    const panel=document.getElementById('customerAuthSettings'),notice=document.getElementById('customerAuthNotice');if(!panel)return;
-    const request=async options=>{const response=await authFetch('/api/admin/tenant/customer-auth',options);const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'REQUEST_FAILED');return data;};
-    const render=data=>{for(const key of ['tg','max'])panel.querySelector(`[data-customer-auth="${key}"]`).checked=data.settings[key];};
-    try{const data=await request();render(data);panel.disabled=!data.can_update;notice.textContent='Настройки не изменяют способы входа сотрудников.';}catch(error){notice.textContent='Не удалось загрузить настройки авторизации.';return;}
-    document.getElementById('customerAuthSave').addEventListener('click',async()=>{
-      const body={birthday:false};for(const key of ['tg','max'])body[key]=panel.querySelector(`[data-customer-auth="${key}"]`).checked;
-      panel.disabled=true;notice.textContent='Сохраняем…';
-      try{render(await request({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));notice.textContent='Сохранено. Настройки сотрудников не изменены.';}catch(error){notice.textContent='Не удалось сохранить настройки.';}finally{panel.disabled=false;}
-    });
+    const inputs=Array.from(document.querySelectorAll('[data-customer-auth]'));
+    if(!inputs.length || inputs[0].dataset.authBound)return;
+    inputs.forEach(input=>{input.dataset.authBound='1';});
+    const request=async options=>{
+      const response=await authFetch('/api/admin/tenant/customer-auth',options);
+      const data=await response.json();
+      if(!response.ok||!data.ok)throw new Error(data.error||'REQUEST_FAILED');
+      return data;
+    };
+    let saved,canUpdate=false;
+    const render=()=>inputs.forEach(input=>{input.checked=Boolean(saved?.[input.dataset.customerAuth]);input.disabled=!canUpdate;});
+    try{const data=await request();saved=data.settings;canUpdate=data.can_update;render();}
+    catch(error){inputs.forEach(input=>{document.querySelector('[data-customer-auth-notice="'+input.dataset.customerAuth+'"]').textContent='Не удалось загрузить настройки авторизации.';});inputs.forEach(input=>{delete input.dataset.authBound;});return;}
+    inputs.forEach(input=>input.addEventListener('change',async()=>{
+      const notice=document.querySelector('[data-customer-auth-notice="'+input.dataset.customerAuth+'"]');
+      const body={...saved,[input.dataset.customerAuth]:input.checked};
+      inputs.forEach(control=>{control.disabled=true;});notice.textContent='';
+      try{saved=(await request({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).settings;}
+      catch(error){notice.textContent='Не удалось сохранить настройки.';}
+      finally{render();}
+    }));
   }
   function initCorporateLoginSuffix() {
     const input = document.getElementById('corporateLoginSuffix');
@@ -9649,7 +9661,7 @@
 
 
 
-    chat_guest_thread_ttl_days: "7",
+    chat_guest_thread_ttl_days: "0",
 
 
 
@@ -9749,7 +9761,7 @@
 
 
 
-    const DEFAULT_CHAT_GUEST_THREAD_TTL_DAYS = 7;
+    const DEFAULT_CHAT_GUEST_THREAD_TTL_DAYS = 0;
 
 
 
@@ -10029,7 +10041,7 @@
 
 
 
-      if (whole < 1) return 1;
+      if (whole < 0) return 0;
 
 
 
@@ -12853,7 +12865,7 @@
 
 
 
-        chat_guest_thread_ttl_days: String((settingsChatGuestThreadTtlDaysInput && settingsChatGuestThreadTtlDaysInput.value) || "7"),
+        chat_guest_thread_ttl_days: String((settingsChatGuestThreadTtlDaysInput && settingsChatGuestThreadTtlDaysInput.value) || "0"),
 
 
 
@@ -12893,7 +12905,7 @@
 
 
 
-        settingsChatGuestThreadTtlDaysInput.value = String(chatMessageOriginal.chat_guest_thread_ttl_days || "7");
+        settingsChatGuestThreadTtlDaysInput.value = String(chatMessageOriginal.chat_guest_thread_ttl_days || "0");
 
 
 
@@ -25552,7 +25564,20 @@
 
 
 
-          alert("Не удалось сохранить настройки Telegram.");
+          const reason = {
+            TELEGRAM_BOT_TOKEN_INVALID: "Неверный формат токена Telegram. Скопируйте полный токен бота из BotFather и вставьте в поле «Токен бота».",
+            TELEGRAM_WEBHOOK_HTTPS_REQUIRED: "Для Telegram webhook нужен публичный HTTPS-адрес. Для локального запуска настройте Telegram On-Demand Polling.",
+            TELEGRAM_WEBHOOK_REGISTRATION_FAILED: "Не удалось зарегистрировать Telegram webhook. Проверьте соединение с Telegram и настройки бота.",
+            AUTH_WEBHOOK_SECRET_REQUIRED: "Не настроен секрет Telegram webhook на сервере.",
+            FORBIDDEN: "Недостаточно прав для изменения настроек интеграции Telegram.",
+            TENANT_SETTINGS_CHANGED: "Настройки изменились во время сохранения. Обновите страницу и повторите сохранение.",
+            TENANT_CREDENTIAL_CHANGED: "Данные компании изменились во время сохранения. Обновите страницу и повторите сохранение.",
+            SERVER_ERROR: "Сервер не смог сохранить настройки Telegram. Подробности находятся в журнале локального Node-сервера.",
+          }[data?.error];
+          const errorCode = /^[A-Z][A-Z0-9_]+$/.test(String(data?.error || "")) ? data.error : "";
+          alert(reason || (errorCode
+            ? "Не удалось сохранить настройки Telegram. Код ошибки " + errorCode + "."
+            : "Не удалось сохранить настройки Telegram: ответ сервера недоступен."));
 
 
 

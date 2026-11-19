@@ -1,19 +1,21 @@
 import { Image, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { getChatImageSource } from '../../../features/chat/api';
 
 type ChatImageViewerProps = {
   onClose: () => void;
   uri: string;
+  mediaHeaders?: Record<string, string>;
 };
 
-export function ChatImageViewer({ onClose, uri }: ChatImageViewerProps) {
+export function ChatImageViewer({ onClose, uri, mediaHeaders }: ChatImageViewerProps) {
   return (
     <Modal animationType="fade" onRequestClose={onClose} transparent visible={!!uri}>
       <View style={styles.host}>
         <Pressable accessibilityRole="button" onPress={onClose} style={styles.close}>
           <Ionicons color="#fff" name="close" size={24} />
         </Pressable>
-        {uri ? <Image resizeMode="contain" source={{ uri }} style={styles.image} /> : null}
+        {uri ? <Image resizeMode="contain" source={getChatImageSource(uri, mediaHeaders)} style={styles.image} /> : null}
       </View>
     </Modal>
   );
