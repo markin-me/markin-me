@@ -4417,24 +4417,25 @@ function buildOptionGroupPayload(formValues) {
     }
 
     emptyEl.classList.add("hidden");
-    listEl.innerHTML = list.map((group) => {
-      const maxLabel = group.max_select == null ? "∞" : group.max_select;
+    listEl.innerHTML = `<div class="options-row option-groups-head" aria-hidden="true">
+      <span>Группа</span><span>Тип выбора</span><span>Лимит</span><span>Пункты</span><span>Назначения</span><span>Активна</span>
+    </div>` + list.map((group) => {
+      const maxLabel = group.selection_type === "single" ? "—" : group.max_select ?? "∞";
       const isActive = group.id === state.selectedOptionGroupId;
       const disableSwitch = state.optionPanel.mode !== "view" || state.optionPanel.activeToggleBusy;
       return `
         <div class="options-row ${isActive ? "is-active" : ""}" data-option-group-id="${group.id}">
           <div>
             <div class="options-row-title">${escapeHtml(group.title || "")}</div>
-            <div class="options-row-meta">Тип: ${escapeHtml(getSelectionLabel(group.selection_type))}</div>
           </div>
-          <div class="options-row-meta">Лимит: ${escapeHtml(maxLabel)}</div>
-          <div class="options-row-meta">Пункты: ${group.items_count ?? 0}</div>
-          <div class="options-row-meta">Назначения: ${group.assignments_count ?? 0}</div>
+          <div class="options-row-meta">${escapeHtml(getSelectionLabel(group.selection_type))}</div>
+          <div class="options-row-meta">${escapeHtml(maxLabel)}</div>
+          <div class="options-row-meta">${group.items_count ?? 0}</div>
+          <div class="options-row-meta">${group.assignments_count ?? 0}</div>
           <div class="options-row-meta">
-            <label class="switch switch-compact options-row-active">
-              <input class="switch-input" type="checkbox" data-option-active-id="${group.id}" ${group.is_active ? "checked" : ""} ${disableSwitch ? "disabled" : ""} />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Активна</span>
+            <label class="auto-add-condition-check">
+              <input class="products-bulk-toggle-all-input" type="checkbox" aria-label="Активна: ${escapeHtml(group.title || "")}" data-option-active-id="${group.id}" ${group.is_active ? "checked" : ""} ${disableSwitch ? "disabled" : ""} />
+              <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
             </label>
           </div>
         </div>
@@ -4442,16 +4443,12 @@ function buildOptionGroupPayload(formValues) {
     }).join("");
 
     listEl.querySelectorAll("[data-option-group-id]").forEach((row) => {
-      row.addEventListener("click", async () => {
+      row.addEventListener("click", (event) => {
+        if (event.target.closest(".auto-add-condition-check")) return;
         const id = Number(row.dataset.optionGroupId);
         if (!Number.isFinite(id)) return;
-        state.selectedOptionGroupId = id;
-        state.optionPanel.returnTo = null;
-        await loadOptionGroupDetails(id);
-        renderAllOptionGroupsLists();
-        showOptionGroupDetails(state.optionGroupDetails, { mode: "view" });
         const group = state.optionGroups.find((g) => Number(g.id) === id);
-        openOptionGroupTab(id, group?.title || "Опция", { activate: false });
+        openOptionGroupTab(id, group?.title || "Опция", { directEdit: true });
       });
     });
 
@@ -6176,6 +6173,8 @@ function openAutoAddGroupModal({ mode, group } = {}) {
       head.querySelector('strong').textContent = presentation.title;
       head.querySelector('span').innerHTML = renderSelectionPrice(presentation);
     }
+    const compactPrice = row.querySelector("[data-option-compact-price]");
+    if (compactPrice && presentation) compactPrice.innerHTML = renderSelectionPrice(presentation);
   }
 
   function renderSelectionPrice(presentation) {
@@ -6245,6 +6244,11 @@ function openAutoAddGroupModal({ mode, group } = {}) {
   }
 
   document.addEventListener('click', event => {
+    const optionProduct = event.target.closest("[data-option-open-product]");
+    if (optionProduct && optionGroupInfo?.contains(optionProduct)) {
+      openProductTab({ id: Number(optionProduct.dataset.optionOpenProduct), name: optionProduct.textContent.trim() });
+      return;
+    }
     const row = event.target.closest('.option-product-line[data-selection-product-id]');
     if (!row) return;
     if (row.closest('#peOptionBlock .product-option-tile-strip')) {
@@ -6320,15 +6324,18 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     return `${pricing.showOld ? "<s>" + escapeHtml(formatMoney(pricing.originalPrice)) + "</s>" : ""}<b>${escapeHtml(formatMoney(pricing.currentPrice))}</b>`;
   }
 
-  function renderOptionProductCard(item, { selected = false, editable = false, itemKey = "", allowVariants = true, allowConfiguration = false, checkboxKind = "default", showCheckbox = true, styledCheckbox = false, badgesHtml = "", tile = false } = {}) {
+  function renderOptionProductCard(item, { selected = false, editable = false, itemKey = "", allowVariants = true, allowConfiguration = false, checkboxKind = "default", showCheckbox = true, styledCheckbox = false, badgesHtml = "", tile = false, compact = false } = {}) {
     const photo = getOptionProductPhoto(item);
     let displayPrice = item.price_mode === "fixed" && item.price_value != null
       ? item.price_value
       : item.product_price ?? item.price;
     const variantGroups = allowVariants && Array.isArray(item.available_variants) ? item.available_variants : [];
     const productDefault = getOptionProductDefaultVariant(item);
-    const activeGroupId = item.default_variant_group_id ?? item.effective_default_variant_group_id ?? productDefault?.groupId;
-    const activeValueIndex = item.default_variant_value_index ?? item.effective_default_variant_value_index ?? productDefault?.valueIndex;
+    const configuration = readSelectedProductConfiguration(item);
+    const activeGroupId = item.default_variant_group_id ?? item.effective_default_variant_group_id
+      ?? (compact ? configuration?.variant_group_id : null) ?? productDefault?.groupId;
+    const activeValueIndex = item.default_variant_value_index ?? item.effective_default_variant_value_index
+      ?? (compact ? configuration?.variant_value_index : null) ?? productDefault?.valueIndex;
     if (item.target_product_id && selectionRounding) {
       displayPrice = window.SharedProductDetails.getOptionItemDisplayPricing({ ...item,
         variants: item.available_variants || item.variants || [],
@@ -6342,14 +6349,34 @@ function openAutoAddGroupModal({ mode, group } = {}) {
         const label = [String(value ?? "").trim(), unit].filter(Boolean).join(" ");
         return `<button class="option-product-variant ${isActive ? "is-active" : ""}" type="button"
           data-option-variant-key="${escapeHtml(String(itemKey))}" data-option-variant-group="${groupId}"
-          data-option-variant-index="${index}" ${editable ? "" : "disabled"}>${escapeHtml(label)}</button>`;
+          data-option-variant-index="${index}" ${compact ? `aria-pressed="${isActive}"` : ""} ${editable ? "" : "disabled"}>${escapeHtml(label)}</button>`;
       });
     }).join("");
-    const configuration = readSelectedProductConfiguration(item);
     const productId = Number(item.target_product_id || item.product_id || item.id);
     const selectedConfiguration = configuration || (activeGroupId != null ? { variant_group_id: Number(activeGroupId), variant_value_index: Number(activeValueIndex) } : null);
     const presentation = allowConfiguration && !tile && selectionRounding ? window.SharedProductDetails.getSelectionPresentation(productId, selectedConfiguration) : null;
     if (allowConfiguration && !tile && productId > 0) queueSelectionProduct(productId);
+    if (compact) {
+      return `
+        <div class="option-product-line option-product-line-compact" data-selection-product-id="${productId}" data-selection-key="${escapeHtml(String(itemKey))}"
+          data-selection-editable="${editable ? "1" : "0"}" data-selection-configuration="${escapeHtml(JSON.stringify(selectedConfiguration))}">
+          <label class="auto-add-condition-check option-item-default-check" title="По умолчанию">
+            <input class="products-bulk-toggle-all-input" type="checkbox" aria-label="Выбрать по умолчанию" data-option-default="${escapeHtml(String(itemKey))}" ${selected ? "checked" : ""} ${editable ? "" : "disabled"} />
+            <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+          </label>
+          <button class="option-assignment-title option-catalog-product-link" type="button" data-option-open-product="${productId}">
+            <span class="option-product-photo">${photo ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" />` : ""}</span>
+            <strong>${escapeHtml(item.product_name || item.name || "")}</strong>
+          </button>
+          <div class="option-product-variants"${chips ? ' data-option-variant-scroll tabindex="0" role="region" aria-label="Варианты товара"' : ""}>${chips || "—"}</div>
+          <span class="product-selection-price" ${item.price_mode === "fixed" ? "" : "data-option-compact-price"}>${presentation && item.price_mode !== "fixed" ? renderSelectionPrice(presentation) : (displayPrice != null ? formatMoney(displayPrice) : "—")}</span>
+          ${getOptionGroupSelectionType() === "multiple_item" ? `
+            <input class="control option-limit-input" type="number" step="1" min="1" value="${Number(item.qty_min) || 1}"
+              data-option-item-limit="qty_min" aria-label="Минимум для товара" ${editable ? "" : "disabled"}>
+            <input class="control option-limit-input" type="number" step="1" min="1" value="${Number(item.qty_max) || 1}"
+              data-option-item-limit="qty_max" aria-label="Максимум для товара" ${editable ? "" : "disabled"}>` : ""}
+        </div>`;
+    }
     return `
       <div class="option-product-line ${selected ? "is-selected" : ""}" ${allowConfiguration ? `data-selection-product-id="${productId}" data-selection-key="${escapeHtml(String(itemKey))}" data-selection-editable="${editable ? '1' : '0'}" data-selection-configuration="${escapeHtml(JSON.stringify(selectedConfiguration))}"` : ''}>
         ${showCheckbox ? `${checkboxKind === "member" || styledCheckbox ? '<label class="option-picker-check-control">' : ""}<input class="option-product-default ${checkboxKind === "member" || styledCheckbox ? "product-row-select-input" : ""}" type="checkbox" aria-label="${checkboxKind === "member" ? "Показывать пункт" : "Выбрать пункт по умолчанию для товаров с этой опцией"}"
@@ -9216,6 +9243,24 @@ function getOptionGroupFormValues() {
     $$("input, select, textarea", optionGroupForm).forEach((el) => {
       el.disabled = disabled;
     });
+    $$("#optionGroupTypeSelect button", optionGroupForm).forEach(button => { button.disabled = disabled; });
+    syncOptionGroupTypeSelect(false);
+  }
+
+  function syncOptionGroupTypeSelect(open) {
+    const wrap = $("#optionGroupTypeSelect");
+    if (!wrap || !optionGroupSelectionInput) return;
+    const trigger = $(".new-order-right-select-trigger", wrap);
+    const menu = $(".new-order-right-select-menu", wrap);
+    $("span", trigger).textContent = optionGroupSelectionInput.selectedOptions[0]?.textContent || "";
+    trigger.setAttribute("aria-expanded", String(open));
+    wrap.classList.toggle("is-open", open);
+    menu.classList.toggle("hidden", !open);
+    if (open) {
+      menu.innerHTML = [...optionGroupSelectionInput.options].map(option => `<button type="button" role="option"
+        class="new-order-right-select-option ${option.selected ? "is-selected" : ""}" aria-selected="${option.selected}"
+        data-option-group-type="${escapeHtml(option.value)}">${escapeHtml(option.textContent)}</button>`).join("");
+    }
   }
 
 function fillOptionGroupForm(group, items = []) {
@@ -9404,18 +9449,38 @@ function updateOptionGroupSelectionUi() {
     }
   }
 
-  function validateItemQtyBounds(row) {
-    const minInput = row.querySelector('input[data-item-field="qty_min"]');
-    const maxInput = row.querySelector('input[data-item-field="qty_max"]');
-    if (!minInput || !maxInput) return;
-    const min = minInput.value === "" ? 0 : Number(minInput.value);
-    const max = maxInput.value === "" ? 0 : Number(maxInput.value);
-    const invalid = Number.isFinite(min) && Number.isFinite(max) && min > max;
-    const message = invalid ? "Минимум не может быть больше максимума." : "";
-    [minInput, maxInput].forEach((input) => {
-      input.setCustomValidity(message);
-      input.classList.toggle("is-invalid", invalid);
+  function renderOptionCatalogRows(rows, getProductId, renderRow) {
+    const repository = window.CatalogRepository;
+    const categories = (repository?.getAllCategories() || [])
+      .filter(category => category.code !== "all" && Number(category.active ?? 1) === 1)
+      .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || a.id - b.id);
+    const categoryMap = new Map(categories.map((category, rank) => [category.id, { category, rank }]));
+    const groups = new Map();
+    rows.forEach(row => {
+      const product = repository?.getProduct(Number(getProductId(row)));
+      const paths = (product?.categoryIds || []).map(id => {
+        const path = [];
+        const visited = new Set();
+        let entry = categoryMap.get(id);
+        while (entry && !visited.has(entry.category.id)) {
+          visited.add(entry.category.id);
+          path.unshift(entry);
+          entry = categoryMap.get(entry.category.parentId);
+        }
+        return path;
+      }).filter(path => path.length);
+      const path = paths.sort((a, b) => b.length - a.length || a[a.length - 1].rank - b[b.length - 1].rank)[0] || [];
+      const id = path[path.length - 1]?.category.id || 0;
+      if (!groups.has(id)) groups.set(id, { path, rows: [] });
+      groups.get(id).rows.push(renderRow(row));
     });
+    return [...groups.values()].sort((a, b) => {
+      if (!a.path.length || !b.path.length) return b.path.length - a.path.length;
+      for (let index = 0; index < Math.min(a.path.length, b.path.length); index += 1) {
+        if (a.path[index].rank !== b.path[index].rank) return a.path[index].rank - b.path[index].rank;
+      }
+      return a.path.length - b.path.length;
+    }).map(({ path, rows: groupRows }) => `<div class="option-catalog-category">${escapeHtml(path.map(entry => entry.category.name).join(" › ") || "Без категории")}</div>${groupRows.join("")}`).join("");
   }
 
   function renderOptionItems(items) {
@@ -9428,71 +9493,34 @@ function updateOptionGroupSelectionUi() {
     }
 
     const selectionType = getOptionGroupSelectionType();
-    const showItemLimits = selectionType === "multiple_item";
+    const hasItemLimit = selectionType === "multiple_item";
     const isDraft = state.optionPanel.mode === "create";
-    optionItemsList.innerHTML = items.map((item) => {
+    optionItemsList.classList.toggle("has-item-limit", hasItemLimit);
+    optionItemsList.innerHTML = `<div class="option-items-head"><span>Товар</span><span>Варианты</span><span>Цена</span>${hasItemLimit ? "<span>Мин</span><span>Макс</span>" : ""}</div>`
+      + renderOptionCatalogRows(items, item => item.target_product_id ?? item.product_id ?? item.id, (item) => {
       const itemKey = item.tempId ?? item.id ?? item.target_product_id;
-      const catalogPrice = item.product_price != null ? formatPriceInteger(item.product_price) : "—";
       const overrideValue = isDraft ? item.newPrice : item.price_value;
       const hasOverride = isDraft
         ? overrideValue !== "" && overrideValue != null
         : item.price_mode === "fixed" && item.price_value != null;
-      const priceValue = hasOverride ? formatPriceInteger(overrideValue) : "";
-      const qtyMin = item.qty_min ?? 1;
-      const qtyMax = item.qty_max ?? 1;
-      const qtyControls = showItemLimits
-        ? `
-          <div class="option-item-qty">
-            <label class="option-item-qty-field">
-              <span class="option-item-qty-label">мин</span>
-              <input class="control" type="number" min="1" aria-label="Минимум, шт." data-item-field="qty_min" data-item-id="${itemKey}" value="${qtyMin}" ${editable ? "" : "disabled"} />
-            </label>
-            <label class="option-item-qty-field">
-              <span class="option-item-qty-label">макс</span>
-              <input class="control" type="number" min="1" aria-label="Максимум, шт." data-item-field="qty_max" data-item-id="${itemKey}" value="${qtyMax}" ${editable ? "" : "disabled"} />
-            </label>
-          </div>
-        `
-        : "";
-
       return `
         <div class="option-item-row ${item.default_selected ? "is-default" : ""}">
           <div class="option-item-title">
-            ${renderOptionProductCard(item, {
+            ${renderOptionProductCard(isDraft && hasOverride ? { ...item, price_mode: "fixed", price_value: Number(overrideValue) } : item, {
               selected: Boolean(item.default_selected),
               editable,
               itemKey,
-              styledCheckbox: true,
+              compact: true,
               allowConfiguration: true,
               allowVariants: Boolean(document.getElementById("optionGroupAllowVariants")?.checked ?? state.optionDraft?.group?.allow_variants ?? state.optionGroupDetails?.group?.allow_variants),
             })}
-          </div>
-          ${qtyControls}
-          <div class="option-item-price">
-            <span class="option-item-price-label">Цена товара</span>
-            ${!editable
-              ? `
-                ${hasOverride
-                  ? `<span class="option-item-price-value is-muted">${catalogPrice}</span>
-                     <span class="option-item-price-value is-accent">${priceValue}</span>`
-                  : `<span class="option-item-price-value is-accent">${catalogPrice}</span>`}
-              `
-              : `
-                <span class="option-item-price-value ${hasOverride ? "is-muted" : "is-accent"}">${catalogPrice}</span>
-                <label class="option-item-price-input"><span>Своя цена</span><input class="control" type="number" step="1" min="0" aria-label="Новая цена" data-item-field="price" data-item-id="${itemKey}" value="${priceValue}" /></label>
-              `}
           </div>
           ${editable ? `
             <button class="option-row-remove" type="button" data-item-remove="${itemKey}" title="Удалить" aria-label="Удалить пункт"><i class="fas fa-times"></i></button>
           ` : ""}
         </div>
       `;
-    }).join("");
-
-    if (editable && showItemLimits) {
-      // ensure min/max are valid on initial render
-      optionItemsList.querySelectorAll(".option-item-row").forEach((row) => validateItemQtyBounds(row));
-    }
+    });
 
     if (!editable) {
       refreshOpenAccordions();
@@ -9519,7 +9547,10 @@ function updateOptionGroupSelectionUi() {
         }
         item.default_selected = input.checked ? 1 : 0;
         state.optionPanel.itemsDirty = true;
-        renderOptionItems(getOptionItemsSource());
+        optionItemsList.querySelectorAll("[data-option-default]").forEach(checkbox => {
+          if (checkbox !== input && input.checked && selectionType === "single") checkbox.checked = false;
+          checkbox.closest(".option-item-row").classList.toggle("is-default", checkbox.checked);
+        });
       });
     });
     optionItemsList.querySelectorAll("[data-option-variant-key]").forEach((chip) => {
@@ -9531,10 +9562,17 @@ function updateOptionGroupSelectionUi() {
         item.default_variant_group_id = Number(chip.dataset.optionVariantGroup);
         item.default_variant_value_index = Number(chip.dataset.optionVariantIndex);
         const configuration = readSelectedProductConfiguration(item);
-        if (configuration) item.configuration_json = { ...configuration, variant_group_id: item.default_variant_group_id,
+        const selectedConfiguration = { ...configuration, variant_group_id: item.default_variant_group_id,
           variant_value_index: item.default_variant_value_index, variant_label: chip.textContent.trim() };
+        if (configuration) item.configuration_json = selectedConfiguration;
         state.optionPanel.itemsDirty = true;
-        renderOptionItems(getOptionItemsSource());
+        const row = chip.closest(".option-product-line");
+        row.dataset.selectionConfiguration = JSON.stringify(selectedConfiguration);
+        row.querySelectorAll("[data-option-variant-key]").forEach(variant => {
+          variant.classList.toggle("is-active", variant === chip);
+          variant.setAttribute("aria-pressed", String(variant === chip));
+        });
+        refreshSelectionRows(row);
       });
     });
 
@@ -9552,37 +9590,6 @@ function updateOptionGroupSelectionUi() {
       });
     });
 
-    optionItemsList.querySelectorAll("input[data-item-field]").forEach((input) => {
-      input.addEventListener("input", () => {
-        const field = input.dataset.itemField;
-        const id = input.dataset.itemId;
-        if (state.optionPanel.mode === "create" || state.optionPanel.mode === "edit") {
-          const item = state.optionDraft.items.find(
-            (x) => String(x.tempId ?? x.id ?? x.target_product_id) === String(id)
-          );
-          if (!item || !field) return;
-          if (field === "price") {
-            if (state.optionPanel.mode === "create") {
-              item.newPrice = input.value === "" ? "" : Number(input.value);
-            } else {
-              const hasPrice = input.value !== "";
-              item.price_mode = hasPrice ? "fixed" : "from_target";
-              item.price_value = hasPrice ? Number(input.value) : null;
-            }
-          } else if (field === "qty_min") {
-            item.qty_min = input.value === "" ? 1 : Number(input.value);
-          } else if (field === "qty_max") {
-            item.qty_max = input.value === "" ? 1 : Number(input.value);
-          }
-          state.optionPanel.itemsDirty = true;
-          if (field === "qty_min" || field === "qty_max") {
-            validateItemQtyBounds(input.closest(".option-item-row"));
-            renderOptionHeader();
-          }
-          return;
-        }
-      });
-    });
     refreshOpenAccordions();
   }
 
@@ -9595,7 +9602,7 @@ function updateOptionGroupSelectionUi() {
       return;
     }
 
-    optionAssignmentsList.innerHTML = assignments.map((assignment) => {
+    optionAssignmentsList.innerHTML = renderOptionCatalogRows(assignments, assignment => assignment.assign_id ?? assignment.id, (assignment) => {
       const assignmentKey = assignment.tempId ?? assignment.id;
       const productId = Number(assignment.assign_id ?? assignment.id);
       const product = state.products.find((row) => Number(row.id) === productId)
@@ -9605,16 +9612,16 @@ function updateOptionGroupSelectionUi() {
       });
       return `
         <div class="option-assignment-row">
-          <div class="option-assignment-title">
+          <button class="option-assignment-title option-catalog-product-link" type="button" data-option-open-product="${productId}">
             <div class="option-product-photo">${photo
               ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" />`
-              : '<span>Нет фото</span>'}</div>
+              : ""}</div>
             <div class="options-row-title">${escapeHtml(assignment.product_name || assignment.name || "")}</div>
-          </div>
+          </button>
           ${editable ? `<button class="option-row-remove" type="button" data-assignment-remove="${assignmentKey}" title="Удалить" aria-label="Удалить назначение"><i class="fas fa-times"></i></button>` : ""}
         </div>
       `;
-    }).join("");
+    });
 
     if (!editable) {
       refreshOpenAccordions();
@@ -12369,6 +12376,16 @@ const isViewMode = state.comboPanel.mode === "view";
     if (!optionGroupForm) return;
     const formValues = getOptionGroupFormValues();
     const selectionUi = formValues.selection_type;
+    if (selectionUi === "multiple_group" && (
+      !optionGroupForm.reportValidity() ||
+      (formValues.max_select != null && formValues.max_select < formValues.min_select)
+    )) {
+      if (formValues.max_select != null && formValues.max_select < formValues.min_select) {
+        showToast("Максимум группы не может быть меньше минимума.");
+        optionGroupMaxInput?.focus();
+      }
+      return;
+    }
     const payload = buildOptionGroupPayload(formValues);
 
     if (!payload.title) {
@@ -12415,34 +12432,21 @@ const isViewMode = state.comboPanel.mode === "view";
           type: "option",
           id: res.id,
           title: res.title || "Опция",
-          onActivate: async () => {
-            state.selectedOptionGroupId = res.id;
-            await loadOptionGroupDetails(res.id);
-            renderAllOptionGroupsLists();
-            
-            // Check if this option is being edited
-            if (editingOptions.has(res.id)) {
-              const editingState = editingOptions.get(res.id);
-              state.optionPanel.mode = editingState.mode;
-              state.optionDraft = deepClone(editingState.optionDraft);
-              state.optionPanel.snapshotData = deepClone(editingState.snapshotData);
-              showOptionGroupDetails(state.optionGroupDetails, { mode: editingState.mode });
-            } else {
-              showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode || "view" });
-            }
-          },
+          onActivate: () => activateOptionGroupTab(res.id, true),
         });
         state.optionPanel.tabKey = null;
       }
       
       state.optionDraft = null;
       state.optionPanel.itemsDirty = false;
-      showOptionGroupDetails(state.optionGroupDetails, { mode: "view" });
+      startOptionEdit({ silent: true });
+      showOptionGroupDetails(state.optionGroupDetails, { mode: "edit" });
       return;
     }
 
     if (state.selectedOptionGroupId) {
       if (!isOptionGroupDirty()) {
+        if (state.mode === "options" && !state.optionPanel.returnTo) return;
         state.optionPanel.mode = "view";
         state.optionPanel.itemsDirty = false;
         state.optionDraft = null;
@@ -12476,6 +12480,11 @@ const isViewMode = state.comboPanel.mode === "view";
         await loadOptionGroupDetails(state.selectedOptionGroupId);
         renderAllOptionGroupsLists();
         editingOptions.delete(state.selectedOptionGroupId);
+        if (state.mode === "options" && !state.optionPanel.returnTo) {
+          state.optionPanel.itemsDirty = false;
+          startOptionEdit();
+          return;
+        }
         state.optionPanel.mode = "view";
         state.optionPanel.itemsDirty = false;
         state.optionDraft = null;
@@ -14354,6 +14363,7 @@ const isViewMode = state.comboPanel.mode === "view";
     } else if (type === "option" && Number.isFinite(id)) {
       if (state.optionPanel.mode === "edit" || state.optionPanel.mode === "create") {
         if (state.selectedOptionGroupId === id || state.optionPanel.tabKey === currentTab.key) {
+          if (optionLevelGroup && !optionLevelGroup.classList.contains("hidden")) syncOptionDraftGroupFromForm();
           editingOptions.set(id, {
             mode: state.optionPanel.mode || "view",
             optionDraft: state.optionDraft ? deepClone(state.optionDraft) : null,
@@ -14363,6 +14373,7 @@ const isViewMode = state.comboPanel.mode === "view";
       }
     } else if (type === "option" && isTempTab) {
       if (state.optionPanel.mode === "create" && state.optionPanel.tabKey === currentTab.key) {
+        if (optionLevelGroup && !optionLevelGroup.classList.contains("hidden")) syncOptionDraftGroupFromForm();
         editingOptions.set(idStr, {
           mode: "create",
           optionDraft: state.optionDraft ? deepClone(state.optionDraft) : null,
@@ -15764,39 +15775,30 @@ const isViewMode = state.comboPanel.mode === "view";
     });
   }
 
-  function openOptionGroupTab(groupId, title, { activate = true } = {}) {
+  async function activateOptionGroupTab(groupId, directEdit) {
+    state.selectedOptionGroupId = groupId;
+    await loadOptionGroupDetails(groupId);
+    if (tabsState.activeKey !== buildTabKey("option", groupId) || !state.optionGroupDetails?.group) return;
+    if (directEdit) state.optionPanel.returnTo = null;
+    const editingState = editingOptions.get(groupId);
+    if (editingState) {
+      state.optionDraft = deepClone(editingState.optionDraft);
+      state.optionPanel.snapshotData = deepClone(editingState.snapshotData);
+    } else if (directEdit) {
+      startOptionEdit({ silent: true });
+    }
+    showOptionGroupDetails(state.optionGroupDetails, { mode: editingState?.mode || (directEdit ? "edit" : "view") });
+    renderAllOptionGroupsLists();
+  }
+
+  function openOptionGroupTab(groupId, title, { activate = true, directEdit = false } = {}) {
     if (!Number.isFinite(groupId)) return;
+    if (directEdit && tabsState.activeKey === buildTabKey("option", groupId) && isOptionEditable()) return;
     ensureTab({
       type: "option",
       id: groupId,
       title: title || "Опция",
-      onActivate: async () => {
-        // Save current option's editing state when switching to another option tab
-        const prevId = state.selectedOptionGroupId;
-        if (prevId != null && prevId !== groupId && (state.optionPanel.mode === "edit" || state.optionPanel.mode === "create" || editingOptions.has(prevId))) {
-          editingOptions.set(prevId, {
-            mode: state.optionPanel.mode || "view",
-            optionDraft: state.optionDraft ? deepClone(state.optionDraft) : null,
-            snapshotData: state.optionPanel.snapshotData ? deepClone(state.optionPanel.snapshotData) : null
-          });
-        }
-
-        state.selectedOptionGroupId = groupId;
-        await loadOptionGroupDetails(groupId);
-        if (tabsState.activeKey !== buildTabKey("option", groupId)) return;
-        renderAllOptionGroupsLists();
-
-        // Restore edit state when switching back to an option tab that was being edited
-        if (editingOptions.has(groupId)) {
-          const editingState = editingOptions.get(groupId);
-          state.optionPanel.mode = editingState.mode;
-          state.optionDraft = deepClone(editingState.optionDraft);
-          state.optionPanel.snapshotData = deepClone(editingState.snapshotData);
-          showOptionGroupDetails(state.optionGroupDetails, { mode: editingState.mode });
-        } else {
-          showOptionGroupDetails(state.optionGroupDetails, { mode: state.optionPanel.mode || "view" });
-        }
-      },
+      onActivate: () => activateOptionGroupTab(groupId, directEdit),
       activate,
     });
   }
@@ -26035,7 +26037,11 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         // Option edit cancel
         if (state.mode === "options" && state.optionPanel.mode === "edit" && state.selectedOptionGroupId) {
-          cancelOptionEdit();
+          if (tabsState.activeKey === buildTabKey("option", state.selectedOptionGroupId) && !state.optionPanel.returnTo) {
+            closeTab(tabsState.activeKey);
+          } else {
+            cancelOptionEdit();
+          }
           return;
         }
         // Auto-add edit/create cancel
@@ -26559,6 +26565,68 @@ const isViewMode = state.comboPanel.mode === "view";
         renderAutoAddHeader();
       });
     }
+
+    optionGroupInfo?.addEventListener("click", event => {
+      const wrap = event.target.closest("#optionGroupTypeSelect");
+      if (wrap) {
+        const trigger = $(".new-order-right-select-trigger", wrap);
+        const choice = event.target.closest("[data-option-group-type]");
+        if (choice) {
+          optionGroupSelectionInput.value = choice.dataset.optionGroupType;
+          optionGroupSelectionInput.dispatchEvent(new Event("change", { bubbles: true }));
+          syncOptionGroupTypeSelect(false);
+          trigger.focus();
+        } else if (event.target.closest(".new-order-right-select-trigger")) {
+          const open = !wrap.classList.contains("is-open");
+          syncOptionGroupTypeSelect(open);
+          if (open && event.detail === 0) $(".is-selected", wrap)?.focus();
+        }
+        return;
+      }
+    });
+    document.addEventListener("click", event => {
+      const open = $("#optionGroupTypeSelect.is-open");
+      if (open && !open.contains(event.target)) syncOptionGroupTypeSelect(false);
+    });
+    optionGroupInfo?.addEventListener("keydown", event => {
+      const select = event.target.closest("#optionGroupTypeSelect.is-open");
+      if (select && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        syncOptionGroupTypeSelect(false);
+        $(".new-order-right-select-trigger", select).focus();
+      }
+    });
+    optionItemsList?.addEventListener("change", event => {
+      const input = event.target;
+      if (!input.matches("[data-option-item-limit]") || !isOptionEditable()) return;
+      const key = input.closest("[data-selection-key]").dataset.selectionKey;
+      const item = getOptionItemsSource().find(row => String(row.tempId ?? row.id ?? row.target_product_id) === key);
+      if (!item) return;
+      const field = input.dataset.optionItemLimit;
+      const row = input.closest(".option-product-line");
+      const minInput = $('[data-option-item-limit="qty_min"]', row);
+      const maxInput = $('[data-option-item-limit="qty_max"]', row);
+      const value = Math.max(1, Math.trunc(input.valueAsNumber || 1));
+      if (field === "qty_min") {
+        item.qty_min = value;
+        item.qty_max = Math.max(value, Number(item.qty_max) || 1);
+      } else {
+        item.qty_max = Math.max(Number(item.qty_min) || 1, value);
+      }
+      minInput.value = item.qty_min ?? 1;
+      maxInput.value = item.qty_max;
+      state.optionPanel.itemsDirty = true;
+    });
+    optionItemsList?.addEventListener("wheel", event => {
+      if (!event.cancelable || event.ctrlKey || event.metaKey) return;
+      const track = event.target.closest("[data-option-variant-scroll]");
+      if (!track || track.scrollWidth <= track.clientWidth) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const scale = event.deltaMode === 1 ? 16 : (event.deltaMode === 2 ? track.clientWidth : 1);
+      event.preventDefault();
+      track.scrollLeft += delta * scale;
+    }, { passive: false });
 
     if (optionGroupSelectionInput) {
       optionGroupSelectionInput.addEventListener("change", () => {

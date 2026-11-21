@@ -17835,7 +17835,23 @@ input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
 }
 #optionLevelPicker.is-option-picker{padding:0;}
 #optionLevelPicker.is-option-picker .option-picker-panel{padding:0;border:0;background:transparent;}
-.option-points-section{padding:0;border:0;background:transparent;box-shadow:none;}
+.option-points-section,
+.option-assignments-section{
+  width:calc(100% + 24px);
+  box-sizing:border-box;
+  margin-inline:-12px;
+  padding:0 12px;
+  border:1px solid var(--color-border);
+  border-radius:12px;
+  background:var(--color-surface);
+  box-shadow:none;
+}
+:is(.option-points-section,.option-assignments-section) .acc-header > .acc-trigger{
+  padding-inline:0;
+  border:0;
+  background:transparent;
+  box-shadow:none;
+}
 .option-picker-tabs::-webkit-scrollbar{
   height:0;
   display:none;
@@ -19652,6 +19668,96 @@ body.page-chat #chatRightTabsHeader .chat-mobile-right-back{
 #optionAssignmentsList .option-assignment-row{display:flex;align-items:center;min-height:66px;padding-right:36px;}
 #optionAssignmentsList .option-assignment-title{display:flex;align-items:center;gap:8px;min-width:0;}
 #optionAssignmentsList .option-assignment-title .options-row-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+#optionsGroupsList .options-row{grid-template-columns:minmax(0,2fr) minmax(0,1fr) repeat(4,minmax(0,.8fr));}
+#optionsGroupsList .option-groups-head{
+  color:var(--color-text-muted);
+  font-size:12px;
+  padding-block:5px;
+  border:0;
+  background:transparent;
+  cursor:default;
+  transform:none;
+  box-shadow:none;
+  overflow-wrap:anywhere;
+}
+#optionGroupForm > .option-group-section{display:grid;gap:12px;background:transparent;border:0;padding:0;margin:0}
+#optionGroupForm .option-group-select-field{width:auto;min-width:0}
+#optionGroupTypeSelect .new-order-right-select-trigger{width:100%;min-width:0}
+#optionGroupTypeSelect .new-order-right-select-trigger span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#optionGroupTypeSelect .new-order-right-select-menu{min-width:100%;width:max-content;max-width:calc(100vw - 24px);left:auto;right:0}
+#optionGroupTypeSelect .new-order-right-select-option{white-space:normal;text-align:left}
+#optionGroupInfo .option-limit-input{appearance:textfield;-moz-appearance:textfield}
+#optionGroupInfo .option-limit-input::-webkit-inner-spin-button,
+#optionGroupInfo .option-limit-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+#optionItemsList,#optionAssignmentsList{gap:0}
+#optionItemsList{--option-item-columns:16px minmax(0,1.15fr) minmax(0,1fr) minmax(42px,.38fr)}
+#optionItemsList.has-item-limit{--option-item-columns:16px minmax(0,1.15fr) minmax(0,1fr) minmax(42px,.38fr) 32px 32px}
+#optionItemsList .option-limit-input{
+  width:100%;
+  min-width:0;
+  height:26px;
+  padding:0 4px;
+  border:0;
+  border-bottom:1px solid var(--color-border);
+  border-radius:0;
+  background:transparent;
+  text-align:center;
+  font-size:12px;
+}
+#optionItemsList .option-items-head,
+#optionItemsList .option-product-line-compact{
+  display:grid;
+  grid-template-columns:var(--option-item-columns);
+  align-items:center;
+  gap:6px;
+  padding-right:16px;
+}
+#optionItemsList .option-items-head > span:first-child{grid-column:1 / span 2}
+#optionItemsList .option-items-head,
+.option-catalog-category{padding-block:6px;color:var(--color-text-muted);font-size:11px;border-bottom:1px solid var(--color-border)}
+.option-catalog-category{font-weight:600}
+#optionItemsList .option-item-row,
+#optionAssignmentsList .option-assignment-row{
+  padding:5px 0;
+  border:0;
+  border-bottom:1px solid var(--color-border);
+  border-radius:0;
+  background:transparent;
+  min-height:0;
+}
+#optionItemsList .option-item-title{padding:0}
+#optionItemsList .option-product-line-compact{font-size:12px}
+#optionItemsList .option-product-line-compact > div,
+#optionItemsList .option-items-head > span{min-width:0;overflow-wrap:anywhere}
+#optionItemsList .option-product-photo,
+#optionAssignmentsList .option-product-photo{width:24px;height:24px;flex:0 0 24px}
+#optionItemsList .option-assignment-title,
+#optionAssignmentsList .option-assignment-title{display:flex;flex-direction:row;align-items:center;gap:6px;min-width:0}
+#optionAssignmentsList .option-assignment-row{padding-right:22px}
+#optionAssignmentsList .option-row-remove{right:0;top:4px;width:20px;height:24px;padding:0;background:transparent;border:0}
+#optionItemsList .option-row-remove{right:-6px;top:50%;width:20px;height:24px;padding:0;background:transparent;border:0;transform:translateY(-50%)}
+#optionItemsList .option-item-default-check{justify-self:center}
+#optionItemsList .option-product-line-compact .option-product-variants{
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  overscroll-behavior-x:contain;
+  gap:4px;
+  scrollbar-width:none;
+}
+#optionItemsList .option-product-variants::-webkit-scrollbar{display:none}
+#optionItemsList .option-product-variants .option-product-variant{flex:0 0 auto}
+.option-catalog-product-link{
+  padding:0;
+  border:0;
+  background:none;
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
+}
+.option-catalog-product-link:hover strong,
+.option-catalog-product-link:hover .options-row-title{text-decoration:underline}
 
 .picker-overlay-body {
   flex: 1;

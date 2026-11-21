@@ -186,22 +186,28 @@
 
               <div class="option-group-select-field">
                 <label class="field-label" for="optionGroupSelectionType">Тип выбора</label>
-                <select class="control" id="optionGroupSelectionType" name="selection_type">
+                <select class="hidden" id="optionGroupSelectionType" name="selection_type" tabindex="-1" aria-hidden="true">
                   <option value="single">Один</option>
                   <option value="multiple_group">Несколько (лимит группы)</option>
                   <option value="multiple_item">Несколько (лимит на товар)</option>
                 </select>
+                <div class="new-order-right-select-wrap product-fulfillment-select" id="optionGroupTypeSelect">
+                  <button type="button" class="new-order-right-select-trigger" aria-label="Тип выбора" aria-haspopup="listbox" aria-expanded="false">
+                    <span></span><i class="fas fa-chevron-down" aria-hidden="true"></i>
+                  </button>
+                  <div class="new-order-right-select-menu hidden" role="listbox" aria-label="Тип выбора"></div>
+                </div>
               </div>
 
               <div class="form-row-2 option-group-limits hidden" id="optionGroupLimitsRow">
                 <div>
                   <label class="field-label" for="optionGroupMinSelect">Минимум (шт.)</label>
-                  <input class="control" id="optionGroupMinSelect" name="min_select" type="number" min="0" value="0" />
+                  <input class="control option-limit-input" id="optionGroupMinSelect" name="min_select" type="number" min="0" value="0" />
                 </div>
 
                 <div>
                   <label class="field-label" for="optionGroupMaxSelect">Максимум (шт., пусто = ∞)</label>
-                  <input class="control" id="optionGroupMaxSelect" name="max_select" type="number" min="0" placeholder="∞" />
+                  <input class="control option-limit-input" id="optionGroupMaxSelect" name="max_select" type="number" min="0" placeholder="∞" />
                 </div>
               </div>
 
@@ -211,30 +217,29 @@
               </div>
             </div>
 
-            <!-- ✅ Свитчи как отдельная "нижняя строка" секции -->
-            <div class="form-row-2 option-group-switches">
-              <label class="switch">
-                <input class="switch-input" type="checkbox" id="optionGroupIsActive" />
-                <span class="switch-ui" aria-hidden="true"></span>
-                <span class="switch-text">Активна</span>
+            <div class="auto-add-condition-checks">
+              <label class="auto-add-condition-check">
+                <input class="products-bulk-toggle-all-input" type="checkbox" id="optionGroupIsActive" />
+                <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+                <span>Активна</span>
               </label>
 
-              <label class="switch" id="optionGroupIsRequiredWrap">
-                <input class="switch-input" type="checkbox" id="optionGroupIsRequired" />
-                <span class="switch-ui" aria-hidden="true"></span>
-                <span class="switch-text">Обязательная</span>
+              <label class="auto-add-condition-check" id="optionGroupIsRequiredWrap">
+                <input class="products-bulk-toggle-all-input" type="checkbox" id="optionGroupIsRequired" />
+                <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+                <span>Обязательная</span>
               </label>
 
-              <label class="switch" id="optionGroupAllowVariantsWrap">
-                <input class="switch-input" type="checkbox" id="optionGroupAllowVariants" />
-                <span class="switch-ui" aria-hidden="true"></span>
-                <span class="switch-text">Варианты у пунктов</span>
+              <label class="auto-add-condition-check" id="optionGroupAllowVariantsWrap">
+                <input class="products-bulk-toggle-all-input" type="checkbox" id="optionGroupAllowVariants" />
+                <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+                <span>Варианты у пунктов</span>
               </label>
 
-              <label class="switch" id="optionGroupOutOfStockActionWrap">
-                <input class="switch-input" type="checkbox" id="optionGroupOutOfStockAction" />
-                <span class="switch-ui" aria-hidden="true"></span>
-                <span class="switch-text">Скрывать опцию, если нет товаров</span>
+              <label class="auto-add-condition-check" id="optionGroupOutOfStockActionWrap">
+                <input class="products-bulk-toggle-all-input" type="checkbox" id="optionGroupOutOfStockAction" />
+                <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+                <span>Скрывать опцию, если нет товаров</span>
               </label>
             </div>
           </div>
@@ -261,13 +266,13 @@
           </div>
         </div>
 
-        <div class="info-accordion">
+        <div class="info-accordion option-assignments-section">
           <div class="acc-item">
             <div class="acc-header">
               <button class="stage-item acc-trigger" type="button" data-acc-trigger>
                 <span class="stage-meta stage-text">
                   <b>Назначения</b>
-                  <small class="muted">привязки к товарам</small>
+                  <small class="muted">На каких товарах появляется эта группа</small>
                 </span>
                 <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
               </button>
