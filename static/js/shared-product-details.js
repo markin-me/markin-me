@@ -537,9 +537,9 @@
       if (group) Object.assign(option, ui.buildOptionItemVariantState(item, group, selectedIndex));
       return option;
     });
-    const optionPricing = ui.getSelectedOptionItemsPricingTotals(options);
+    const optionPricing = ui.getSelectedOptionItemsPricingTotals(options, product);
     const ingredientState = new Map((chosen.ingredients || []).map(row => [Number(row.ingredient_id), { quantity: row.quantity ?? row.qty }]));
-    const ingredientPricing = ui.calculateIngredientPricing(details.ingredients || [], ingredientState);
+    const ingredientPricing = ui.calculateIngredientPricing(ui.usesProductPriceSource(product, "composition") ? details.ingredients || [] : [], ingredientState);
     const ordinaryPrice = Math.max(variantPrice, ui.scaleProductBasePriceForCurrentUnit(product, variantPrice, Number(product.old_price || 0)))
       + optionPricing.originalComparableTotal + ingredientPricing.originalDiff;
     const unitPrice = ui.applyProductPromoPricing(product,
@@ -632,7 +632,7 @@
     getOptionItemDisplayPricing: (item, variant) => getRuntime().getOptionItemDisplayPricing(item, variant),
     getSelectionCost,
     applyProductPromoPricing: (product, current, original) => getRuntime().applyProductPromoPricing(product, current, original),
-    getConfiguredBasePrice: (product, group, index) => getRuntime().getVariantUnitPrice(product, group ? [group] : [], { selectedIndex: index }),
+    getConfiguredBasePrice: (product, group, index) => getRuntime().getVariantUnitPrice({ ...product, pricing_config_json: null }, group ? [group] : [], { selectedIndex: index }),
     getPassport: async id => { await fetchPassports([id]); return getPassport(id); },
     getPreorderDescription: product => getRuntime().getProductPreorderDescription(product),
     getPreorderInfo: product => getRuntime().getProductPreorderInfo(product),

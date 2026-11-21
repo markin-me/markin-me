@@ -2,7 +2,7 @@
 SharedProductRuntime.register(function (runtime) {
   "use strict";
 
-async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton, mode, onSave, cartContext, configurationOnly = false, giftQuantity = null } = {}) {
+async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton, mode, onSave, cartContext, configurationOnly = false, giftQuantity = null, catalogRefresh = false } = {}) {
   if (!container) return;
   const renderGeneration = Number(container.__shopProductRenderGeneration || 0) + 1;
   container.__shopProductRenderGeneration = renderGeneration;
@@ -40,6 +40,9 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   if (!product || !['order', 'preorder'].includes(product.sale_mode)) throw new Error('PREORDER_SETTINGS_INVALID');
   const productDetailsConfig = await runtime.resolveProductDetailsConfig(product.id);
   if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
+  if (document.body?.matches(".page-shop:not(.page-kso)")) {
+    product = runtime.getProductPassport?.(product.id)?.product ?? product;
+  }
   let optionGroups = configurationOnly ? [] : runtime.normalizeProductOptionGroups(productDetailsConfig?.optionGroups);
   const ingredients = runtime.getConfigurableIngredients(product, productDetailsConfig?.ingredients);
   const variants = Array.isArray(productDetailsConfig?.variants) ? productDetailsConfig.variants : [];
@@ -58,6 +61,23 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     optionGroups = runtime.normalizeProductOptionGroups(optionGroups);
   }
   if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
+  optionGroups = optionGroups.flatMap(group => {
+    const locked = group.items.filter(item => item.is_locked);
+    if (!locked.length) return [group];
+    return [
+      ...locked.map(item => ({
+        ...group,
+        id: `locked:${group.id}:${item.id}`,
+        title: group.title + " · Закреплено",
+        selection_type: "single",
+        is_required: true,
+        min_select: 1,
+        max_select: 1,
+        items: [item],
+      })),
+      { ...group, items: group.items.filter(item => !item.is_locked) },
+    ];
+  });
   optionGroups = optionGroups.map(group => ({
     ...group,
     items: group.items.filter(item => {
@@ -133,7 +153,8 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     }
   }
   const seedItem =
-    editingItem && typeof editingItem === "object"
+    catalogRefresh && prefillItem ? prefillItem
+      : editingItem && typeof editingItem === "object"
       ? editingItem
       : (prefillItem && typeof prefillItem === "object"
         ? prefillItem
@@ -446,14 +467,14 @@ optionGroups.forEach((group) => {
     actionBtnRef.disabled = false;
 
     const selectedItems = runtime.collectSelectedOptionItems(optionGroups, selectionState);
-    const optionPricingTotals = runtime.getSelectedOptionItemsPricingTotals(selectedItems);
+    const optionPricingTotals = runtime.getSelectedOptionItemsPricingTotals(selectedItems, product);
     const optionTotal = Number(optionPricingTotals.currentTotal || 0);
     const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const variantUnitPrice = runtime.getVariantUnitPrice(product, variants, variantState);
     const basePrice = Number(variantUnitPrice || 0) + optionTotal;
     const ingredientPricing = calculateIngredientPricing();
-    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0); // Разница от базового состава
-    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
+    const ingredientsPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.currentDiff || 0) : 0; // Разница от базового состава
+    const ingredientsOriginalPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.originalDiff || ingredientsPriceDiff) : 0;
     const oldBase = runtime.scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
     const baseOriginalComparable = oldBase > Number(variantUnitPrice || 0)
       ? runtime.roundPrice(oldBase + ingredientsOriginalPriceDiff)
@@ -807,7 +828,9 @@ optionGroups.forEach((group) => {
         if (tpid <= 0) continue;
         const iid = Number(item.id);
         let optQty = 0;
-        if (gState.type === "single" && Number(gState.selectedId || 0) === iid) optQty = 1;
+        if (gState.type === "single" && Number(gState.selectedId || 0) === iid) {
+          optQty = item.is_locked ? Math.max(1, Number(item.qty_min || 1)) : 1;
+        }
         else if (gState.type === "multiple_group" && gState.selectedIds && gState.selectedIds.has(iid)) optQty = 1;
         else if (gState.type === "multiple_item" && gState.qtyById) optQty = Number(gState.qtyById.get(iid) || 0);
         if (optQty <= 0) continue;
@@ -1296,8 +1319,8 @@ optionGroups.forEach((group) => {
       : Number(product.price || 0);
     const safeQty = Math.max(1, Number(qty || 1));
     const ingredientPricing = calculateIngredientPricing();
-    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0);
-    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
+    const ingredientsPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.currentDiff || 0) : 0;
+    const ingredientsOriginalPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.originalDiff || ingredientsPriceDiff) : 0;
 
     const draftResolvedItem = {
       product,
@@ -1324,7 +1347,7 @@ optionGroups.forEach((group) => {
       autoEligibleTotal: runtime.computeAutoEligibleTotal(resolvedItems),
     };
     const pricing = runtime.computeItemPricing(draftResolvedItem, totals);
-    const optionPricingTotals = runtime.getSelectedOptionItemsPricingTotals(selectedItems);
+    const optionPricingTotals = runtime.getSelectedOptionItemsPricingTotals(selectedItems, product);
     const optionCurrentTotal = Number(optionPricingTotals.currentTotal || 0);
     const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const oldUnitBase = runtime.scaleProductBasePriceForCurrentUnit(product, variantUnitPrice || Number(product.price || 0), Number(product.old_price || 0));
@@ -1444,8 +1467,8 @@ optionGroups.forEach((group) => {
     
     // Рассчитываем разницу цены ингредиентов для сохранения в корзину
     const ingredientPricing = calculateIngredientPricing();
-    const ingredientsPriceDiff = Number(ingredientPricing.currentDiff || 0);
-    const ingredientsOriginalPriceDiff = Number(ingredientPricing.originalDiff || ingredientsPriceDiff);
+    const ingredientsPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.currentDiff || 0) : 0;
+    const ingredientsOriginalPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.originalDiff || ingredientsPriceDiff) : 0;
     const draftResolvedItem = {
       product,
       product_id: Number(product.id || 0),
@@ -1470,7 +1493,7 @@ optionGroups.forEach((group) => {
       autoEligibleTotal: runtime.computeAutoEligibleTotal(resolvedItems),
     };
     const pricing = runtime.computeItemPricing(draftResolvedItem, pricingTotals);
-    const optionPricingTotals = runtime.getSelectedOptionItemsPricingTotals(selectedItems);
+    const optionPricingTotals = runtime.getSelectedOptionItemsPricingTotals(selectedItems, product);
     const optionCurrentTotal = Number(optionPricingTotals.currentTotal || 0);
     const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const oldUnitBase = runtime.scaleProductBasePriceForCurrentUnit(
@@ -1738,6 +1761,18 @@ optionGroups.forEach((group) => {
     product,
     stockSelectionMode: container.dataset.stockSelectionMode || "auto",
     refreshAvailability: refreshVariantAvailability,
+    refreshCatalogProduct(nextProduct) {
+      const items = runtime.collectSelectedOptionItems(optionGroups, selectionState);
+      return renderProductDetailsInto(container, nextProduct, {
+        onBack, cartKey, readOnly, favoriteButton, mode, onSave, cartContext, configurationOnly, giftQuantity, catalogRefresh: true,
+        prefillItem: {
+          product_id: product.id, qty,
+          variant_group_id: variantState.groupId, variant_value_index: variantState.selectedIndex,
+          ingredients: buildCurrentIngredientQuantities(),
+          option_item_ids: items.map(item => Number(item.id)), option_items: items,
+        },
+      });
+    },
   };
   if (!container.dataset.stockSelectionMode) container.dataset.stockSelectionMode = "auto";
   if (container.dataset.stockSelectionBound !== "1") {

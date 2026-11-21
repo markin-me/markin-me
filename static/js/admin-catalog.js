@@ -831,7 +831,7 @@
       isOrderReadyPassport(passport)
       && passport.editor && typeof passport.editor === "object"
       && passport.editor.schema_version === "product-editor-v1"
-      && passport.editor.catalog_details_version === 2
+      && passport.editor.catalog_details_version === 3
       && passport.editor.option_details && typeof passport.editor.option_details === "object"
       && Array.isArray(passport.editor.categories)
       && Array.isArray(passport.editor.discounts)
@@ -861,7 +861,10 @@
 
   function materializePassport(passport) {
     if (!passport?.editor?.references_normalized) return passport;
-    const relatedProductIds = uniqueIds((passport.ingredients || []).map((row) => row?.ingredient_id));
+    const relatedProductIds = uniqueIds([
+      ...(passport.ingredients || []).map(row => row?.ingredient_id),
+      ...Object.keys(passport.nestedIngredients || {}),
+    ]);
     const relatedProductUnitLinks = {};
     relatedProductIds.forEach((productId) => {
       const links = editorReferences.relatedProductUnitLinks[productId]
@@ -2301,7 +2304,7 @@
         return;
       }
       durableOrderReadyProductIds.add(id);
-      if (row.editorReady === true && row.editorDetailsVersion === 2 && editorReferencesIndexed) durableEditorReadyProductIds.add(id);
+      if (row.editorReady === true && row.editorDetailsVersion === 3 && editorReferencesIndexed) durableEditorReadyProductIds.add(id);
     });
     notify("coverage", candidateIds);
     if (missingIndexIds.length) {

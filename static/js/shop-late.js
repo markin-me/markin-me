@@ -290,6 +290,51 @@ window.addEventListener('shop:kso-catalog-invalidated', event => {
   comboBlockPreviewResolvedCache.clear();
 });
 
+window.addEventListener("shop:storefront-catalog-changed", event => {
+  const { ids, reset } = event.detail;
+  const changed = new Set(ids);
+  const relevant = new Set([...(collectVisibleProductIdsForStock() || []), ...state.productPassports.keys()]);
+  if (openProductCtx?.productId) relevant.add(Number(openProductCtx.productId));
+  const refresh = [...relevant].filter(id => {
+    if (reset || changed.has(id)) return true;
+    const passport = getProductPassport(id);
+    return Object.keys(passport?.nestedIngredients || {}).some(key => changed.has(Number(key)))
+      || passport?.ingredients?.some(item => changed.has(Number(item.ingredient_id)))
+      || passport?.optionGroups?.some(group => group.items?.some(item => changed.has(Number(item.target_product_id || item.product_id))));
+  });
+  for (const id of refresh) {
+    advanceStockConfigGeneration(id);
+    upsellDefaultConfigCache.delete(id);
+    productDetailsConfigCache.delete(id);
+    defaultPriceCache.delete(id);
+  }
+  void (async () => {
+    await preloadProductPassportsBatch(refresh, { details: true, force: true });
+    const refreshed = new Set(refresh);
+    for (const [categoryId, products] of state.productsByCategory) {
+      state.productsByCategory.set(categoryId, products.flatMap(product => {
+        const id = Number(product.id);
+        if (!refreshed.has(id)) return [product];
+        const next = state.productCache.get(id);
+        const categories = next?.category_ids;
+        return next && (!Array.isArray(categories) || categories.includes(Number(categoryId))) ? [next] : [];
+      }));
+    }
+    if (reset || ids.some(id => !refreshed.has(id))) await loadProductsByCategory();
+    renderProducts();
+    const ctx = openProductCtx;
+    if (ctx?.container?.isConnected && refreshed.has(Number(ctx.productId))) {
+      const product = state.productCache.get(Number(ctx.productId));
+      if (product) await ctx.refreshCatalogProduct?.(product);
+      else {
+        showToast("Товар больше недоступен");
+        ctx.onBack?.();
+      }
+    }
+    renderCart();
+  })().catch(error => console.error("Storefront catalog refresh failed", error));
+});
+
 function normalizeProductDetailIds(productIds, limit = 0) {
   const ids = Array.isArray(productIds)
     ? Array.from(new Set(productIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)))
@@ -309,6 +354,7 @@ function productPassportHasDetails(productId) {
   return Boolean(
     passport &&
     passport.product &&
+    (!String(passport.product.client_composition || "").trim() || passport.nestedIngredients != null) &&
     Array.isArray(passport.ingredients) &&
     Array.isArray(passport.variants) &&
     Array.isArray(passport.optionAssignments) &&
@@ -342,12 +388,15 @@ function applyProductPassportPayload(productId, payload) {
 
   const patch = { product };
   if (Array.isArray(payload.ingredients)) patch.ingredients = payload.ingredients;
+  if (payload.nestedIngredients && typeof payload.nestedIngredients === "object") patch.nestedIngredients = payload.nestedIngredients;
   if (Array.isArray(payload.variants)) patch.variants = normalizeComboVariantList(payload.variants);
   if (Array.isArray(payload.optionAssignments)) patch.optionAssignments = payload.optionAssignments;
   if (Array.isArray(payload.option_groups)) {
     patch.optionGroups = payload.option_groups;
   } else if (Array.isArray(payload.optionGroups)) {
     patch.optionGroups = payload.optionGroups;
+  } else if (Array.isArray(payload.options)) {
+    patch.optionGroups = payload.options;
   } else if (payload.option_groups && typeof payload.option_groups === "object") {
     patch.optionGroups = buildProductOptionGroupsFromBatch(
       pid,
@@ -437,15 +486,35 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
   }
 
   const task = (async () => {
-    const json = await apiJson('/api/public/products/batch/passports', {
-      method: 'POST',
-      body: { ids },
-    });
-    const data = json?.data && typeof json.data === "object" ? json.data : {};
-    ids.forEach((id) => {
-      const payload = data[id] || data[String(id)] || null;
-      if (payload && typeof payload === "object") applyProductPassportPayload(id, payload);
-    });
+    if (!isKsoCatalogCache) syncStorefrontCatalogScope();
+    const scope = storefrontCatalogScope();
+    let generation;
+    do {
+      generation = storefrontCatalogGeneration;
+      const revision = storefrontCatalogRevision;
+      const cached = !isKsoCatalogCache && !opts.force
+        ? await storefrontPassportStorage(ids, null, scope, revision).catch(() => ({})) : {};
+      const missing = ids.filter(id => !cached[id]);
+      const chunks = Array.from({ length: Math.ceil(missing.length / 100) }, (_, index) => missing.slice(index * 100, (index + 1) * 100));
+      const endpoint = isKsoCatalogCache ? '/api/public/products/batch/passports' : '/api/public/products/batch/full-passports';
+      const responses = await Promise.all(chunks.map(chunk => apiJson(endpoint, {
+        method: 'POST', body: { ids: chunk, fresh: !isKsoCatalogCache && Boolean(opts.force) },
+      })));
+      if (!isKsoCatalogCache && scope !== storefrontCatalogScope()) return;
+      if (generation !== storefrontCatalogGeneration) continue;
+      const data = Object.assign({}, ...responses.map(response => response.data || {}));
+      for (const id of ids) {
+        const payload = data[id] || cached[id];
+        if (payload) applyProductPassportPayload(id, payload);
+        else if (!isKsoCatalogCache && opts.force) {
+          state.productPassports.delete(id);
+          state.productCache.delete(id);
+        }
+      }
+      if (!isKsoCatalogCache && missing.length) {
+        await storefrontPassportStorage(missing, data, scope, revision).catch(error => console.warn("Could not persist storefront passports", error));
+      }
+    } while (generation !== storefrontCatalogGeneration);
   })().finally(() => {
     if (batchKey) productPassportBatchInflight.delete(batchKey);
     ids.forEach((id) => {
@@ -1999,6 +2068,7 @@ async function mountProductDetails(options = {}) {
   }
 
   function renderComboDetailsInto(container, combo, { onBack, cartKey, prefillItem, favoriteButton } = {}) {
+    const allowIngredientChanges = !document.body?.matches(".page-shop:not(.page-kso)");
     if (!container) return;
     const isStandaloneComboPage = container === standaloneDetailsContent;
     const comboIdForRender = Number(combo?.id || combo?.combo_id || 0);
@@ -2932,7 +3002,7 @@ async function mountProductDetails(options = {}) {
             const ingId = Number(ing.ingredient_id);
             if (Number.isFinite(ingId)) ingredientQty.set(ingId, Number(ing.quantity ?? ing.qty ?? 0));
           });
-        } else if (useRandomizer) {
+        } else if (useRandomizer && allowIngredientChanges) {
           ingredients.forEach((ing) => {
             const ingId = Number(ing.ingredient_id);
             if (!Number.isFinite(ingId)) return;
@@ -3023,7 +3093,7 @@ async function mountProductDetails(options = {}) {
       const variantGroupTitle = str(o.variantGroupTitle || "").trim();
       const variantUnit = str(o.variantUnit || "").trim();
       const label = str(variantLabel || "").trim();
-      const ingList = Array.isArray(ingredientsDisplay) ? ingredientsDisplay : [];
+      const ingList = allowIngredientChanges && Array.isArray(ingredientsDisplay) ? ingredientsDisplay : [];
 
       detailsWrap.innerHTML = "";
 
@@ -3075,6 +3145,7 @@ async function mountProductDetails(options = {}) {
     }
 
     function renderComboFallbackDetailLines(detailsWrap, rawText) {
+      if (!allowIngredientChanges) return false;
       const lines = getComboDescriptionDetailLines(rawText);
       if (!lines.length) return false;
       detailsWrap.innerHTML = "";
@@ -4381,7 +4452,7 @@ async function mountProductDetails(options = {}) {
               expandInner.appendChild(vBlock);
             }
 
-            if (ingredients.length) {
+            if (allowIngredientChanges && ingredients.length) {
               const ingBlock = document.createElement("div");
               ingBlock.className = "shop-combo-picker-ingredients";
               const ingTitle = document.createElement("div");
@@ -14502,6 +14573,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
   }
 
   function formatCheckoutBenefitIngredientLine(ingredient) {
+    if (document.body?.matches(".page-shop:not(.page-kso)")) return "";
     const name = str(ingredient?.name || ingredient?.ingredient_name || "").trim();
     if (!name) return "";
     const qty = Number(ingredient?.qty ?? ingredient?.quantity ?? 0);
@@ -16163,9 +16235,9 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         const hasVariants = Array.isArray(details?.variants) && details.variants.some((group) => (
           Array.isArray(group?.values) && group.values.length > 0
         ));
-        const hasVariableIngredients = Array.isArray(details?.ingredients) && details.ingredients.some((ingredient) => (
-          Number(ingredient?.is_variable ?? 1) === 1
-        ));
+        const hasVariableIngredients = !document.body?.matches(".page-shop:not(.page-kso)")
+          && Array.isArray(details?.ingredients)
+          && details.ingredients.some(ingredient => Number(ingredient?.is_variable ?? 1) === 1);
         return {
           ...resolvedItem,
           has_configurable: hasVariants || hasVariableIngredients,
@@ -16261,8 +16333,9 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           ]);
           if (!host.isConnected || !product) return;
           const variants = Array.isArray(details?.variants) ? details.variants : [];
-          const ingredients = (Array.isArray(details?.ingredients) ? details.ingredients : [])
-            .filter((ingredient) => Number(ingredient?.is_variable ?? 1) === 1);
+          const ingredients = document.body?.matches(".page-shop:not(.page-kso)") ? []
+            : (Array.isArray(details?.ingredients) ? details.ingredients : [])
+                .filter(ingredient => Number(ingredient?.is_variable ?? 1) === 1);
           const currentConfig = normalizeCheckoutBenefitProductConfig(
             resolvedItem?.product_config,
             productId

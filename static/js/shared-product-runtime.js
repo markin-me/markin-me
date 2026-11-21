@@ -54,6 +54,7 @@ SharedProductRuntime.register(function (runtime) {
   "use strict";
 
   function getConfigurableIngredients(product, ingredients) {
+    if (document.body?.matches(".page-shop:not(.page-kso)")) return [];
     let config = product?.blocks_config ?? product?.blocks_config_json;
     if (typeof config === "string") config = JSON.parse(config);
     if (config && (config.ingredients === false || config.ingredients === 0)) return [];
@@ -302,10 +303,12 @@ function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsB
           product_price: Number(item.product_price || 0),
           product_base_qty: Number(item.product_base_qty || 1) || 1,
           product_base_unit_id: item.product_base_unit_id ? Number(item.product_base_unit_id) : null,
+          is_locked: Boolean(item.is_locked ?? item.product_is_locked),
           product_unit_id: item.product_unit_id ? Number(item.product_unit_id) : null,
           qty_min: item.qty_min ?? 1,
           qty_max: item.qty_max ?? 1,
           nutrition_per_100g: item.nutrition_per_100g || null,
+          nutrition_incomplete: Boolean(item.nutrition_incomplete),
           nutrition_per_portion: item.nutrition_per_portion || null,
           base_qty_grams: item.base_qty_grams,
           nutrition_portion_grams: item.nutrition_portion_grams,
@@ -959,10 +962,13 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
             id: item.id,
             title: item.title,
             price: getPriceWithVariant(item, itemId),
-            qty: 1,
+            qty: item.is_locked ? Math.max(1, Number(item.qty_min || 1)) : 1,
             target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
             product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
             nutrition_per_100g: item.nutrition_per_100g || null,
+            nutrition_incomplete: Boolean(item.nutrition_incomplete),
+            product_base_qty: item.product_base_qty,
+            product_base_unit_id: item.product_base_unit_id,
             nutrition_per_portion: item.nutrition_per_portion || null,
             base_qty_grams: item.base_qty_grams,
             nutrition_portion_grams: item.nutrition_portion_grams,
@@ -998,6 +1004,9 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
               target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
               product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
               nutrition_per_100g: item.nutrition_per_100g || null,
+              nutrition_incomplete: Boolean(item.nutrition_incomplete),
+              product_base_qty: item.product_base_qty,
+              product_base_unit_id: item.product_base_unit_id,
               nutrition_per_portion: item.nutrition_per_portion || null,
               base_qty_grams: item.base_qty_grams,
               nutrition_portion_grams: item.nutrition_portion_grams,
@@ -1034,6 +1043,9 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
               target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
               product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
               nutrition_per_100g: item.nutrition_per_100g || null,
+              nutrition_incomplete: Boolean(item.nutrition_incomplete),
+              product_base_qty: item.product_base_qty,
+              product_base_unit_id: item.product_base_unit_id,
               nutrition_per_portion: item.nutrition_per_portion || null,
               base_qty_grams: item.base_qty_grams,
               nutrition_portion_grams: item.nutrition_portion_grams,
@@ -1206,9 +1218,6 @@ function createQtyPill({
 function normalizeProductOptionGroups(optionGroups) {
     return (Array.isArray(optionGroups) ? optionGroups : []).map((group) => ({
       ...group,
-      ...((group.items || []).some(item => item.is_locked) ? {
-        selection_type: 'single', is_required: true, min_select: 1, max_select: 1,
-      } : {}),
       items: (Array.isArray(group?.items) ? group.items : []).map((item) => runtime.normalizeOptionItemForDisplay(item)),
     }));
   }

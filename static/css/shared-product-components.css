@@ -2000,6 +2000,30 @@ body.page-kso .shop-cart-items-section .shop-cart-item-row .cart-bottom-row .qty
   line-height: 1.45;
   white-space: pre-wrap;
 }
+.shop-pd-nutrition-card[hidden]{display:none;}
+
+.shop-pd-composition-card{position:relative;}
+.shop-pd-composition-info{
+  padding:0 0 0 4px;
+  border:0;
+  background:transparent;
+  color:var(--color-text);
+  font:inherit;
+  cursor:pointer;
+}
+.shop-pd-composition-info:hover,.shop-pd-composition-info:focus-visible{color:var(--color-primary);}
+.shop-pd-composition-popover{
+  position:absolute;
+  inset-inline:12px;
+  z-index:1;
+  padding:8px 12px;
+  border:1px solid var(--color-border);
+  border-radius:8px;
+  background:#fff;
+  color:var(--color-text);
+  box-shadow:0 4px 14px rgb(0 0 0 / 12%);
+  overflow-wrap:anywhere;
+}
 
 @media (max-width: 380px){
   .shop-pd-nutrition-grid{

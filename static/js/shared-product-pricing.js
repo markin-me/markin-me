@@ -2,6 +2,13 @@
 SharedProductRuntime.register(function (runtime) {
   "use strict";
 
+  function usesProductPriceSource(product, source) {
+    const raw = product?.pricing_config_json;
+    const config = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (config?.mode === "manual") return false;
+    return config?.mode !== "auto" || !Array.isArray(config.sources) || config.sources.includes(source);
+  }
+
   function applyProductPromoPricing(product, current, original) {
     const amount = Math.max(0, Number(current || 0));
     const ordinary = Math.max(amount, Number(original || 0));
@@ -160,6 +167,7 @@ function getOptionItemVariantUnitPrice(optionItem, variantGroup, selectedIndex) 
 
     const productId = Number(optionItem?.target_product_id || 0);
     const product = productId > 0 ? runtime.state.productCache.get(productId) : null;
+    if (product && !runtime.usesProductPriceSource(product, "variants")) return Number(product.price || 0);
 
     let unitPrice = null;
 
@@ -295,7 +303,7 @@ function computeItemPricing(item, totals) {
     }
 
     if (!isAutoItem && Number(item?.product?.promo_enabled) === 1) {
-      const optionPricing = runtime.getSelectedOptionItemsPricingTotals(item.option_items || []);
+      const optionPricing = runtime.getSelectedOptionItemsPricingTotals(item.option_items || [], item.product);
       const originalBase = Math.max(parts.baseProductUnit, runtime.scaleProductBasePriceForCurrentUnit(
         item.product, parts.baseProductUnit, Number(item.product.old_price || 0)));
       unitPrice = applyProductPromoPricing(item.product, unitPrice,
@@ -453,10 +461,10 @@ function getItemUnitParts(item) {
     const ov = item?.unit_price_override != null ? Number(item.unit_price_override) : null;
     const vp = item?.variant_unit_price != null ? Number(item.variant_unit_price) : null;
     const baseProductUnit = Number(
-      (ov != null ? ov : (vp != null && vp !== 0 ? vp : null)) ?? item?.product?.price ?? 0
+      (ov != null ? ov : (runtime.usesProductPriceSource(item?.product, "variants") && vp != null && vp !== 0 ? vp : null)) ?? item?.product?.price ?? 0
     );
-    const optionTotal = runtime.optionItemsTotal(item?.option_items || []);
-    const ingredientDiff = Number(item?.ingredient_price_diff || 0);
+    const optionTotal = runtime.usesProductPriceSource(item?.product, "options") ? runtime.optionItemsTotal(item?.option_items || []) : 0;
+    const ingredientDiff = runtime.usesProductPriceSource(item?.product, "composition") ? Number(item?.ingredient_price_diff || 0) : 0;
     const baseUnit = baseProductUnit + optionTotal + ingredientDiff;
     return { baseProductUnit, optionTotal, ingredientDiff, baseUnit };
   }
@@ -658,6 +666,7 @@ function toStockVariantValue(rawLabel) {
 function getVariantUnitPrice(product, variants, variantState) {
     if (!product) return 0;
     const basePrice = Number(product.price || 0);
+    if (!runtime.usesProductPriceSource(product, "variants")) return basePrice;
     if (!Array.isArray(variants) || !variants.length) return basePrice;
     const selectedIndex = Number(variantState?.selectedIndex);
     if (!Number.isFinite(selectedIndex)) return basePrice;
@@ -689,7 +698,8 @@ function getVariantUnitPrice(product, variants, variantState) {
     return unitPrice;
   }
 
-function getSelectedOptionItemsPricingTotals(optionItems) {
+function getSelectedOptionItemsPricingTotals(optionItems, product = null) {
+    if (!runtime.usesProductPriceSource(product, "options")) return { currentTotal: 0, originalComparableTotal: 0 };
     return (Array.isArray(optionItems) ? optionItems : []).reduce((totals, item) => {
       const qty = Math.max(0, Number(item?.qty || item?.quantity || 1)) || 1;
       const pricing = runtime.getOptionItemDisplayPricing(item, runtime.getSelectedOptionItemVariantData(item));
@@ -740,7 +750,7 @@ function getQtyInBase(ing, qty) {
     return factor != null ? Number(qty || 0) * factor : null;
   }
 
-  return { applyProductPromoPricing, calculateIngredientPricing, calculateProductDiscountAmount, getOptionItemPrice, getOptionItemResolvedDisplayBasePrice, getOptionItemVariantUnitPrice, parseVariantValueNumber, getOptionItemDefaultVariantMeta, roundPrice, getPriceRoundingSettings, getOptionItemTargetProduct, scaleProductBasePriceForCurrentUnit, computeItemPricing, calculateCatalogBuyXGetYApplication, getCatalogBuyXGetYRule, calcAutoFreeQty, parseRuleAmount, getItemUnitParts, optionItemsTotal, getAutoRuleByProductId, computeAutoEligibleTotal, computeNonAutoTotal, getOptionItemDisplayPricing, getDiscountBadgeTextForPricePair, getOptionItemPriceScaleRatio, getOptionItemResolvedOriginalBasePrice, getOptionItemCurrentDisplayPrice, calcConsumedPerUnit, toStockVariantValue, getVariantUnitPrice, getSelectedOptionItemsPricingTotals, getSelectedOptionItemVariantData, getQtyInBase };
+  return { usesProductPriceSource, applyProductPromoPricing, calculateIngredientPricing, calculateProductDiscountAmount, getOptionItemPrice, getOptionItemResolvedDisplayBasePrice, getOptionItemVariantUnitPrice, parseVariantValueNumber, getOptionItemDefaultVariantMeta, roundPrice, getPriceRoundingSettings, getOptionItemTargetProduct, scaleProductBasePriceForCurrentUnit, computeItemPricing, calculateCatalogBuyXGetYApplication, getCatalogBuyXGetYRule, calcAutoFreeQty, parseRuleAmount, getItemUnitParts, optionItemsTotal, getAutoRuleByProductId, computeAutoEligibleTotal, computeNonAutoTotal, getOptionItemDisplayPricing, getDiscountBadgeTextForPricePair, getOptionItemPriceScaleRatio, getOptionItemResolvedOriginalBasePrice, getOptionItemCurrentDisplayPrice, calcConsumedPerUnit, toStockVariantValue, getVariantUnitPrice, getSelectedOptionItemsPricingTotals, getSelectedOptionItemVariantData, getQtyInBase };
 });
 
 SharedProductRuntime.register(function (runtime) {
@@ -811,28 +821,34 @@ async function calculateDefaultPrice(product) {
       
       // ????????? ????????? ???????????? ????? ?? ?????????
       for (const group of optionGroups) {
+        if (!runtime.usesProductPriceSource(product, "options")) break;
         const groupType = runtime.getOptionGroupUiType(group);
+        const items = group.items || [];
+        for (const item of items.filter(item => item.is_locked)) {
+          price += runtime.getOptionItemResolvedDefaultPrice(item) * Math.max(1, Number(item.qty_min || 1));
+        }
+        const choices = items.filter(item => !item.is_locked);
         
-        if (groupType === "single" && group.is_required && group.items?.length > 0) {
+        if (groupType === "single" && choices.length > 0) {
           // ??? single ? is_required ? ????? ?????? ??????? ??? ?????????
-          const defaultItem = group.items[0];
+          const defaultItem = choices.find(item => item.effective_default_selected)
+            || (group.is_required || Number(group.min_select) > 0 ? choices[0] : null);
+          if (!defaultItem) continue;
           const defaultItemPrice = runtime.getOptionItemResolvedDefaultPrice(defaultItem);
           if (Number.isFinite(defaultItemPrice)) {
             price += defaultItemPrice;
           }
         } else if (groupType === "multiple_item" || groupType === "multiple_group") {
           const minSelect = Math.max(0, Number(group?.min_select ?? 0));
-          if (minSelect <= 0) continue;
-
-          let selectedCount = 0;
-          for (const item of (group.items || [])) {
-            if (selectedCount >= minSelect) break;
+          const selected = choices.filter(item => item.effective_default_selected);
+          for (const item of choices) {
+            if (selected.length >= minSelect) break;
+            if (!selected.includes(item)) selected.push(item);
+          }
+          for (const item of selected) {
             const qtyMin = Number(item?.qty_min ?? 0);
             const defaultQty = qtyMin > 0 ? qtyMin : 1;
-            if (item.price) {
-              price += Number(item.price || 0) * defaultQty;
-            }
-            selectedCount += 1;
+            price += runtime.getOptionItemResolvedDefaultPrice(item) * defaultQty;
           }
         }
       }

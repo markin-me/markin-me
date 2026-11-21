@@ -116,24 +116,28 @@ function buildProductDetailsContent(
     return match ? Number(match[0]) : NaN;
   }
 
-  function getSelectedVariantGrams(variantGroups, stateEntry) {
+  function getSelectedVariantGrams(variantGroups, stateEntry, sourceProduct) {
     const groups = Array.isArray(variantGroups) ? variantGroups : [];
-    const group = groups[0] || null;
+    const group = groups.find(row => Number(row.id || row.variant_group_id) === Number(stateEntry?.variant_group_id)) || groups[0];
     const idx = Number(stateEntry?.selectedIndex ?? stateEntry?.variant_value_index ?? group?.default_value_index);
     const values = Array.isArray(group?.values) ? group.values : [];
     if (!group || !Number.isFinite(idx) || idx < 0 || idx >= values.length) return null;
     const value = parseProductNutritionVariantValue(values[idx]);
-    const factor = readProductNutritionNumber(group.unit_to_grams_factor);
+    const baseQty = Number(sourceProduct?.base_qty ?? sourceProduct?.product_base_qty);
+    const baseUnit = Number(sourceProduct?.base_unit_id ?? sourceProduct?.product_base_unit_id);
+    const baseGrams = getProductBaseNutritionGrams(sourceProduct);
+    const factor = readProductNutritionNumber(group.unit_to_grams_factor)
+      ?? (baseUnit > 0 && Number(group.unit_id) === baseUnit && baseQty > 0 && baseGrams > 0 ? baseGrams / baseQty : null);
     if (!Number.isFinite(value) || value <= 0 || factor == null || factor <= 0) return null;
     return value * factor;
   }
 
   function getProductBaseNutritionGrams(sourceProduct) {
-    return readProductNutritionNumber(sourceProduct?.nutrition_portion_grams ?? sourceProduct?.base_qty_grams);
+    return readProductNutritionNumber(sourceProduct?.base_qty_grams ?? sourceProduct?.nutrition_portion_grams);
   }
 
   function addConfiguredProductNutrition(target, sourceProduct, sourceVariants, sourceVariantState, multiplier = 1) {
-    const selectedGrams = getSelectedVariantGrams(sourceVariants, sourceVariantState);
+    const selectedGrams = getSelectedVariantGrams(sourceVariants, sourceVariantState, sourceProduct);
     const baseGrams = getProductBaseNutritionGrams(sourceProduct);
     const grams = selectedGrams != null ? selectedGrams : baseGrams;
     const per100 = sourceProduct?.nutrition_per_100g && typeof sourceProduct.nutrition_per_100g === "object"
@@ -157,6 +161,14 @@ function buildProductDetailsContent(
     const totals = { protein: 0, fat: 0, carbs: 0 };
     let totalGrams = 0;
     const activeIngredients = Array.isArray(ingredients) ? ingredients : [];
+    const hasCompleteNutrition = source => !source?.nutrition_incomplete
+      && ["protein", "fat", "carbs"].every(key => readProductNutritionNumber(source?.nutrition_per_100g?.[key]) != null);
+    const selectedOptions = runtime.collectSelectedOptionItems(optionGroups, selectionState);
+    const hasOwnPortion = !selectedOptions.length || activeIngredients.length > 0
+      || (runtime.getProductPassport?.(Number(product?.id))?.ingredients?.length > 0)
+      || getProductBaseNutritionGrams(product) > 0 || variants?.length > 0
+      || ["protein", "fat", "carbs"].some(key => readProductNutritionNumber(product?.nutrition_per_100g?.[key]) != null);
+    let complete = !hasOwnPortion || hasCompleteNutrition(product);
     if (activeIngredients.length) {
       const basePortion = product?.nutrition_per_portion && typeof product.nutrition_per_portion === "object"
         ? product.nutrition_per_portion
@@ -172,11 +184,13 @@ function buildProductDetailsContent(
         const baseQty = Number(ing.quantity ?? 1);
         const calcQty = basePortion ? qty - baseQty : qty;
         const unitToGrams = readProductNutritionNumber(ing.unit_to_grams_factor);
+        if (qty > 0 && (!hasCompleteNutrition(ing) || !(unitToGrams > 0))) complete = false;
         const diffGrams = unitToGrams != null ? calcQty * unitToGrams : null;
         recipeGrams += addNutritionPortion(recipeTotals, ing.nutrition_per_100g, diffGrams);
       });
       const recipePer100 = nutritionPer100FromTotals(recipeTotals, recipeGrams);
-      const selectedVariantGrams = getSelectedVariantGrams(variants, variantState);
+      const selectedVariantGrams = getSelectedVariantGrams(variants, variantState, product);
+      if (variants?.length && selectedVariantGrams == null) complete = false;
       const selectedGrams = selectedVariantGrams != null ? selectedVariantGrams : recipeGrams;
       if (recipePer100 && selectedGrams > 0) {
         totalGrams += addNutritionPortion(totals, recipePer100, selectedGrams);
@@ -184,30 +198,30 @@ function buildProductDetailsContent(
         addNutritionValues(totals, recipeTotals);
         totalGrams += recipeGrams;
       }
-    } else {
+    } else if (hasOwnPortion) {
+      if (variants?.length && getSelectedVariantGrams(variants, variantState, product) == null) complete = false;
       totalGrams += addConfiguredProductNutrition(totals, product, variants, variantState);
     }
 
-    runtime.collectSelectedOptionItems(optionGroups, selectionState).forEach((item) => {
+    selectedOptions.forEach((item) => {
       const itemQty = Number(item.qty || 1) || 1;
-      totalGrams += addConfiguredProductNutrition(totals, item, item.variants, item, itemQty);
+      const grams = addConfiguredProductNutrition(totals, item, item.variants, item, itemQty);
+      if (!hasCompleteNutrition(item) || !(grams > 0)
+        || (item.variants?.length && getSelectedVariantGrams(item.variants, item, item) == null)) complete = false;
+      totalGrams += grams;
     });
 
     totals.kcal = calcProductNutritionKcal(totals);
-    return { totals, totalGrams };
+    return { totals, totalGrams, complete };
   }
 
   let nutritionMode = "per100";
   let refreshNutritionCard = () => {};
 
   function appendProductNutritionCard() {
-    if (productBlocksConfig.nutrition !== true) return;
     const nutrition = product?.nutrition_per_100g && typeof product.nutrition_per_100g === "object"
       ? product.nutrition_per_100g
-      : null;
-    if (!nutrition) return;
-    const hasAnyValue = ["kcal", "protein", "fat", "carbs"].some((key) => Number.isFinite(Number(nutrition[key])));
-    if (!hasAnyValue) return;
+      : {};
 
     const card = document.createElement("div");
     card.className = "shop-pd-nutrition-card";
@@ -238,6 +252,8 @@ function buildProductDetailsContent(
     };
     refreshNutritionCard = () => {
       const current = getCurrentProductNutritionTotals();
+      card.hidden = !current.complete || !(current.totalGrams > 0);
+      if (card.hidden) return;
       const values = nutritionMode === "portion"
         ? current.totals
         : (
@@ -268,7 +284,6 @@ function buildProductDetailsContent(
   }
 
   function appendProductDescriptionCard() {
-    if (productBlocksConfig.description !== true) return;
     const text = runtime.str(product?.description || "").trim();
     if (!text) return;
 
@@ -286,7 +301,7 @@ function buildProductDetailsContent(
   }
 
   function appendProductClientCompositionCard() {
-    if (productBlocksConfig.ingredients !== true) return;
+    if (!document.body?.matches(".page-shop:not(.page-kso)") && productBlocksConfig.ingredients !== true) return;
     const text = runtime.str(product?.client_composition || "").trim();
     if (!text) return;
 
@@ -297,9 +312,59 @@ function buildProductDetailsContent(
     title.textContent = "Состав";
     const body = document.createElement("div");
     body.className = "shop-pd-info-card-body";
-    body.textContent = text;
+    const passport = runtime.getProductPassport?.(Number(product?.id));
+    const subcompositions = new Map();
+    for (const ingredient of passport?.ingredients || []) {
+      const id = Number(ingredient.ingredient_id);
+      const rows = passport.nestedIngredients?.[id] || runtime.getProductPassport?.(id)?.ingredients || [];
+      const composition = rows.map(row => row.ingredient_name).filter(Boolean).join(", ");
+      if (composition) subcompositions.set(runtime.str(ingredient.ingredient_name).trim().toLowerCase(), composition);
+    }
+    const popover = document.createElement("div");
+    popover.className = "shop-pd-composition-popover";
+    popover.hidden = true;
+    let activeButton = null;
+    const closePopover = () => {
+      activeButton?.setAttribute("aria-expanded", "false");
+      activeButton = null;
+      popover.hidden = true;
+    };
+    for (const part of text.split(/([,;\n])/)) {
+      const composition = subcompositions.get(part.trim().toLowerCase());
+      if (!composition) {
+        body.append(part);
+        continue;
+      }
+      body.append(part.trimEnd());
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "shop-pd-composition-info";
+      button.setAttribute("aria-label", "Посмотреть состав: " + part.trim());
+      button.setAttribute("aria-expanded", "false");
+      button.innerHTML = '<i class="fas fa-info-circle" aria-hidden="true"></i>';
+      button.addEventListener("click", () => {
+        const wasOpen = activeButton === button;
+        closePopover();
+        if (wasOpen) return;
+        activeButton = button;
+        button.setAttribute("aria-expanded", "true");
+        popover.textContent = "Состав: " + composition;
+        popover.style.top = `${button.getBoundingClientRect().bottom - card.getBoundingClientRect().top + 4}px`;
+        popover.hidden = false;
+        button.focus({ preventScroll: true });
+      });
+      button.addEventListener("blur", closePopover);
+      button.addEventListener("keydown", event => {
+        if (event.key === "Escape" && activeButton) {
+          event.stopPropagation();
+          closePopover();
+        }
+      });
+      body.append(button, part.match(/\s*$/)[0]);
+    }
     card.appendChild(title);
     card.appendChild(body);
+    card.appendChild(popover);
     scroll.appendChild(card);
   }
 

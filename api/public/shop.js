@@ -54,7 +54,7 @@ const {
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
 const {createOrderOnlinePayment,paymentError} = require('../../data/order-online-payment');
 const {isOrderEligibleForFulfillment} = require('../helpers/orderFulfillment');
-const {applyProductPromoPricing,buildOnlineItemPrices, autoAddFreeQty, loadAutoAddRuleConfig, validateAutoAddOrder, syncAutoAddOrderUsage, normalizeProductConfiguration} = require('../helpers/orderOnlinePricing');
+const {usesProductPriceSource,applyProductPromoPricing,buildOnlineItemPrices, autoAddFreeQty, loadAutoAddRuleConfig, validateAutoAddOrder, syncAutoAddOrderUsage, normalizeProductConfiguration} = require('../helpers/orderOnlinePricing');
 const {getOrderPaymentSummary,storedProjection,clientPaymentSummary}=require('../helpers/orderPaymentSummary');
 const {
   MessengerAuthError,
@@ -1830,7 +1830,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return Array.isArray(rows) ? rows : [];
   }
 
-  async function applyPublicProductBlocksToRows(rows, tenantId, storeId) {
+  async function applyPublicProductBlocksToRows(rows, tenantId, storeId, { includeEditorData = false } = {}) {
     const list = Array.isArray(rows) ? rows : [];
     if (!list.length) return;
     const map = await resolveProductBlocksConfigMap(tenantId, storeId, list);
@@ -1838,23 +1838,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const productId = Number(row?.id || row?.product_id || 0);
       const blocksConfig = map.get(productId) || getDefaultProductBlocksConfig();
       row.blocks_config = blocksConfig;
-      if (!blocksConfig.description) {
-        row.description_short = null;
-        row.description = null;
+      if (!includeEditorData) {
+        row.description_short = String(row.description_short || '').trim() || null;
+        row.description = String(row.description || '').trim() || null;
       }
-      if (!blocksConfig.ingredients) {
-        row.client_composition = null;
-      }
-      if (!blocksConfig.nutrition) {
-        row.nutrition_kcal_100g = null;
-        row.nutrition_per_100g = null;
-        row.nutrition_per_portion = null;
-        row.nutrition_incomplete = false;
-      }
-      if (Number(row.show_description_short) === 0) row.description_short = null;
-      if (Number(row.show_description) === 0) row.description = null;
-      if (Number(row.show_client_composition) === 0) row.client_composition = null;
-      if (Number(row.show_tech_process) === 0) row.tech_process = null;
+      row.client_composition = String(row.client_composition || '').trim() || null;
+      if (!includeEditorData) delete row.tech_process;
     });
   }
 
@@ -2066,19 +2055,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     const list = Array.isArray(rows) ? rows : [];
     const nutritionCache = await getPublicProductNutritionDetailsBatch(
       tenantId,
-      list.filter((row) => row?.blocks_config?.nutrition !== false).map((row) => row?.id || row?.product_id),
+      list.map((row) => row?.id || row?.product_id),
       new Map()
     );
     for (const row of list) {
       const productId = Number(row?.id || row?.product_id || 0);
       if (!productId) continue;
-      if (row.blocks_config && row.blocks_config.nutrition === false) {
-        row.nutrition_kcal_100g = null;
-        row.nutrition_per_100g = null;
-        row.nutrition_per_portion = null;
-        row.nutrition_incomplete = false;
-        continue;
-      }
       const details = nutritionCache.get(productId);
       if (!details) continue;
       const result = {
@@ -4943,8 +4925,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
              AND og.is_active=1
              AND NOT EXISTS (SELECT 1 FROM prod_option_item_exclusions e WHERE e.tenant_id=oa.tenant_id
                AND e.product_id=oa.assign_id AND e.group_id=og.id AND e.option_item_id=oi.id)
-             AND (settings.is_locked=1 OR NOT EXISTS (SELECT 1 FROM prod_option_item_product_settings locked
-               WHERE locked.tenant_id=oa.tenant_id AND locked.product_id=oa.assign_id AND locked.group_id=og.id AND locked.is_locked=1))
              AND oi.target_type='product'
              AND oi.is_active=1
              AND oi.target_product_id IS NOT NULL`,
@@ -5074,7 +5054,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
   async function computeDisplayPriceForProduct(product, variant, getConversionFactor, roundPrice) {
     const basePrice = Number(product.price || 0);
 
-    if (!variant || !variant.values || !variant.values.length) {
+    if (!usesProductPriceSource(product, "variants") || !variant || !variant.values || !variant.values.length) {
       return roundPrice(basePrice);
     }
 
@@ -5131,6 +5111,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       : (variantGroup.default_value_index != null ? Number(variantGroup.default_value_index) : 0);
     if (!Number.isFinite(rawIndex) || rawIndex < 0 || rawIndex >= values.length) return 0;
     return rawIndex;
+  }
+
+  function getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle) {
+    const locked = items.filter(item => item.is_locked);
+    const choices = items.filter(item => !item.is_locked);
+    const defaults = choices.filter(item => item.effective_default_selected);
+    if (selectionType === 'single') {
+      return [...locked, ...(defaults.length ? defaults.slice(0, 1) : requiredSingle ? choices.slice(0, 1) : [])];
+    }
+    for (const item of choices) {
+      if (defaults.length >= Math.max(0, minSelect)) break;
+      if (!defaults.includes(item)) defaults.push(item);
+    }
+    return [...locked, ...defaults];
   }
 
   async function computeOptionItemResolvedDefaultPrice(optionItem, getConversionFactor, roundPrice, original = false) {
@@ -5424,6 +5418,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
            i.default_variant_value_index,
            p.price AS product_price,
            p.old_price AS product_old_price,
+           p.pricing_config_json AS target_pricing_config_json,
            p.base_unit_id AS product_base_unit_id,
            p.base_qty AS product_base_qty,
            p.unit_id AS product_unit_id,
@@ -5543,6 +5538,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
             id: targetProductId,
             price: Number(optionItemRow.product_price || 0),
             old_price: Number(optionItemRow.product_old_price || 0),
+            pricing_config_json: optionItemRow.target_pricing_config_json,
             base_unit_id: optionItemRow.product_base_unit_id,
             base_qty: optionItemRow.product_base_qty,
             unit_id: optionItemRow.product_unit_id,
@@ -5629,32 +5625,27 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
               effective_default_variant_value_index: setting?.variant_override_enabled
                 ? setting.default_variant_value_index : item.default_variant_value_index,
             };
-          }).filter((item, index, all) => !all.some(row => row.is_locked) || item.is_locked);
+          });
         if (!items.length) continue;
-        const selectionType = items.some(item => item.is_locked) ? 'single' : str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
-        const minSelect = items.some(item => item.is_locked) ? 1 : Number(groupMeta.min_select ?? assignment.min_select ?? 0);
+        const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
+        const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
         const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
-        const configured = items.filter((item) => item.is_locked || (!items.some(row => row.is_locked) && item.effective_default_selected));
-        const selected = selectionType === 'single'
-          ? (configured.length ? configured.slice(0, 1) : (requiredSingle ? items.slice(0, 1) : []))
-          : configured.slice();
-        if (selectionType !== 'single') {
-          for (const item of items) {
-            if (selected.length >= Math.max(0, minSelect)) break;
-            if (!selected.includes(item)) selected.push(item);
-          }
-        }
+        const selected = getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle);
         for (const defaultItem of selected) {
           const qty = Math.max(1, Number(defaultItem.qty_min || 1));
-          const defaultOptionPrice = await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice);
-          displayPrice += defaultOptionPrice * qty;
-          originalDisplayPrice += Math.max(defaultOptionPrice, await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice, true)) * qty;
+          if (usesProductPriceSource(row, "options")) {
+            const defaultOptionPrice = await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice);
+            displayPrice += defaultOptionPrice * qty;
+            originalDisplayPrice += Math.max(defaultOptionPrice, await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice, true)) * qty;
+          }
           const line = formatCatalogDefaultOptionLine(defaultItem, qty);
           if (line) catalogDefaultLines.push(line);
         }
       }
       row.display_price = applyProductPromoPricing(row, displayPrice, originalDisplayPrice, roundPrice);
-      if (originalDisplayPrice > row.display_price) row.original_price = roundPrice(originalDisplayPrice);
+      const roundedOriginalPrice = roundPrice(originalDisplayPrice);
+      row.catalog_original_price = roundedOriginalPrice > row.display_price ? roundedOriginalPrice : null;
+      if (row.catalog_original_price != null) row.original_price = row.catalog_original_price;
       const defaultVariantOriginalPrice = roundPrice(Math.max(displayPrice, originalDisplayPrice));
       row.catalog_default_lines = catalogDefaultLines.slice(0, 12);
       if (variant && Array.isArray(variant.values)) {
@@ -14766,7 +14757,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         if (allCategoryId && categoryId === allCategoryId) {
           const [loadedRows] = await db.query(
-            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.promo_enabled, p.promo_discount_percent, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+            `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.promo_enabled, p.promo_discount_percent, p.pricing_config_json, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
               p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
               p.client_composition, p.tech_process,
               p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -14802,7 +14793,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         }
 
         const [loadedRows] = await db.query(
-          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.promo_enabled, p.promo_discount_percent, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
+          `SELECT p.id, p.tenant_id, p.name, p.description_short, p.price, p.old_price, p.promo_enabled, p.promo_discount_percent, p.pricing_config_json, p.base_qty, p.base_unit_id, p.unit_id, p.photos_json, p.blocks_config_json,
             p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
             p.client_composition, p.tech_process,
             p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
@@ -15857,7 +15848,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             };
           });
         const activeItems = configuredItems.filter((item) => !excludedItemIds.has(Number(item.id))
-          && (product?.sale_mode === 'preorder' || item.product_sale_mode === 'order'));
+          && (item.is_locked || product?.sale_mode === 'preorder' || item.product_sale_mode === 'order'));
         if (!details) return;
         if (!activeItems.length && !details.group?.is_required && !(Number(details.group?.min_select) > 0)) return;
         groups.push({
@@ -15871,8 +15862,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             ? (Number(details.group?.is_required ?? 1) === 1)
             : false,
           has_explicit_default: configuredItems.some((item) => item.has_explicit_default),
-          items: activeItems.filter(item => !configuredItems.some(row => row.is_locked) || item.is_locked),
-          ...(configuredItems.some(item => item.is_locked) ? { selection_type: 'single', is_required: true, min_select: 1, max_select: 1 } : {}),
+          items: activeItems,
         });
       });
       optionGroupsByProduct[pid] = groups;
@@ -15970,39 +15960,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           selectedOptionItems.push(out);
         };
 
-        if (group.has_explicit_default) {
-          const configured = items.filter((item) => item.is_locked || (!items.some(row => row.is_locked) && item.effective_default_selected));
-          const selected = selectionType === 'single' ? configured.slice(0, 1) : configured;
-          selected.forEach((item) => addDefaultOptionItem(item, item.qty_min));
-          if (selectionType === 'single') {
-            if (!selected.length && requiredSingle) addDefaultOptionItem(items[0], 1);
-            return;
-          }
-          const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
-          let selectedCount = selected.length;
-          for (const item of items) {
-            if (selectedCount >= requiredCount) break;
-            if (selected.includes(item)) continue;
-            addDefaultOptionItem(item, item.qty_min);
-            selectedCount += 1;
-          }
-          return;
-        }
-
-        if (selectionType === 'single') {
-          if (requiredSingle) addDefaultOptionItem(items[0], 1);
-          return;
-        }
-        if (selectionType === 'multiple_group' || selectionType === 'multiple_item' || selectionType === 'multiple') {
-          const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
-          let selectedCount = 0;
-          items.forEach((item) => {
-            if (selectedCount >= requiredCount) return;
-            const qtyMin = Number(item?.qty_min ?? 0);
-            addDefaultOptionItem(item, qtyMin > 0 ? qtyMin : 1);
-            selectedCount += 1;
-          });
-        }
+        getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle)
+          .forEach(item => addDefaultOptionItem(item, item.qty_min));
       });
 
       defaultConfigs[pid] = {
@@ -16057,6 +16016,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          i.id,
          i.ingredient_id,
          i.quantity,
+         ${options.includeEditorData ? 'i.loss_percent, EXISTS (SELECT 1 FROM prod_product_ingredients child_recipe WHERE child_recipe.tenant_id=p.tenant_id AND child_recipe.product_id=p.id) AS ingredient_has_composition,' : ''}
          i.unit_id,
          i.quantity_min,
          i.quantity_max,
@@ -16105,6 +16065,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         ingredient_id: ingredientId,
         ingredient_name: str(row.ingredient_name || ''),
         quantity: Number(row.quantity || 0),
+        ...(options.includeEditorData ? { loss_percent: Number(row.loss_percent || 0), ingredient_has_composition: Boolean(row.ingredient_has_composition) } : {}),
         qty: Number(row.quantity || 0),
         unit_id: row.unit_id != null ? Number(row.unit_id) : null,
         unit_code: str(row.unit_code || ''),
@@ -16135,17 +16096,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       relatedProductIds.add(ingredientId);
     });
 
-    const firstLevelIngredientIds = getPositiveIds([...relatedProductIds].filter((id) => !ids.includes(id)));
+    let pendingRecipeIds = getPositiveIds([...relatedProductIds].filter((id) => !ids.includes(id)));
     const nestedIngredientsByProductId = {};
-    firstLevelIngredientIds.forEach((id) => { nestedIngredientsByProductId[id] = []; });
-    if (firstLevelIngredientIds.length) {
-      const nestedPlaceholders = firstLevelIngredientIds.map(() => '?').join(',');
+    const visitedRecipeIds = new Set(ids);
+    while (pendingRecipeIds.length) {
+      const batch = pendingRecipeIds;
+      pendingRecipeIds = [];
+      batch.forEach(id => { visitedRecipeIds.add(id); nestedIngredientsByProductId[id] = []; });
+      const nestedPlaceholders = batch.map(() => '?').join(',');
       const [nestedRows] = await db.query(
         `SELECT
            i.product_id,
            i.id,
            i.ingredient_id,
            i.quantity,
+           ${options.includeEditorData ? 'i.loss_percent, p.photos_json AS ingredient_photos_json, EXISTS (SELECT 1 FROM prod_product_ingredients child_recipe WHERE child_recipe.tenant_id=p.tenant_id AND child_recipe.product_id=p.id) AS ingredient_has_composition,' : ''}
            i.unit_id,
            i.quantity_min,
            i.quantity_max,
@@ -16171,7 +16136,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          LEFT JOIN prod_units u ON u.tenant_id=i.tenant_id AND u.id=i.unit_id
          WHERE i.tenant_id=? AND i.product_id IN (${nestedPlaceholders})
          ORDER BY i.product_id ASC, i.sort_order ASC, i.id ASC`,
-        [storeId, tenantId, ...firstLevelIngredientIds]
+        [storeId, tenantId, ...batch]
       );
       (Array.isArray(nestedRows) ? nestedRows : []).forEach((row) => {
         const productId = Number(row.product_id || 0);
@@ -16184,6 +16149,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           ingredient_id: ingredientId,
           ingredient_name: str(row.ingredient_name || ''),
           quantity: Number(row.quantity || 0),
+          ...(options.includeEditorData ? {
+            loss_percent: Number(row.loss_percent || 0),
+            ingredient_has_composition: Boolean(row.ingredient_has_composition),
+            ingredient_photos: safeJsonArray(row.ingredient_photos_json),
+          } : {}),
           qty: Number(row.quantity || 0),
           unit_id: row.unit_id != null ? Number(row.unit_id) : null,
           unit_code: str(row.unit_code || ''),
@@ -16205,6 +16175,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         });
         relatedProductIds.add(ingredientId);
       });
+      if (options.includeEditorData) pendingRecipeIds = getPositiveIds([...relatedProductIds].filter(id => !visitedRecipeIds.has(id)));
     }
 
     const relatedIds = getPositiveIds([...relatedProductIds]);
@@ -16596,6 +16567,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       'quantity_min', 'quantity_max', 'quantity_step', 'price_override', 'is_variable',
       'sort_order', 'ingredient_price', 'ingredient_fulfillment_mode',
       'ingredient_base_unit_id', 'ingredient_base_qty', 'ingredient_unit_id',
+      'nutrition_per_100g', 'nutrition_incomplete', 'unit_to_grams_factor',
       'ingredient_photos_json',
     ]);
   }
@@ -16603,14 +16575,14 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   function sanitizePublicProductPassport(passport) {
     const product = pickPublicFields(passport?.product, [
       'id', 'name', 'description_short', 'description', 'price', 'old_price',
-      'display_price',
-      'promo_enabled', 'promo_title', 'promo_discount_percent',
+      'display_price', 'catalog_original_price', 'catalog_default_lines', 'default_variant', 'original_price', 'discounted_price',
+      'promo_enabled', 'promo_title', 'promo_discount_percent', 'pricing_config_json',
       'unit_id', 'base_unit_id', 'base_qty', 'fulfillment_mode', 'sale_mode', 'preorder_settings_json',
       'photos_json', 'photos', 'photo', 'photo_thumb',
       'nutrition_protein_100g', 'nutrition_fat_100g', 'nutrition_carbs_100g',
-      'nutrition_per_100g', 'nutrition_per_portion', 'nutrition_portion_grams', 'nutrition_incomplete',
+      'nutrition_per_100g', 'nutrition_per_portion', 'base_qty_grams', 'nutrition_portion_grams', 'nutrition_incomplete',
       'client_composition', 'show_description_short', 'show_description', 'show_client_composition',
-      'is_active', 'site_visibility', 'is_available', 'category_ids', 'categoryIds',
+      'is_active', 'site_visibility', 'is_available', 'stock_qty', 'blocks_config', 'category_ids', 'categoryIds',
       'discount', 'buy_x_get_y_badge',
     ]);
     const nestedIngredients = {};
@@ -16654,10 +16626,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
       const includeInactiveHidden = options.includeInactiveHidden === true;
       const cacheKey = makePublicCacheKey(
-        includeInactiveHidden ? 'admin-products-batch-full-passports-v1' : 'products-batch-full-passports-v2',
+        includeInactiveHidden ? 'admin-products-batch-full-passports-v1' : 'products-batch-full-passports-v3',
         { tenantId, storeId, ids: sortedIds, productsStamp }
       );
-      const cached = includeInactiveHidden ? null : getPublicCache(cacheKey);
+      const cached = includeInactiveHidden || options.fresh ? null : getPublicCache(cacheKey);
       if (cached) return { payload: cached, cacheStatus: 'HIT' };
 
       const placeholders = ids.map(() => '?').join(',');
@@ -16677,7 +16649,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         p.is_available = p.stock_qty == null || Number(p.stock_qty) > 0;
       }
       await applyPublicProductAvailability(rows, tenantId, storeId);
-      await applyPublicProductBlocksToRows(rows, tenantId, storeId);
+      await applyPublicProductBlocksToRows(rows, tenantId, storeId, { includeEditorData: includeInactiveHidden });
       await applyPublicProductNutrition(rows, tenantId);
       await enrichProductsWithDisplayPrice(rows, tenantId, storeId);
       await enrichProductsWithDiscounts(rows, tenantId, storeId);
@@ -16696,7 +16668,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const id = Number(product?.id || 0);
         if (!(id > 0)) return;
         const passport = buildPublicFullProductPassport(product, details, support, availabilityByProductId);
-        if (includeInactiveHidden) passport.editor.variants_visibility_respected = true;
+        if (includeInactiveHidden) {
+          passport.editor.variants_visibility_respected = true;
+          const recipes = {};
+          const visited = new Set([id]);
+          const pending = passport.ingredients.map(row => row.ingredient_id);
+          for (let index = 0; index < pending.length; index++) {
+            const ingredientId = pending[index];
+            if (visited.has(ingredientId)) continue;
+            visited.add(ingredientId);
+            const recipe = support.ingredientsByProductId?.[ingredientId] ?? support.nestedIngredientsByProductId?.[ingredientId] ?? [];
+            recipes[ingredientId] = recipe;
+            for (const row of recipe) pending.push(row.ingredient_id);
+          }
+          passport.nestedIngredients = recipes;
+          passport.editor.relatedProductUnitLinks = Object.fromEntries(
+            [...visited].map(productId => [productId, support.productUnitLinksByProductId?.[productId] || []])
+          );
+        }
         data[String(id)] = includeInactiveHidden ? passport : sanitizePublicProductPassport(passport);
         versions[String(id)] = product.updated_at || product.updatedAt || null;
       });
@@ -16726,7 +16715,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const ids = getPositiveIds(rawIds);
       if (!ids.length) return res.json({ ok: true, data: {}, versions: {} });
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
-      const result = await buildFullProductPassportsPayload(tenantId, storeId, ids);
+      const result = await buildFullProductPassportsPayload(tenantId, storeId, ids, { fresh: req.body?.fresh === true });
       res.set('x-public-cache', result.cacheStatus);
       res.json(result.payload);
     } catch (e) {
@@ -18197,12 +18186,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 has_explicit_default: Boolean(item.default_selected) || own?.default_selected != null,
               };
             });
-          const items = configuredItems.filter((item) => !excludedItemIds.has(Number(item?.id || 0))
-            && (!configuredItems.some(row => row.is_locked) || item.is_locked));
+          const items = configuredItems.filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
           if (!items.length) return;
 
-          const selectionType = items.some(item => item.is_locked) ? 'single' : str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
-          const minSelect = items.some(item => item.is_locked) ? 1 : Number(groupMeta.min_select ?? assignment.min_select ?? 0);
+          const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
+          const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
           const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
 
           const addDefaultOptionItem = (item, qty) => {
@@ -18267,43 +18255,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             selectedOptionItems.push(out);
           };
 
-          if (configuredItems.some((item) => item.has_explicit_default)) {
-            const selected = items.filter((item) => item.is_locked || (!items.some(row => row.is_locked) && item.effective_default_selected));
-            const defaults = selectionType === 'single' ? selected.slice(0, 1) : selected;
-            defaults.forEach((item) => addDefaultOptionItem(item, item.qty_min));
-            if (selectionType === 'single') {
-              if (!defaults.length && requiredSingle) addDefaultOptionItem(items[0], 1);
-              return;
-            }
-            const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
-            let selectedCount = defaults.length;
-            for (const item of items) {
-              if (selectedCount >= requiredCount) break;
-              if (defaults.includes(item)) continue;
-              addDefaultOptionItem(item, item.qty_min);
-              selectedCount += 1;
-            }
-            return;
-          }
-
-          if (selectionType === 'single') {
-            if (requiredSingle) addDefaultOptionItem(items[0], 1);
-            return;
-          }
-
-          if (selectionType === 'multiple_group' || selectionType === 'multiple_item' || selectionType === 'multiple') {
-            const requiredCount = Number.isFinite(minSelect) ? Math.max(0, Math.floor(minSelect)) : 0;
-            if (requiredCount <= 0) return;
-
-            let selectedCount = 0;
-            items.forEach((item) => {
-              if (selectedCount >= requiredCount) return;
-              const qtyMin = Number(item?.qty_min ?? 0);
-              const defaultQty = qtyMin > 0 ? qtyMin : 1;
-              addDefaultOptionItem(item, defaultQty);
-              selectedCount += 1;
-            });
-          }
+          getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle)
+            .forEach(item => addDefaultOptionItem(item, item.qty_min));
         });
 
         const ingredients = ingredientsRaw
