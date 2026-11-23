@@ -112,11 +112,13 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }else{
       await dualWriteSession(conn,{tenantId,storeId:helpers.getStoreId(req),customerId:r.account_id,token,expiresAt:null,isActive:1,authStrength:'strong',userAgent:String(req.headers['user-agent']||'').slice(0,500),ipAddress:String(req.ip||'').slice(0,64)});
       if(r.guest_session_hash){
+        await require('../chatTemp').bindGuestChatForAuthorization(conn,tenantId,r.guest_session_hash,req);
         await customerAuth.promoteGuest(conn,tenantId,str(req.headers['x-customer-token']),r,helpers.getStoreId(req));
         await syncCustomerOrderMetrics(conn,tenantId,r.account_id);
       }
       else if(str(req.headers['x-customer-token']).startsWith('g_'))throw new MessengerAuthError('GUEST_SESSION_MISMATCH',403);
     }
+    await require('../chatTemp').claimVisitorAfterAuthorization(conn,tenantId,r.account_id,token,r.guest_session_hash,req);
     const [[customer]]=await conn.query("SELECT id,name,phone,DATE_FORMAT(birthday,'%Y-%m-%d') birthday,photo FROM cust_customers WHERE tenant_id=? AND id=?",[tenantId,r.account_id]);
     return {ok:true,token,customer};
   }
@@ -186,7 +188,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     }catch(error){sendCustomerMessengerError(res,error);}
   });
   router.post('/auth/phone-flow/verify',async(req,res)=>{
-    try{res.json(await verifyCustomerBrowserCode(db,{tenantId:browserCustomerTenant(req),requestId:req.body.request_id,binding:req.cookies?.messenger_browser,code:req.body.code,onVerified:(conn,r)=>customerBrowserSession(conn,r,req)}));}
+    try{
+      await require('../chatTemp').prepareVisitorThreadClaim();
+      res.json(await verifyCustomerBrowserCode(db,{tenantId:browserCustomerTenant(req),requestId:req.body.request_id,binding:req.cookies?.messenger_browser,code:req.body.code,onVerified:(conn,r)=>customerBrowserSession(conn,r,req)}));
+    }
     catch(error){sendCustomerMessengerError(res,error);}
   });
   router.post('/auth/guest',async(req,res)=>{
@@ -198,7 +203,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     try{
       const tenantId=browserCustomerTenant(req),guest=await customerAuth.getGuest(db,tenantId,token,false,helpers.getStoreId(req));if(!guest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
       const customer=customerAuth.guestCustomer(guest),route=req.path;
-      if((req.method==='PUT'&&route==='/')||(['POST','DELETE'].includes(req.method)&&route==='/photo')){req.authGuest=guest;return next();}
+      if((req.method==='PUT'&&route==='/')||(['POST','DELETE'].includes(req.method)&&route==='/photo'))return res.status(403).json({ok:false,error:'GUEST_OPERATION_FORBIDDEN'});
       if(req.method==='GET'&&route==='/bootstrap')return res.json({ok:true,data:{customer,addresses:guest.addresses}});
       if(req.method==='GET'&&route==='/')return res.json({ok:true,data:customer,customer});
       if(req.method==='GET'&&route==='/settings-bootstrap'){
@@ -257,6 +262,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
   });
   router.post('/auth/messenger-browser/status', async (req,res)=>{
     try{
+      await require('../chatTemp').prepareVisitorThreadClaim();
       const tenantId=browserCustomerTenant(req);
       const value=await consumeBrowserRequest(db,{tenantId,accountType:'customer',requestId:req.body.request_id,
         binding:req.cookies?.messenger_browser,guestToken:str(req.headers['x-customer-token']),storeId:helpers.getStoreId(req),cancel:req.body.cancel===true,onVerified:async(conn,r)=>{
@@ -6062,8 +6068,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
       const token = str(req.headers['x-customer-token']);
-      const customer = token ? await getCustomerByToken(tenantId, token, { refreshSession: false }) : null;
-      if (token && !customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const guest=token.startsWith('g_')?await customerAuth.getGuest(db,tenantId,token,false,storeId):null;
+      const customer = token && !token.startsWith('g_') ? await getCustomerByToken(tenantId, token, { refreshSession: false }) : null;
+      if (token && !customer && !guest) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
+      const chatOwner=!customer?await require('../chatTemp').resolvePresenceChatOwner(req):null;
 
       const presence = {
         scope: { tenantId, storeId },
@@ -6071,7 +6079,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         tabId,
       };
       if (visible) {
-        presenceService.touch({ ...presence, clientId: customer ? Number(customer.id) : null, mode, visible: true });
+        presenceService.touch({ ...presence, clientId: customer ? Number(customer.id) : chatOwner?.isVisitor?Number(chatOwner.id):null,
+          isCustomer:Boolean(customer),mode, visible: true });
       } else {
         presenceService.leave(presence);
       }
@@ -8649,12 +8658,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const token = str(req.headers['x-customer-token']);
-      if(req.authGuest){
-        const name=normalizeRequiredCustomerName(req.body?.name);
-        if(!name)return res.status(400).json({ok:false,error:'NAME_REQUIRED'});
-        await customerAuth.updateGuestProfile(db,tenantId,token,{name},helpers.getStoreId(req));
-        return res.json({ok:true});
-      }
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
@@ -8685,6 +8688,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         [...params, tenantId, customer.id]
       );
 
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
+        await require('../helpers/orderCustomerDisplay').publishCustomerNameChanged({db,ordersEvents,tenantId,customerId:customer.id});
+      }
+
       res.json({ ok: true });
     } catch (e) {
       console.error(e);
@@ -8703,7 +8710,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       try {
         const tenantId = helpers.getTenantId(req);
         const token = str(req.headers['x-customer-token']);
-        const customer = req.authGuest || await getCustomerByToken(tenantId, token);
+        const customer = await getCustomerByToken(tenantId, token);
         if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 
         const file =
@@ -8742,8 +8749,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const rel = path.relative(staticRoot, convertedPath).replace(/\\/g, '/');
         const photoUrl = `/static/${rel}`;
 
-        if(req.authGuest)await customerAuth.updateGuestProfile(db,tenantId,token,{photo:photoUrl},helpers.getStoreId(req));
-        else await db.query(
+        await db.query(
           `UPDATE cust_customers
            SET photo=?
            WHERE tenant_id=? AND id=?`,
@@ -8763,10 +8769,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     try {
       const tenantId = helpers.getTenantId(req);
       const token = str(req.headers['x-customer-token']);
-      if(req.authGuest){
-        await customerAuth.updateGuestProfile(db,tenantId,token,{photo:null},helpers.getStoreId(req));
-        return res.json({ok:true});
-      }
       const customer = await getCustomerByToken(tenantId, token);
       if (!customer) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
 

@@ -4609,7 +4609,8 @@
   function getCustomerCache() {
     try {
       const raw = localStorage.getItem(CUSTOMER_CACHE_KEY);
-      return raw ? JSON.parse(raw) : null;
+      const cached = raw ? JSON.parse(raw) : null;
+      return cached?.is_guest ? { ...cached, name: 'Гость', photo: null } : cached;
     } catch { return null; }
   }
   function normalizeReferralCode(value) {

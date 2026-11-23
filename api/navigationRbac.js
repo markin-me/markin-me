@@ -184,6 +184,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
   if (route === '/clients/filters/preview-count') return byAction('marketing.segments', 'read');
   if (route.startsWith('/clients/filters')) return byAction('marketing.segments');
   if (route.startsWith('/clients')) {
+    if (context === 'chat' && action === 'read' && /^\/clients\/chat-guests\/[0-9]+$/.test(route)) return 'chat.threads.read';
     if (context === 'chat' && action === 'read' && /^\/clients\/[^/]+(?:\/orders(?:\/header-candidate)?)?$/.test(route)) {
       return 'chat.threads.read';
     }

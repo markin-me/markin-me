@@ -37,13 +37,13 @@ class PresenceService {
   adjustCounts(record, visitor, from, to) {
     if (from !== OFFLINE) {
       record.counts.siteVisitors -= 1;
-      if (visitor.clientId) record.counts.identifiedClients -= 1;
-      if (visitor.clientId && from === CHAT_ACTIVE) record.counts.chatClients -= 1;
+      if (visitor.clientId && visitor.isCustomer!==false) record.counts.identifiedClients -= 1;
+      if (visitor.clientId && visitor.isCustomer!==false && from === CHAT_ACTIVE) record.counts.chatClients -= 1;
     }
     if (to !== OFFLINE) {
       record.counts.siteVisitors += 1;
-      if (visitor.clientId) record.counts.identifiedClients += 1;
-      if (visitor.clientId && to === CHAT_ACTIVE) record.counts.chatClients += 1;
+      if (visitor.clientId && visitor.isCustomer!==false) record.counts.identifiedClients += 1;
+      if (visitor.clientId && visitor.isCustomer!==false && to === CHAT_ACTIVE) record.counts.chatClients += 1;
     }
   }
 
@@ -55,7 +55,7 @@ class PresenceService {
     });
   }
 
-  touch({ scope, presenceSessionId, tabId, clientId = null, mode = SITE_ACTIVE, visible = true, now = Date.now() }) {
+  touch({ scope, presenceSessionId, tabId, clientId = null, isCustomer = true, mode = SITE_ACTIVE, visible = true, now = Date.now() }) {
     const normalizedScope = this.normalizeScope(scope);
     const key = this.scopeKey(normalizedScope);
     const record = this.store.ensureScope(key, normalizedScope);
@@ -66,15 +66,15 @@ class PresenceService {
     [priorKey, visitorKey].forEach((candidateKey) => {
       const visitor = candidateKey ? record.visitors.get(candidateKey) : null;
       if (visitor && !previous.has(candidateKey)) {
-        previous.set(candidateKey, { visitor: { clientId: visitor.clientId }, state: this.visitorState(visitor) });
+        previous.set(candidateKey, { visitor: { clientId: visitor.clientId,isCustomer:visitor.isCustomer }, state: this.visitorState(visitor) });
       }
     });
 
     let visitor = record.visitors.get(visitorKey);
     if (!visitor) {
-      visitor = { clientId: normalizedClientId, sessions: new Set(), tabs: new Map() };
+      visitor = { clientId: normalizedClientId,isCustomer, sessions: new Set(), tabs: new Map() };
       record.visitors.set(visitorKey, visitor);
-      previous.set(visitorKey, { visitor: { clientId: visitor.clientId }, state: OFFLINE });
+      previous.set(visitorKey, { visitor: { clientId: visitor.clientId,isCustomer:visitor.isCustomer }, state: OFFLINE });
     }
     if (priorKey && priorKey !== visitorKey) {
       const prior = record.visitors.get(priorKey);
@@ -90,6 +90,7 @@ class PresenceService {
       }
     }
     visitor.clientId = normalizedClientId;
+    visitor.isCustomer=isCustomer;
     visitor.sessions.add(presenceSessionId);
     record.sessionVisitors.set(presenceSessionId, visitorKey);
     visitor.tabs.set(tabId, { presenceSessionId, mode, visible: visible === true, lastSeenAt: Number(now) });

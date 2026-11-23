@@ -27515,31 +27515,36 @@
   }
 
   async function loadMoreClientCompletedOrders() {
-    if (!state.activeClientId || state.clientCompletedLoading || (state.clientCompletedLoaded && !state.clientCompletedHasMore)) return;
+    const selectedClientId = () => Number(state.activeClient?.is_guest_chat ? state.activeClient.id : state.activeClientId);
+    if (!selectedClientId() || state.clientCompletedLoading || (state.clientCompletedLoaded && !state.clientCompletedHasMore)) return;
     state.clientCompletedLoading = true;
     state.clientCompletedError = false;
     renderClientCompletedOrders();
-    const requestClientId = Number(state.activeClientId);
+    const requestClientId = selectedClientId();
     const requestToken = ++state.clientCompletedRequestToken;
     try {
       const clientId = requestClientId;
       const offset = state.clientCompletedNextOffset;
-      const json = await apiJson(`/api/admin/clients/${clientId}/orders?view=completed&limit=10&offset=${offset}`);
-      if (Number(state.activeClientId) !== clientId || requestToken !== state.clientCompletedRequestToken) return;
+      const json = await apiJson(state.activeClient?.is_guest_chat
+        ? `/api/admin/clients/chat-guests/${clientId}?view=completed&offset=${offset}`
+        : `/api/admin/clients/${clientId}/orders?view=completed&limit=10&offset=${offset}`,
+      state.activeClient?.is_guest_chat ? { headers: { 'x-rbac-context': 'chat' } } : {});
+      if (selectedClientId() !== clientId || requestToken !== state.clientCompletedRequestToken) return;
       const rows = Array.isArray(json.data) ? json.data : [];
       state.clientCompletedOrders.push(...rows);
       state.clientCompletedNextOffset = Number(json.next_offset ?? offset + rows.length);
       state.clientCompletedHasMore = json.has_more === true;
       state.clientCompletedLoaded = true;
-      const cached = getCachedClientDetails(state.activeClientId) || {};
-      setCachedClientDetails(state.activeClientId, { completedOrders: state.clientCompletedOrders, completedNextOffset: state.clientCompletedNextOffset, completedHasMore: state.clientCompletedHasMore, completedLoaded: true });
-      saveClientPassportSnapshot();
+      if (!state.activeClient?.is_guest_chat) {
+        setCachedClientDetails(state.activeClientId, { completedOrders: state.clientCompletedOrders, completedNextOffset: state.clientCompletedNextOffset, completedHasMore: state.clientCompletedHasMore, completedLoaded: true });
+        saveClientPassportSnapshot();
+      }
     } catch (err) {
-      if (Number(state.activeClientId) !== requestClientId || requestToken !== state.clientCompletedRequestToken) return;
+      if (selectedClientId() !== requestClientId || requestToken !== state.clientCompletedRequestToken) return;
       console.error(err);
       state.clientCompletedError = true;
     } finally {
-      if (Number(state.activeClientId) === requestClientId && requestToken === state.clientCompletedRequestToken) {
+      if (selectedClientId() === requestClientId && requestToken === state.clientCompletedRequestToken) {
         state.clientCompletedLoading = false;
         renderClientCompletedOrders();
       }
@@ -27985,10 +27990,29 @@
     state.addresses = [];
     state.clientOrders = [];
     state.clientDiscounts = [];
+    state.clientActiveOrder = null;
+    state.clientCompletedOrders = [];
+    state.clientCompletedNextOffset = 0;
+    state.clientCompletedHasMore = false;
+    state.clientCompletedLoaded = false;
+    state.clientCompletedError = false;
+    state.clientCompletedLoading = false;
+    ++state.clientCompletedRequestToken;
+    renderClientActiveOrder();
+    renderClientCompletedOrders();
     renderAddresses();
     renderClientDiscounts();
     if (requestToken !== clientProfileRequestToken) return;
     if (!isExpectedClientTabActive()) return;
+
+    const guestPayload = await apiJson(`/api/admin/clients/chat-guests/${clientId}`, { headers: { 'x-rbac-context': 'chat' } });
+    if (requestToken !== clientProfileRequestToken || !isExpectedClientTabActive()) return;
+    setClient({ ...buildGuestClientProfile(clientId, preferredTitle), ...guestPayload.data.client });
+    state.clientActiveOrder = guestPayload.data.activeOrder;
+    renderClientActiveOrder();
+    const guestTab = tabsState.tabs.find(tab => tab.key === expectedChatTabKey);
+    if (guestTab) { guestTab.title = guestPayload.data.client.name; renderTabs(); }
+    if (clientCompletedOrdersAccordion?.open) void loadMoreClientCompletedOrders();
 
     if (addrFormCard) addrFormCard.classList.add("hidden");
     if (addrToggleBtn) addrToggleBtn.textContent = "+ \u041d\u043e\u0432\u044b\u0439 \u0430\u0434\u0440\u0435\u0441";
@@ -32219,6 +32243,12 @@
     },
     selectGuestChatClient(id, preferredTitle = "", options = {}) {
       return selectClient(id, preferredTitle, { ...(options || {}), chatGuest: true });
+    },
+    syncGuestChatProfile(profile) {
+      if (!state.activeClient?.is_guest_chat || Number(state.activeClient.id) !== Number(profile?.id)) return;
+      setClient({ ...state.activeClient, name: profile.name, phone: profile.phone || '', photo: profile.photo || '' });
+      const tab=tabsState.tabs.find(item=>item.key===tabsState.activeKey && Number(item.id)===Number(profile.id));
+      if (tab && tab.title!==profile.name) {tab.title=profile.name;renderTabs();}
     },
     refreshClients() {
       return loadClients();

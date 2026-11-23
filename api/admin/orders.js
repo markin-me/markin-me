@@ -1,6 +1,7 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const {orderCustomerDisplayNameSql,orderCustomerDisplayPhotoSql} = require('../helpers/orderCustomerDisplay');
 const {syncAutoAddOrderUsage} = require('../helpers/orderOnlinePricing');
 const customerBonus=require('../helpers/customerBonus');
 const productPassportSnapshots = require("../../services/product-passport-snapshots");
@@ -1769,7 +1770,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         o.customer_id,
         o.assigned_user_id,
         o.created_by_user_id,
-        o.customer_name,
+        ${orderCustomerDisplayNameSql} AS customer_name,
+        ${orderCustomerDisplayPhotoSql} AS customer_photo,
         o.customer_phone,
         o.auth_status_at_creation,
         IF(o.guest_session_hash IS NULL,NULL,LEFT(SHA2(o.guest_session_hash,256),16)) guest_session_audit_id,
@@ -1928,6 +1930,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       created_at: helpers.utcToStoreDateTime(r.created_at, storeTimezone),
       customer_id: r.customer_id,
       customer_name: r.customer_name,
+      customer_photo: r.customer_photo || null,
       customer_phone: r.customer_phone,
       auth_status_at_creation:r.auth_status_at_creation||(r.guest_session_audit_id?'unverified':null),
       guest_session_audit_id:r.guest_session_audit_id||null,
@@ -2311,7 +2314,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
              (SELECT owner.phone FROM cust_customers owner WHERE owner.tenant_id=o.tenant_id AND owner.id=o.customer_id) owner_phone,
              o.auth_status_at_creation,
              o.assigned_user_id,
-            o.customer_name,
+            ${orderCustomerDisplayNameSql} AS customer_name,
+            ${orderCustomerDisplayPhotoSql} AS customer_photo,
             o.customer_phone,
             o.address,
             o.comment,
@@ -2397,7 +2401,8 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
            o.auth_status_at_creation,
            o.assigned_user_id,
            o.created_by_user_id,
-          o.customer_name,
+          ${orderCustomerDisplayNameSql} AS customer_name,
+          ${orderCustomerDisplayPhotoSql} AS customer_photo,
           o.customer_phone,
           o.promo_code,
           o.address,

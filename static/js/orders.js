@@ -474,7 +474,7 @@
     }
     const next = { ...cachedOrder };
     const protectedNullableFields = new Set([
-      "customer_name", "customer_phone", "address", "comment", "address_comment",
+      "customer_name", "customer_photo", "customer_phone", "address", "comment", "address_comment",
       "scheduled_at", "payment_code", "payment_title", "payment_icon",
       "method_code", "method_title", "time_option_code", "time_option_title", "time_option_icon",
       "discounts_json", "benefits_meta", "delivery_address_city", "delivery_address_street",
@@ -6512,6 +6512,9 @@
 
     const customerId = Number(order.customer_id || 0);
     const customerPhoneRaw = String(order.customer_phone || "").trim();
+    const customerPhotoHtml = order.customer_photo
+      ? `<img class="order-client-photo" src="${escapeHtml(order.customer_photo)}" alt="">`
+      : '<i class="fas fa-user"></i>';
     const customerPhone = customerPhoneRaw === "?" ? "" : customerPhoneRaw;
     const canOpenClient = (Number.isFinite(customerId) && customerId > 0) || !!customerPhone;
     const clientPhoneLineHtml = sharedOrderPanel && typeof sharedOrderPanel.buildOrderClientPhoneHtml === "function"
@@ -6603,7 +6606,7 @@
         </div>
 
         <div class="order-col order-client">
-          <div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
+          <div class="order-client-name">${customerPhotoHtml}<span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
           ${clientPhoneLineHtml}
         </div>
 
@@ -6656,7 +6659,7 @@
         </div>
 
         <div class="order-col order-client">
-          <div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
+          <div class="order-client-name">${customerPhotoHtml}<span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
           ${clientPhoneLineHtml}
         </div>
 
@@ -6731,7 +6734,7 @@
       </div>
 
       <div class="order-col order-client">
-        <div class="order-client-name"><i class="fas fa-user"></i><span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
+        <div class="order-client-name">${customerPhotoHtml}<span class="order-client-name-text">${escapeHtml(order.customer_name || "?")}</span></div>
         ${clientPhoneLineHtml}
       </div>
 
@@ -7329,7 +7332,7 @@
     return changed;
   }
 
-  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false, persistList = true } = {}) {
+  function handleOrderEvent(order, { localOnly = false, skipStageRefresh = false, persistList = true, skipStatusNotification = false } = {}) {
     if (!order || !order.id) return;
     if(!localOnly && !isCourierWorkspace)order=orderStatusQueue.overlay(order);
     const detailContext = orderDetailsContext(order.id);
@@ -7438,7 +7441,7 @@
     reconcileOrderListDom(nextOrder, { prevVisible, nextVisible });
 
     const statusCode = String(nextOrder.status_code || "").toLowerCase();
-    if (!isCourierWorkspace && (statusCode === "cancelled" || statusCode === "canceled")) {
+    if (!skipStatusNotification && !isCourierWorkspace && (statusCode === "cancelled" || statusCode === "canceled")) {
       const url = state.tenantSounds && state.tenantSounds.sound_order_cancelled_url;
       if (url) playNotificationSound(url);
     }
@@ -7460,6 +7463,13 @@
     rows.forEach((evt) => {
       if (!/^order\./.test(String(evt?.event || ""))) return;
       const eventOrderId = Number(evt?.data?.id || 0);
+      if (evt.event === 'order.customer-name') {
+        const existing = state.orders.find(order => Number(order.id) === eventOrderId)
+          || tabsState.tabs.find(tab => Number(tab.orderId) === eventOrderId)?.order;
+        if (existing) handleOrderEvent({ ...existing, customer_name: evt.data.customer_name }, { persistList: false, skipStatusNotification: true });
+        if (advanceCursor) state.lastEventId = evt.id || state.lastEventId;
+        return;
+      }
       const hadOrder = eventOrderId > 0 && state.orders.some((row) => Number(row?.id || 0) === eventOrderId);
       const nextOrder = handleOrderEvent(evt?.data, { persistList: false });
       if (!isCourierWorkspace && eventOrderId > 0

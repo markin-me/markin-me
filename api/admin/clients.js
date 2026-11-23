@@ -42,6 +42,59 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
   });
 
 
+  router.get('/chat-guests/:visitorId', async (req,res) => {
+    try {
+      const tenantId=helpers.getTenantId(req),storeId=helpers.getStoreId(req);
+      const visitorId=Number(req.params.visitorId);
+      if (!Number.isSafeInteger(visitorId) || visitorId<=0) return res.status(400).json({ok:false,error:'BAD_ID'});
+      const [[guest]]=await db.query(`SELECT v.client_id,g.token_hash,pc.name,COALESCE(v.dialog_phone,g.phone) phone,pc.photo
+        FROM chat_visitor_identities v LEFT JOIN cust_guest_sessions g
+          ON g.tenant_id=v.tenant_id AND g.token_hash=v.guest_session_hash
+        LEFT JOIN cust_customers pc ON pc.tenant_id=v.tenant_id AND pc.id=(SELECT p.id FROM cust_customers p
+          WHERE p.tenant_id=v.tenant_id AND p.phone=g.phone COLLATE utf8mb4_general_ci AND p.is_active=1 ORDER BY p.id LIMIT 1)
+        WHERE v.tenant_id=? AND v.client_id=? AND v.claimed_at IS NULL AND v.session_deleted_at IS NULL LIMIT 1`,[tenantId,visitorId]);
+      if (!guest) return res.status(404).json({ok:false,error:'CHAT_NOT_FOUND'});
+      const completed=req.query.view==='completed';
+      const selectedIds=req.query.ids==null?[]:[...new Set(String(req.query.ids).split(',').map(Number))];
+      if (selectedIds.length>50 || selectedIds.some(id=>!Number.isSafeInteger(id)||id<=0)) return res.status(400).json({ok:false,error:'BAD_ORDER_IDS'});
+      const idsClause=selectedIds.length?`AND o.id IN (${selectedIds.map(()=>'?').join(',')})`:'';
+      const offset=Math.max(0,Math.min(100000,Math.trunc(Number(req.query.offset)||0)));
+      const limit=10;
+      const accessRule=String(req.permission?.accessRule || 'all');
+      const actorClause=accessRule==='assigned'?'AND o.assigned_user_id=?':accessRule==='own'?'AND o.created_by_user_id=?':'';
+      const actorParams=actorClause?[Number(req.user?.userId || 0)]:[];
+      if (accessRule!=='all') {
+        const [[accessible]]=await db.query(`SELECT 1 FROM order_orders o
+          WHERE o.tenant_id=? AND o.store_id=? AND o.guest_session_hash=? AND o.customer_id IS NULL
+            AND o.is_active=1 ${actorClause} LIMIT 1`,[tenantId,storeId,guest.token_hash,...actorParams]);
+        if (!accessible) return res.status(403).json({ok:false,error:'RESOURCE_FORBIDDEN'});
+      }
+      let orders=[];
+      if (guest.token_hash) {
+        [orders]=await db.query(`SELECT o.id,o.public_id,o.total_price,o.items,o.status_id,
+          DATE_FORMAT(o.created_at,'%Y-%m-%d %H:%i:%s') created_at,s.title status_title,s.color status_color
+          FROM order_orders o LEFT JOIN order_statuses s
+            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+          WHERE o.tenant_id=? AND o.store_id=? AND o.guest_session_hash=? AND o.customer_id IS NULL
+            AND o.is_active=1 ${actorClause}
+            ${selectedIds.length?idsClause:`AND COALESCE(s.is_final,0)=${completed?1:0}
+            AND LOWER(COALESCE(s.code,'')) NOT IN ('canceled','cancelled')`}
+          ORDER BY o.created_at DESC,o.id DESC LIMIT ? OFFSET ?`,
+        [tenantId,storeId,guest.token_hash,...actorParams,...selectedIds,selectedIds.length?selectedIds.length:completed?limit+1:1,completed&&!selectedIds.length?offset:0]);
+      }
+      if (selectedIds.length) return res.json({ok:true,data:orders});
+      if (completed) return res.json({ok:true,data:orders.slice(0,limit),has_more:orders.length>limit,next_offset:offset+Math.min(orders.length,limit)});
+      const [[headerOrder]]=guest.token_hash?await db.query(`SELECT o.*,s.code status_code,s.title status_title,s.color status_color,
+        COALESCE(s.is_final,0) status_is_final FROM order_orders o LEFT JOIN order_statuses s
+          ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
+        WHERE o.tenant_id=? AND o.store_id=? AND o.guest_session_hash=? AND o.is_active=1 ${actorClause}
+        ORDER BY o.created_at DESC,o.id DESC LIMIT 1`,[tenantId,storeId,guest.token_hash,...actorParams]):[[]];
+      res.json({ok:true,data:{client:{id:visitorId,name:guest.name || (guest.token_hash?'Гость':'Аноним'),
+        phone:guest.phone || '',photo:guest.photo || '',is_guest_chat:true,client_state:guest.token_hash?'guest':'anonymous'},
+        activeOrder:orders[0] || null,headerOrder:headerOrder || null}});
+    } catch(error) {console.error('chat guest profile:',error);res.status(500).json({ok:false,error:'DB_ERROR'});}
+  });
+
   router.param('id', async (req, res, next, rawId) => {
     try {
       if (String(req.path || '').startsWith('/filters/')) return next();
@@ -1938,10 +1991,17 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
           ? 'AND o.created_by_user_id=?'
           : '';
       const actorParams = actorClause ? [Number(req.user?.userId || 0)] : [];
+      const chatContext=String(req.headers['x-rbac-context'] || '').toLowerCase()==='chat' && req.query.chat_sessions==='1';
+      const ownerClause=chatContext
+        ? `(o.customer_id=? OR (o.customer_id IS NULL AND EXISTS (SELECT 1 FROM chat_visitor_identities origin
+            WHERE origin.tenant_id=o.tenant_id AND origin.claimed_customer_id=? AND origin.claimed_at IS NOT NULL
+              AND origin.guest_session_hash=o.guest_session_hash)))`
+        : 'o.customer_id=?';
+      const ownerParams=chatContext?[customerId,customerId]:[customerId];
 
       const [rows] = await db.query(
         `SELECT
-           o.id, o.public_id,
+           o.id, o.public_id, o.customer_id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
            o.total_price, o.items, o.status_id,
            s.code AS status_code,
@@ -1951,13 +2011,13 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
          FROM order_orders o
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
-         WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+         WHERE o.tenant_id=? AND o.store_id=? AND ${ownerClause} AND o.is_active=1
            ${actorClause}
            AND COALESCE(s.is_final, 0)=0
          ORDER BY o.created_at DESC,
            o.id DESC
          LIMIT 1`,
-        [tenantId, storeId, customerId, ...actorParams]
+        [tenantId, storeId, ...ownerParams, ...actorParams]
       );
 
       const row = rows[0] || null;
@@ -2097,22 +2157,29 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
           ? 'AND o.created_by_user_id=?'
           : '';
       const actorParams = actorClause ? [Number(req.user?.userId || 0)] : [];
+      const chatContext=String(req.headers['x-rbac-context'] || '').toLowerCase()==='chat' && req.query.chat_sessions==='1';
+      const ownerClause=chatContext
+        ? `(o.customer_id=? OR (o.customer_id IS NULL AND EXISTS (SELECT 1 FROM chat_visitor_identities origin
+            WHERE origin.tenant_id=o.tenant_id AND origin.claimed_customer_id=? AND origin.claimed_at IS NOT NULL
+              AND origin.guest_session_hash=o.guest_session_hash)))`
+        : 'o.customer_id=?';
+      const ownerParams=chatContext?[customerId,customerId]:[customerId];
       const [rows] = await db.query(
         `SELECT
-           o.id, o.public_id,
+           o.id, o.public_id, o.customer_id,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
            o.total_price, o.items, o.status_id,
            s.title AS status_title, s.color AS status_color
          FROM order_orders o
          LEFT JOIN order_statuses s
            ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
-         WHERE o.tenant_id=? AND o.store_id=? AND o.customer_id=? AND o.is_active=1
+         WHERE o.tenant_id=? AND o.store_id=? AND ${ownerClause} AND o.is_active=1
            ${actorClause}
            ${statusClause}
            ${idsClause}
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ? OFFSET ?`,
-        [tenantId, storeId, customerId, ...actorParams, ...selectedIds, sqlLimit, offset]
+        [tenantId, storeId, ...ownerParams, ...actorParams, ...selectedIds, sqlLimit, offset]
       );
       if (!hasPagedView) return res.json({ ok: true, data: rows });
       const data = rows.slice(0, limit);

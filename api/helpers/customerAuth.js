@@ -22,20 +22,7 @@ async function byPhone(db,tenantId,value){
   return rows[0] || null;
 }
 const guestHash=token=>crypto.createHash('sha256').update(token).digest();
-function guestCustomer(guest){return {id:null,is_guest:true,name:guest.name || '\u0413\u043e\u0441\u0442\u044c',phone:guest.phone,photo:guest.photo || null};}
-async function updateGuestProfile(db,tenantId,token,changes,storeId=1){
-  const conn=await db.getConnection();
-  try{
-    await conn.beginTransaction();
-    const guest=await getGuest(conn,tenantId,token,true,storeId);if(!guest)fail('UNAUTHORIZED',401);
-    const fields=[],values=[];
-    if(Object.prototype.hasOwnProperty.call(changes,'name')){fields.push('name=?');values.push(changes.name);}
-    if(Object.prototype.hasOwnProperty.call(changes,'photo')){fields.push('photo=?','photo_set=1');values.push(changes.photo);}
-    if(!fields.length)fail('NO_CHANGES');
-    await conn.query(`UPDATE cust_guest_sessions SET ${fields.join(',')} WHERE tenant_id=? AND token_hash=?`,[...values,tenantId,guest.token_hash]);
-    await conn.commit();
-  }catch(error){await conn.rollback();throw error;}finally{conn.release();}
-}
+function guestCustomer(guest){return {id:null,is_guest:true,name:'\u0413\u043e\u0441\u0442\u044c',phone:guest.phone,photo:null};}
 async function revokeGuest(db,tenantId,token){
   if(!/^g_[A-Za-z0-9_-]{43}$/.test(String(token)))return;
   const conn=await db.getConnection();
@@ -127,11 +114,11 @@ async function promoteGuest(conn,tenantId,token,request,storeId=1){
   const guest=await getGuest(conn,tenantId,token,true,storeId);
   if(!guest || !request.guest_session_hash || !crypto.timingSafeEqual(guest.token_hash,request.guest_session_hash))fail('GUEST_SESSION_MISMATCH',403);
   if(!['profile_link','login'].includes(request.purpose) || request.state!=='confirmed' || !request.contact_verified_at || !/^[0-9]{10,15}$/.test(request.contact_phone || ''))fail('GUEST_CONTACT_MISMATCH',409);
-  if(request.purpose==='profile_link')await conn.query(`UPDATE cust_customers SET name=COALESCE(?,name),photo=IF(?, ?,photo)
-    WHERE tenant_id=? AND id=?`,[guest.name,Number(guest.photo_set)===1,guest.photo,tenantId,request.account_id]);
+  const [[owner]]=await conn.query('SELECT phone FROM cust_customers WHERE tenant_id=? AND id=? FOR UPDATE',[tenantId,request.account_id]);
+  if(!owner || phone(owner.phone)!==phone(request.contact_phone))fail('GUEST_CONTACT_MISMATCH',409);
   await transferGuestAddresses(conn,tenantId,token,request.account_id,{preserveDefault:request.purpose==='profile_link',storeId});
-  // Only server-recorded ownership is transferred; legacy orders with NULL hashes stay untouched.
-  await conn.query('UPDATE order_orders SET customer_id=? WHERE tenant_id=? AND guest_session_hash=? AND customer_id IS NULL',[request.account_id,tenantId,guest.token_hash]);
+  // Transfer only this session's orders addressed to the confirmed profile phone.
+  await conn.query('UPDATE order_orders SET customer_id=? WHERE tenant_id=? AND guest_session_hash=? AND customer_id IS NULL AND customer_phone=?',[request.account_id,tenantId,guest.token_hash,phone(owner.phone)]);
   await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND guest_session_hash=? AND public_id<>? AND state IN ('pending','started','confirmed')",[tenantId,guest.token_hash,request.public_id]);
 }
-module.exports={settings,validateSettings,phone,byPhone,getGuest,createGuest,revokeGuest,guestAddresses,transferGuestAddresses,promoteGuest,guestCustomer,updateGuestProfile,guestStoreOffset};
+module.exports={settings,validateSettings,phone,byPhone,getGuest,createGuest,revokeGuest,guestAddresses,transferGuestAddresses,promoteGuest,guestCustomer,guestStoreOffset};

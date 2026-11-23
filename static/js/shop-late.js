@@ -26475,6 +26475,12 @@ function renderSheetAddressList() {
   }
 
   function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false, returnToProfile = false } = {}) {
+    if (me?.is_guest) me = { ...me, name: 'Гость', photo: null };
+    async function requestGuestProfileAuthorization() {
+      const confirmed = await window.AppModal.confirm({ title: 'Внимание',
+        message: 'Чтобы изменить профиль, авторизуйтесь.', cancelText: 'Отмена', saveText: 'Авторизоваться' });
+      if (confirmed) openLoginSheet({ phone: me?.phone || '' });
+    }
     const showProfileWarning=message=>window.AppModal.confirm({appearance:"shop-warning",title:"Внимание",message,showCancel:false,saveText:"Понятно"});
     ensureShopOrdersCacheScope();
     host.innerHTML = "";
@@ -27250,6 +27256,8 @@ function renderSheetAddressList() {
     function addPushPreferenceRow(titleText, key) {
       const row = document.createElement("div");
       row.className = "shop-profile-settings-row";
+      row.dataset.pushPreference = key;
+      if (key === "chat" || key === "important") row.classList.add("hidden");
       const title = document.createElement("div");
       title.className = "shop-profile-settings-title";
       title.textContent = titleText;
@@ -27318,6 +27326,17 @@ function renderSheetAddressList() {
 
     addPushPreferenceRow("От чата поддержки", "chat");
     addPushPreferenceRow("О важных сообщениях компании", "important");
+
+    apiJson("/api/public/tenant/chat-settings").then((payload) => {
+      if (payload?.ok !== true || !payload.settings) throw new Error("CHAT_SETTINGS_UNAVAILABLE");
+      const settings = payload.settings;
+      const enabled = (value) => value !== false && value !== 0 && !["0", "false"].includes(String(value).toLowerCase().trim());
+      pushNotificationRows.forEach((row) => {
+        const key = row.dataset.pushPreference;
+        if (key === "chat") row.classList.toggle("hidden", !enabled(settings.is_enabled ?? settings.chat_widget_enabled));
+        if (key === "important") row.classList.toggle("hidden", !enabled(settings.important_messages_enabled));
+      });
+    }).catch((error) => console.error("PROFILE_NOTIFICATION_CHANNELS_LOAD_FAILED", error));
 
     const messengerMarketingRows = [];
     const messengerMarketingInputs = new Map();
@@ -28139,6 +28158,7 @@ function renderSheetAddressList() {
       screenHeader.append(screenBack, screenTitle);
       let currentSettingsScreen = "main";
       const showSettingsScreen = (screen, trigger = null) => {
+        if (screen === 'edit' && me?.is_guest) { void requestGuestProfileAuthorization(); return false; }
         top.classList.remove("is-photo-expanded");photo.setAttribute("aria-expanded","false");
         const wasMain=currentSettingsScreen==="main";
         currentSettingsScreen = screen;
@@ -28247,7 +28267,7 @@ function renderSheetAddressList() {
         const symbol=document.createElement("i");symbol.className=`fas ${icon}`;symbol.setAttribute("aria-hidden","true");
         const text=document.createElement("span");text.textContent=label;
         const arrow=document.createElement("i");arrow.className="fas fa-chevron-right";arrow.setAttribute("aria-hidden","true");button.append(symbol,text,arrow);
-        button.addEventListener("click",()=>{showSettingsScreen("edit");action();});personal.append(button);
+        button.addEventListener("click",()=>{if(showSettingsScreen("edit")!==false)action();});personal.append(button);
       }
       syncSettingsSummary();
       maxLinkTitle.textContent="MAX";tgLinkTitle.textContent="Telegram";
@@ -29030,9 +29050,16 @@ function renderSheetAddressList() {
         // Используем флаг для переопределения стандартного поведения
         bindDesktopOrderDetailsFooter(order);
       }
+      window.shopCompanyChatNotifications?.orderDetailsShown(orderId, function () {
+        return currentOrdersView === 'details' && Number(currentOrderId) === Number(orderId)
+          && detailView.isConnected && !detailView.closest('.hidden') && detailView.getClientRects().length > 0
+          && (isModalOrderDetails ? window.AppModal?.isOpen?.() && window.AppModal.body?.contains(detailView)
+            : document.body.classList.contains('shop-orders-details-active'));
+      }, function () { return detailView.closest('#appModal') || detailView.parentElement; });
     }
 
     function showOrdersList() {
+      window.shopCompanyChatNotifications?.orderDetailsClosed(currentOrderId);
       currentOrdersView = "list";
       currentOrderId = null;
       resetOrderDetailsTransientUi();
@@ -29413,6 +29440,7 @@ function renderSheetAddressList() {
     if(settingsPage)nameInput.addEventListener("focus",()=>{if(!isEditing)setEditingMode(true);});
 
     function setEditingMode(next) {
+      if (next && me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       isEditing = Boolean(next);
       if (isEditing) setBirthdayEditingMode(false);
       wrap.classList.toggle("is-editing", isEditing);
@@ -29450,6 +29478,7 @@ function renderSheetAddressList() {
     if(settingsPage)birthdayInput.addEventListener("focus",()=>{if(!isBirthdayEditing)setBirthdayEditingMode(true);});
 
     function setBirthdayEditingMode(next) {
+      if (next && me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       isBirthdayEditing = Boolean(next);
       if(settingsPage){
         birthdayLine.classList.toggle("is-birthday-empty",! /\d/.test(currentBirthday));
@@ -29498,10 +29527,12 @@ function renderSheetAddressList() {
     });
 
     function startPhotoUpload() {
+      if (me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       photoInput.click();
     }
 
     async function removePhoto() {
+      if (me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       if(photoRemoveBtn.disabled)return;
       photoRemoveBtn.disabled = true;
       try {
@@ -29527,6 +29558,7 @@ function renderSheetAddressList() {
     photoRemoveBtn.addEventListener("click", removePhoto);
 
     photoInput.addEventListener("change", async () => {
+      if (me?.is_guest) { photoInput.value = ''; void requestGuestProfileAuthorization(); return; }
       const file = photoInput.files && photoInput.files[0];
       photoInput.value = "";
       if (!file) return;
@@ -29581,6 +29613,7 @@ function renderSheetAddressList() {
       photoMenu.classList.add("hidden");
     }
     function openPhotoMenu() {
+      if (me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       photoMenuOpen = true;
       photoMenu.classList.remove("hidden");
       const onDocClick = (e) => {
@@ -30246,6 +30279,7 @@ function renderSheetAddressList() {
 
     page.classList.toggle("shop-orders-from-profile",returnToProfile||sourceScreen==="profile");
     const closePage = ({ restoreNavigation = true } = {}) => {
+      window.shopCompanyChatNotifications?.orderDetailsClosed();
       const exitToHome = page._shopOrderDetailsExitToHome === true;
       document.body.classList.remove("shop-orders-page-active");
       document.body.classList.remove("shop-orders-details-active");
@@ -30415,6 +30449,7 @@ function renderSheetAddressList() {
       title: ordersOnly ? "Мои заказы" : "Профиль",
       content: wrap,
       onClose: () => {
+        window.shopCompanyChatNotifications?.orderDetailsClosed();
         shopPaymentWidgetSession?.finish();
         restoreProfileSettingsPage();
         cleanupOrdersPageState();
@@ -36945,6 +36980,9 @@ function setBottomNavActive(tab) {
       if (typeof onBack === "function") onBack();
       const currentCustomer = await fetchMeSafe();
       if (!currentCustomer) throw new Error("ORDER_DETAILS_UNAVAILABLE");
+      if (!window.shopCompanyChatNotifications && typeof window.ensureShopChatLoaded === 'function') {
+        await window.ensureShopChatLoaded().catch(error => console.error('SHOP_ORDER_NOTIFICATIONS_LOAD_FAILED', error));
+      }
       closeShopSheetIfOpen({ checkoutCompleted: true });
       const detailsContext = openProfileModal(currentCustomer, {
         initialTab: "orders",
@@ -36954,6 +36992,7 @@ function setBottomNavActive(tab) {
       if (!detailsContext || typeof detailsContext.showOrderDetails !== "function") {
         throw new Error("ORDER_DETAILS_UNAVAILABLE");
       }
+      window.shopCompanyChatNotifications?.orderPlaced(createdOrderId);
       await detailsContext.showOrderDetails(createdOrderId, { exitToHome: true });
       return;
 
