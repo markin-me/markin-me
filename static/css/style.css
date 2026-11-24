@@ -558,6 +558,8 @@ body[data-admin-active-page]:has(.user-menu-wrapper.active) > .user-menu-dropdow
 .admin-profile-role{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--color-text-muted)}
 body[data-admin-active-page] .shop-header-profile-img{width:24px;height:24px;flex:0 0 24px;border-radius:50%;object-fit:cover}
 .admin-user-profile-img{width:100%;height:100%;border-radius:50%;object-fit:cover}
+.user-menu-avatar:has(>.admin-user-profile-img){position:relative;background:transparent;color:var(--color-text-muted)}
+.user-menu-avatar>.admin-user-profile-img{position:absolute;inset:0;display:block;min-width:100%;}
 
 .user-menu-name {
   font-weight: 600;
@@ -27232,7 +27234,7 @@ button.chat-message-source{display:block;border:0;padding:0;background:transpare
 
   body.page-chat .chat-mobile-subheader{
     display:grid;
-    grid-template-columns:48px minmax(0, 1fr) 48px;
+    grid-template-columns:48px minmax(0, 1fr) auto;
     align-items:stretch;
     gap:10px;
     width:100%;
@@ -27251,8 +27253,7 @@ button.chat-message-source{display:block;border:0;padding:0;background:transpare
     -webkit-backdrop-filter:blur(14px) saturate(150%);
   }
 
-  body.page-chat .chat-mobile-subheader-btn--back,
-  body.page-chat .chat-mobile-subheader-btn--order{
+  body.page-chat .chat-mobile-subheader-btn--back{
     display:grid;
     place-items:center;
     width:48px;
@@ -27301,6 +27302,13 @@ button.chat-message-source{display:block;border:0;padding:0;background:transpare
   }
 
   body.page-chat .chat-mobile-subheader-btn--order{
+    display:grid;
+    place-items:center;
+    width:max-content;
+    min-width:48px;
+    height:48px;
+    padding:0 12px;
+    border-radius:999px;
     align-content:center;
     gap:2px;
     font-size:11px;
@@ -30691,7 +30699,7 @@ body.page-chat .chat-main-panel > .chat-main-body > .chat-messages{
 
   body.page-chat .chat-mobile-subheader{
     display:grid;
-    grid-template-columns:48px minmax(0, 1fr) 48px;
+    grid-template-columns:48px minmax(0, 1fr) auto;
     gap:8px;
     width:100%;
     align-items:stretch;
@@ -30801,13 +30809,14 @@ body.page-chat .chat-main-panel > .chat-main-body > .chat-messages{
     place-items:center;
     align-content:center;
     gap:2px;
-    width:48px;
+    width:max-content;
     min-width:48px;
-    max-width:48px;
+    max-width:none;
     height:48px;
     min-height:48px;
     max-height:48px;
-    padding:0;
+    padding:0 12px;
+    border-radius:999px;
     text-align:center;
     overflow:hidden;
     justify-self:end;
@@ -36407,12 +36416,12 @@ body.page-products .products-main-toolbar > .products-bulk-toolbar{flex:1;width:
   body[data-admin-active-page].admin-profile-page-open #adminMobileHeaderCopy{display:grid!important}
 }
 
-.admin-profile-edit-trigger,
+.btn.admin-profile-edit-trigger,
 .admin-profile-photo-camera,
 .admin-profile-photo-remove{display:none}
 .user-menu-phone{font-size:15px;color:var(--color-text-muted)}
 @media (max-width:768px){
-  body:has(#userMenuDropdown.admin-profile-page[data-profile-view="root"]) .admin-profile-edit-trigger{display:inline-flex;margin-left:auto;color:var(--color-text);background:transparent;border:0;box-shadow:none;font-weight:600}
+  body[data-admin-mobile-subview="admin-profile"]:has(#userMenuDropdown.admin-profile-page[data-profile-view="root"]) .admin-profile-edit-trigger{display:inline-flex;margin-left:auto;color:var(--color-text);background:transparent;border:0;box-shadow:none;font-weight:600}
   #userMenuDropdown.admin-profile-page > .user-menu-header{flex-direction:column;align-items:center;gap:8px;padding:12px 0 24px;border:0;background:transparent}
   #userMenuDropdown.admin-profile-page .user-menu-avatar{position:relative;width:168px;height:168px;font-size:84px;overflow:visible}
   #userMenuDropdown.admin-profile-page .user-menu-info{display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;text-align:center}
@@ -36469,6 +36478,12 @@ body.page-products .products-main-toolbar > .products-bulk-toolbar{flex:1;width:
 
 @media (max-width:768px){
   #userMenuDropdown.admin-profile-page #userMenuRoleSection{padding:8px 0;width:100%;box-sizing:border-box}
+  #userMenuDropdown.admin-profile-page #userMenuRoleSection .user-menu-store-selector{border-radius:22px;background:var(--color-surface-2);overflow:hidden;}
+  #userMenuDropdown.admin-profile-page #userMenuRoleButton{background:transparent;}
+  #userMenuDropdown.admin-profile-page #userMenuRoleButton:hover{transform:none;background:transparent;}
+  #userMenuDropdown.admin-profile-page #userMenuRoleDropdown{position:static;margin:0;padding:0 8px 8px;background:transparent;border:0;border-radius:0;box-shadow:none;box-sizing:border-box;}
+  #userMenuDropdown.admin-profile-page #userMenuRoleDropdown .user-menu-store-option{border-radius:14px;font:inherit;font-size:16px;font-weight:600;}
+  #userMenuDropdown.admin-profile-page .user-menu-store-selector:has(>#userMenuRoleDropdown:not(.hidden)) #userMenuRoleButton>i:last-child{transform:rotate(180deg);}
 }
 
 @media (max-width:768px){

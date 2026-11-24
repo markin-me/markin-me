@@ -28321,6 +28321,10 @@ body.page-shop .shop-products-grid > .sp-card .sp-cart-total-stack{
   filter: blur(4px);
   user-select: none;
 }
+.bonus-level-preview-card.is-private{pointer-events:none;}
+.bonus-level-preview-card.is-private :is(.shop-home-bonus-card__level-name,
+  .bonus-level-preview-bonus-value, .bonus-level-preview-cashback-value,
+  .bonus-level-preview-category-value){filter:blur(4px);user-select:none;}
 
 .is-restricted-order :is(.shop-order-summary-card__head,
   .shop-order-summary-card__address, .shop-order-summary-card__price,

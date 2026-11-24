@@ -12980,6 +12980,8 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
 
   function updateCartBonusRedeemSections(summaryState = null) {
     const safeState = summaryState && typeof summaryState === "object" ? summaryState : buildCartPricingSnapshot();
+    const restricted=state.homeBonusConfig?.account?.is_guest===true;
+    const maskedAmount='<span class="shop-private-value">••••</span> '+getShopBonusCoinIconHtml();
     let amount = Math.floor(Math.max(0, Number(safeState?.bonusRedeemAvailableAmount || 0)));
     if (amount > 0) {
       state.cartBonusRedeemAvailableAmount = amount;
@@ -12994,18 +12996,22 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         state.cartBonusRedeemEnabled = false;
       }
       const redeemActive = !!state.cartBonusRedeemEnabled && hasBalance && canRedeemAmount;
+      const balanceNode=section.querySelector('.shop-bonus-level-balance-value');
+      const balanceHtml=restricted ? maskedAmount : formatShopBonusMoney(balance);
+      if(balanceNode && balanceNode.innerHTML!==balanceHtml)balanceNode.innerHTML=balanceHtml;
       section.querySelectorAll("[data-cart-bonus-redeem-available]").forEach((node) => {
-        node.textContent = money(amount);
+        if(restricted)node.innerHTML=maskedAmount;
+        else node.textContent = money(amount);
       });
       section.querySelectorAll("[data-cart-bonus-accrual-amount]").forEach((node) => {
-        node.textContent = safeState?.bonusAccrualRestricted ? "\u2022\u2022\u2022\u2022" : `+${formatShopBonusMoney(accrualAmount)}`;
-        node.classList.toggle("shop-private-value", !!safeState?.bonusAccrualRestricted);
+        node.innerHTML = restricted || safeState?.bonusAccrualRestricted ? maskedAmount : `+${formatShopBonusMoney(accrualAmount)}`;
+        node.classList.remove("shop-private-value");
       });
       section.querySelectorAll("[data-cart-bonus-redeem-button-amount]").forEach((node) => {
         const accrualHtml = allowRedeemAndAccrue && accrualAmount > 0
           ? ` <span class="shop-cart-bonus-action-pill__delta">+${formatShopBonusMoney(accrualAmount)}</span>`
           : "";
-        node.innerHTML = `-${formatShopBonusMoney(amount)}${accrualHtml}`;
+        node.innerHTML = restricted ? maskedAmount : `-${formatShopBonusMoney(amount)}${accrualHtml}`;
       });
       section.querySelectorAll("[data-cart-bonus-redeem-label]").forEach((node) => {
         node.textContent = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
@@ -22964,27 +22970,6 @@ function renderSheetAddressList() {
 
   let fetchMeSafeVerifiedToken = "";
 
-  function syncHeaderProfilePhoto(customer) {
-    const photoUrl = str(customer?.photo || "").trim();
-    const image = document.getElementById("shopHeaderProfileImg");
-    const fallback = document.querySelector("#shopProfileBtn .shop-header-profile-fallback");
-    const navImage = document.getElementById("shopNavProfileImg");
-    const navFallback = document.querySelector("#shopNavProfile .shop-nav-profile-fallback");
-    const pairs = [[image, fallback], [navImage, navFallback]];
-    pairs.forEach(([targetImage, targetFallback]) => {
-      if (!targetImage || !targetFallback) return;
-      if (photoUrl) {
-        targetImage.src = photoUrl;
-        targetImage.classList.remove("hidden");
-        targetFallback.classList.add("hidden");
-        return;
-      }
-      targetImage.src = "";
-      targetImage.classList.add("hidden");
-      targetFallback.classList.remove("hidden");
-    });
-  }
-
   async function fetchMeSafe(opts = {}) {
     const force = !!opts?.force;
     const token = getCustomerToken();
@@ -29468,7 +29453,7 @@ function renderSheetAddressList() {
       photoRemoveBtn.classList.remove("hidden");
     }
 
-    setProfilePhoto(me?.photo || "");
+    setProfilePhoto((me?.privacy_restricted ? me?.restricted_photo : me?.photo) || "");
 
     nameEditBtn.addEventListener("click", () => setEditingMode(true));
     if(settingsPage)nameInput.addEventListener("focus",()=>{if(!isEditing)setEditingMode(true);});
@@ -29877,6 +29862,14 @@ function renderSheetAddressList() {
       await openProfileSheet({ initialTab, onLoginSuccess });
       return;
     }
+    const me = meOverride || await fetchMeSafe();
+    if (!me) {
+      openLoginSheet({onCancel:onLoginCancel,onSuccess:customer=>{
+        if(typeof onLoginSuccess==='function')onLoginSuccess(customer);
+        else void openProfilePanel(customer,{forceOpen:true,initialTab});
+      }});
+      return;
+    }
     if (!forceOpen && cartViewMode === "profile") {
       await restorePreviousPanel();
       return;
@@ -29895,7 +29888,6 @@ function renderSheetAddressList() {
       : elProfileContent;
     if (!profileHost) return;
 
-    const me = meOverride || await fetchMeSafe() || restrictedVisitorProfile();
 
     const ctx = buildProfileContent({
       host: profileHost,
@@ -30191,21 +30183,29 @@ function renderSheetAddressList() {
   async function openProfileSheet({ initialTab, onLoginSuccess, ordersOnly = false, sourceScreen = "", returnToProfile = false, forceModal = false } = {}) {
     const navigationGeneration = shopNavigationGeneration;
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const me=await fetchMeSafe();
+    if(navigationGeneration!==shopNavigationGeneration)return;
+    if(!me){
+      openLoginSheet({onSuccess:customer=>{
+        if(typeof onLoginSuccess==='function')onLoginSuccess(customer);
+        else void openProfileSheet({initialTab,ordersOnly,sourceScreen,returnToProfile,forceModal});
+      }});
+      return;
+    }
+
     if (!isMobile || forceModal) {
-      const me = await fetchMeSafe() || restrictedVisitorProfile();
       setActiveNav("profile");
       openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile, onLoginSuccess });
       return;
     }
 
     if (!ordersOnly) {
-      await openProfilePanel(null, { initialTab, onLoginSuccess });
+      await openProfilePanel(me, { initialTab, onLoginSuccess });
       return;
     }
 
     if (!window.AppModal) return;
 
-    const me = await fetchMeSafe() || restrictedVisitorProfile();
     if (ordersOnly && navigationGeneration !== shopNavigationGeneration) return;
     openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile, onLoginSuccess });
   }
@@ -30619,48 +30619,23 @@ function renderSheetAddressList() {
 
     const useMobileCartPage = window.matchMedia("(max-width: 768px)").matches
       && document.body.classList.contains("shop-cart-page-active");
-    if (useMobileCartPage) {
-      const checkoutAuthResumeId = ++checkoutFlowRunId;
-      ensureCheckoutAuthPageHistory();
-      document.body.classList.add("shop-checkout-auth-page-active");
-      await openProfilePanel(null, {
-        forceOpen: true,
-        onLoginCancel: () => {
-          cancelPendingCheckoutFlow();
-          if (window.history.state?.shopCheckoutAuthPage === true) window.history.back();
-          else closeCheckoutAuthPageToCart();
-        },
-        onLoginSuccess: () => {
-          if (checkoutAuthResumeId !== checkoutFlowRunId) return;
-          resetCheckoutAuthPageUi();
-          void startCheckoutFlow({ isSheet: true, forceAddressRefresh: true });
-        },
-      });
-      applyCheckoutAuthPageHeader();
-    } else if (isSheet) {
-      openLoginSheet({
-        onSuccess: async () => {
-          if (document.body?.classList?.contains("page-kso")) {
-            await openSheetCheckoutFlow();
-            return;
-          }
-          if (window.AppModal?.isOpen?.()) {
-            window.AppModal.close("sheet");
-          }
-          setTimeout(() => {
-            void startCheckoutFlow({ isSheet: true, forceAddressRefresh: true });
-          }, 0);
-        },
-        fromCheckout: true,
-      });
-    } else {
-      await openProfilePanel(null, {
-        forceOpen: true,
-        onLoginSuccess: () => {
-          void startCheckoutFlow({ isSheet: false, forceAddressRefresh: true });
-        },
-      });
-    }
+    const checkoutAuthResumeId=++checkoutFlowRunId;
+    openLoginSheet({
+      fromCheckout:true,
+      onCancel:()=>cancelPendingCheckoutFlow(),
+      onSuccess:async()=>{
+        if(checkoutAuthResumeId!==checkoutFlowRunId)return;
+        if(document.body?.classList?.contains("page-kso")){
+          await openSheetCheckoutFlow();
+          return;
+        }
+        if(window.AppModal?.isOpen?.())window.AppModal.close("sheet");
+        setTimeout(()=>{
+          if(checkoutAuthResumeId!==checkoutFlowRunId)return;
+          void startCheckoutFlow({isSheet:!!isSheet || useMobileCartPage,forceAddressRefresh:true});
+        },0);
+      },
+    });
     return false;
   }
   // -----------------------------

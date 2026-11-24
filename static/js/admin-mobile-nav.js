@@ -365,6 +365,7 @@
 
   function showLevel(level, title, push) {
     if (!isMobile()) return;
+    body.dataset.adminMobileSubview = mobileSubview?.key || '';
     if (backGesture?.source) clearSwipe();
     const nextLevel = level === "right" ? "right" : level === "center" ? "center" : "left";
     const changedLevel = currentLevel !== nextLevel;
@@ -398,6 +399,7 @@
   function restorePreviousView() {
     const previous = viewStack[viewStack.length - 1] || { level: getRootLevel(), title: rootTitle };
     mobileSubview = previous.subview || null;
+    body.dataset.adminMobileSubview = mobileSubview?.key || '';
     showLevel(previous.level, previous.title, false);
     if (mobileSubview) {
       menuButton.classList.add('hidden');
@@ -465,12 +467,13 @@
   }
 
   function isCenterDetailTarget(target) {
+    if (target.closest('summary, [data-acc-trigger], .acc-trigger, [aria-expanded], [aria-haspopup], [data-rbac-node]')) return null;
     const item = target.closest(
       ".settings-card, .order-row, .product-row, .client-row, .options-list > *, .orders-list > *, [data-order-id], [data-product-id], [data-client-id]"
     );
-    if (!item || !centerColumn.contains(item) || item.matches(".empty-hint, .hidden") || item.closest(".toolbar")) return null;
+    if (!item || !centerColumn.contains(item) || item.matches(".empty-hint, .empty-state, .hidden, :disabled, [aria-disabled='true']") || item.closest(".toolbar")) return null;
     const nestedControl = target.closest("button, input, label, select, textarea, a");
-    if (nestedControl) return null;
+    if (nestedControl && (nestedControl !== item || !item.matches('button'))) return null;
     return item;
   }
 
@@ -497,13 +500,19 @@
     if (!isMobile() || usesDedicatedMobileNavigation() || isEditorNavigation()) return;
     const item = isCenterDetailTarget(event.target);
     if (!item) return;
+    const expanded = item.classList.contains('is-open') || item.classList.contains('open');
+    const previousRightView = pendingRightView;
+    const previousSelection = selectedRightTabSignature();
     const title = itemTitle(item) || readText(centerColumn.querySelector(".toolbar-title")) || rootTitle;
     window.setTimeout(function () {
+      if (expanded !== (item.classList.contains('is-open') || item.classList.contains('open'))) return;
+      const detailsActivated = pendingRightView !== previousRightView || selectedRightTabSignature() !== previousSelection;
+      if (!detailsActivated && !item.matches('.is-active, .is-selected, [aria-selected="true"]')) return;
       if (currentLevel === "center" && !body.classList.contains("modal-open") && !body.classList.contains("sheet-open")) {
         showLevel("right", title, true);
       }
     }, 40);
-  });
+  }, true);
 
   if (catalogTabs) {
     document.getElementById("newOrderMobileCategories")?.addEventListener("click", function () {
@@ -616,6 +625,7 @@
         keepOrderTabs: options?.keepOrderTabs === true,
         beforeBack: typeof options?.beforeBack === "function" ? options.beforeBack : null,
       };
+      body.dataset.adminMobileSubview = key;
       const entry = { level: sourceLevel, title: mobileSubview.title, subview: mobileSubview };
       if (previousSubview?.key === key) Object.assign(viewStack[viewStack.length - 1], entry);
       else viewStack.push(entry);

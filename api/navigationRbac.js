@@ -98,7 +98,7 @@ const NAVIGATION_RBAC_NODES = Object.freeze([
     { key: 'team.roles.permissions', label: 'Управление разрешениями' },
   ]),
 
-  node('chat', null, 'chat', 'Чаты', 'chat.access'),
+  node('chat', null, 'chat', 'Чат поддержки', 'chat.access'),
   node('chat.threads', 'chat', 'chat', 'Чат поддержки', 'chat.threads.access', { read: 'chat.threads.read', create: 'chat.threads.create', update: 'chat.threads.update', delete: 'chat.threads.delete' }),
 
   node('settings', null, 'settings', 'Настройки', 'settings.access'),

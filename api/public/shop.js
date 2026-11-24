@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
-const {restrictedOrder} = require('../helpers/customerOrderPrivacy');
+const {restrictedOrder,blurredProfilePhoto} = require('../helpers/customerOrderPrivacy');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendNewOrderMaxNotification } = require('../maxNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
@@ -204,6 +204,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     try{
       const tenantId=browserCustomerTenant(req),guest=await customerAuth.getGuest(db,tenantId,token,false,helpers.getStoreId(req));if(!guest)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
       const customer=customerAuth.guestCustomer(guest),route=req.path;
+      if(req.method==='GET' && (route==='/bootstrap' || route==='/')){
+        const [[card]]=await db.query('SELECT photo FROM cust_customers WHERE tenant_id=? AND phone=? AND is_active=1 ORDER BY id LIMIT 1',[tenantId,guest.phone]);
+        customer.restricted_photo=await blurredProfilePhoto(tenantId,card?.photo);
+      }
       if((req.method==='PUT'&&route==='/')||(['POST','DELETE'].includes(req.method)&&route==='/photo'))return res.status(403).json({ok:false,error:'GUEST_OPERATION_FORBIDDEN'});
       if(req.method==='GET'&&route==='/bootstrap')return res.json({ok:true,data:{customer,addresses:guest.addresses}});
       if(req.method==='GET'&&route==='/')return res.json({ok:true,data:customer,customer});
@@ -3879,7 +3883,19 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       }
       const promotedAccount = await promotePublicBonusAccountIfEligible(db, tenantId, customer, loadedAccount, levelRows);
       let account = mapPublicBonusAccountRow(promotedAccount);
-      if(guest) account={is_guest:true,is_joined:false,can_redeem:false};
+      if(guest){
+        const [[linked]]=await db.query(`SELECT a.level_id FROM cust_customers c
+          JOIN mkt_customer_bonus_accounts a ON a.tenant_id=c.tenant_id AND a.customer_id=c.id
+          WHERE c.tenant_id=? AND c.phone=? AND c.is_active=1 AND a.status='active' LIMIT 1`,[tenantId,guest.phone]);
+        const level=levelRows.find(row=>Number(row.id)===Number(linked?.level_id));
+        const restrictedLevel=level ? {id:0,title:'••••',privacy_restricted:true,
+          main_color:level.main_color || level.design_color,base_color:level.base_color,
+          content_color:level.content_color,title_color:level.title_color,
+          title_background_enabled:Number(level.title_background_enabled)===1,
+          title_background_color:level.title_background_color,title_background_opacity:Number(level.title_background_opacity || 0),
+          show_title_on_card:true,qr_enabled:false} : null;
+        account={is_guest:true,is_joined:false,can_redeem:false,privacy_restricted:true,restricted_level:restrictedLevel};
+      }
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows, promotedAccount);
       const [referralRows] = await db.query(
         `SELECT id, code, title, invited_count, percent, sort_order, is_active
