@@ -6133,7 +6133,34 @@
       <span class="stage-count">${escapeHtml(count)}</span>
     `;
 
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
+      if (!isCourierWorkspace && matchMedia('(max-width: 768px)').matches && state.selectedOrderIds.size > 0) {
+        if (ordersBulkLoading || !getActiveOrderCapabilities().status) return;
+        const statusId = Number(id);
+        if (!(statusId > 0)) return;
+        const targetStatus = getStatusMetaById(statusId);
+        const orderIds = getOrdersForActiveStage().filter(order => {
+          if (!isOrderMultiSelected(order.id)) return false;
+          const current = orderStatusQueue.overlay(order);
+          return Number(current.status_id) !== statusId
+            && !isForbiddenStatusTransition(getStatusMetaById(current.status_id), targetStatus);
+        }).map(order => Number(order.id));
+        if (!orderIds.length) return;
+        ordersBulkLoading = true;
+        syncOrdersSelectionToolbar();
+        try {
+          const results = await Promise.allSettled(orderIds.map(orderId => updateOrderStatus(orderId, statusId)));
+          results.forEach((result, index) => {
+            if (result.status === 'fulfilled') state.selectedOrderIds.delete(orderIds[index]);
+            else console.error(result.reason);
+          });
+        } finally {
+          ordersBulkLoading = false;
+          renderOrders();
+          syncOrdersSelectionToolbar();
+        }
+        return;
+      }
       state.activeStatusId = id;
       syncActiveStage();
       if (isCourierWorkspace) {
@@ -6228,6 +6255,87 @@
 
   function wireDragTargets() {
     if (!elStagesList || isCourierWorkspace) return;
+
+    if (elOrdersList && elOrdersList.dataset.touchStageDragBound !== '1') {
+      elOrdersList.dataset.touchStageDragBound = '1';
+      let gesture = null;
+      let suppressClickUntil = 0;
+      const cleanup = () => {
+        if (gesture) {
+          clearTimeout(gesture.timer);
+          gesture.row.classList.remove('is-dragging');
+          gesture.row.draggable = gesture.draggable;
+        }
+        gesture = null;
+        state.draggingOrderIds = [];
+        state.draggingOrderId = null;
+        clearStageDropover();
+        removeOrderDragGhost();
+      };
+      const stageAt = (x, y) => {
+        const stage = document.elementFromPoint(x, y)?.closest('.stage-item');
+        return stage && elStagesList.contains(stage) && Number(stage.dataset.statusId) > 0 ? stage : null;
+      };
+      elOrdersList.addEventListener('touchstart', event => {
+        if (gesture) cleanup();
+        if (event.touches.length !== 1 || !matchMedia('(max-width: 768px)').matches || ordersBulkLoading || !getActiveOrderCapabilities().status) return;
+        if (event.target.closest('button,input,label,a,select,textarea')) return;
+        const row = event.target.closest('.js-order');
+        if (!row) return;
+        const draggable = row.draggable;
+        row.draggable = false;
+        const touch = event.touches[0];
+        gesture = { row, draggable, x: touch.clientX, y: touch.clientY, active: false, identifier: touch.identifier };
+        gesture.timer = setTimeout(() => {
+          if (!gesture || !row.isConnected) { cleanup(); return; }
+          const id = Number(row.dataset.orderId);
+          state.draggingOrderIds = isOrderMultiSelected(id) ? [...state.selectedOrderIds].map(Number) : [id];
+          state.draggingOrderId = id;
+          gesture.active = true;
+          row.classList.add('is-dragging');
+          orderDragGhostEl = buildOrderDragGhost(state.draggingOrderIds);
+          if (orderDragGhostEl) {
+            orderDragGhostEl.style.left = `${gesture.x - 28}px`;
+            orderDragGhostEl.style.top = `${gesture.y - 64}px`;
+            document.body.append(orderDragGhostEl);
+          }
+        }, 450);
+      }, { passive: true });
+      elOrdersList.addEventListener('touchmove', event => {
+        if (!gesture) return;
+        const touch = [...event.touches].find(item => item.identifier === gesture.identifier);
+        if (!touch || event.touches.length !== 1) { cleanup(); return; }
+        if (!gesture.active) {
+          if (Math.hypot(touch.clientX - gesture.x, touch.clientY - gesture.y) > 10) cleanup();
+          return;
+        }
+        event.preventDefault();
+        if (orderDragGhostEl) {
+          orderDragGhostEl.style.left = `${touch.clientX - 28}px`;
+          orderDragGhostEl.style.top = `${touch.clientY - 64}px`;
+        }
+        clearStageDropover();
+        const stage = stageAt(touch.clientX, touch.clientY);
+        if (stage) setStageDropover(stage);
+      }, { passive: false });
+      elOrdersList.addEventListener('touchend', async event => {
+        if (!gesture) return;
+        const touch = [...event.changedTouches].find(item => item.identifier === gesture.identifier);
+        const active = gesture.active;
+        const ids = [...state.draggingOrderIds];
+        const stage = active && touch ? stageAt(touch.clientX, touch.clientY) : null;
+        if (active) { event.preventDefault(); suppressClickUntil = Date.now() + 500; }
+        cleanup();
+        if (!stage) return;
+        const results = await Promise.allSettled(ids.map(id => updateOrderStatus(id, Number(stage.dataset.statusId))));
+        results.forEach(result => { if (result.status === 'rejected') console.error(result.reason); });
+      }, { passive: false });
+      elOrdersList.addEventListener('touchcancel', cleanup, { passive: true });
+      elOrdersList.addEventListener('contextmenu', event => { if (gesture) event.preventDefault(); });
+      elOrdersList.addEventListener('click', event => {
+        if (Date.now() < suppressClickUntil) { event.preventDefault(); event.stopImmediatePropagation(); }
+      }, true);
+    }
 
     $$(".stage-item", elStagesList).forEach((stageBtn) => {
       stageBtn.addEventListener("dragover", (e) => {
@@ -6381,7 +6489,7 @@
     updateOrderRow(row, order);
 
     row.addEventListener("dragstart", (e) => {
-      if (isCourierWorkspace) {
+      if (isCourierWorkspace || matchMedia('(max-width: 768px)').matches) {
         e.preventDefault();
         return;
       }

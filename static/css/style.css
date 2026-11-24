@@ -4523,6 +4523,11 @@ body.page-clients .shop-chip-btn.important-recipient-mode-btn.is-active{
   box-shadow:0 0 0 2px var(--primary-12);
 }
 
+@media (max-width:768px){
+  .js-order{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
+  .js-order img{-webkit-user-drag:none;}
+}
+
 .order-drag-ghost-stack{
   position:fixed;
   top:-9999px;

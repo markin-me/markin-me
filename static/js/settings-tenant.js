@@ -1,4 +1,5 @@
 (() => {
+  let syncCustomerAuthEditState = null;
   async function initCustomerAuthSettings(){
     const inputs=Array.from(document.querySelectorAll('[data-customer-auth]'));
     if(!inputs.length || inputs[0].dataset.authBound)return;
@@ -9,17 +10,25 @@
       if(!response.ok||!data.ok)throw new Error(data.error||'REQUEST_FAILED');
       return data;
     };
-    let saved,canUpdate=false;
-    const render=()=>inputs.forEach(input=>{input.checked=Boolean(saved?.[input.dataset.customerAuth]);input.disabled=!canUpdate;});
+    let saved,canUpdate=false,busy=false;
+    const render=()=>inputs.forEach(input=>{
+      input.checked=Boolean(saved?.[input.dataset.customerAuth]);
+      const editing=input.dataset.customerAuth==='tg'?telegramDraftMode:maxDraftMode;
+      input.disabled=!canUpdate || !editing || busy;
+    });
+    syncCustomerAuthEditState=render;
     try{const data=await request();saved=data.settings;canUpdate=data.can_update;render();}
     catch(error){inputs.forEach(input=>{document.querySelector('[data-customer-auth-notice="'+input.dataset.customerAuth+'"]').textContent='Не удалось загрузить настройки авторизации.';});inputs.forEach(input=>{delete input.dataset.authBound;});return;}
     inputs.forEach(input=>input.addEventListener('change',async()=>{
+      const editing=input.dataset.customerAuth==='tg'?telegramDraftMode:maxDraftMode;
+      if(!canUpdate || !editing || busy){render();return;}
       const notice=document.querySelector('[data-customer-auth-notice="'+input.dataset.customerAuth+'"]');
       const body={...saved,[input.dataset.customerAuth]:input.checked};
+      busy=true;
       inputs.forEach(control=>{control.disabled=true;});notice.textContent='';
       try{saved=(await request({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).settings;}
       catch(error){notice.textContent='Не удалось сохранить настройки.';}
-      finally{render();}
+      finally{busy=false;render();}
     }));
   }
   function initCorporateLoginSuffix() {
@@ -25112,6 +25121,7 @@
 
 
       maxDraftMode = Boolean(enabled);
+      syncCustomerAuthEditState?.();
 
 
 
@@ -25324,6 +25334,7 @@
 
 
       telegramDraftMode = Boolean(enabled);
+      syncCustomerAuthEditState?.();
 
 
 

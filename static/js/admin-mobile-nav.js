@@ -783,6 +783,7 @@
   document.addEventListener('touchmove', function (event) {
     const gesture = backGesture;
     if (!gesture || gesture.settling) return;
+    if (event.target.closest('.js-order.is-dragging')) { clearSwipe(); return; }
     const touch = event.touches[0];
     if (event.touches.length !== 1 || touch.identifier !== gesture.id) { finishSwipe(false); return; }
     const dx = touch.clientX - gesture.x;
