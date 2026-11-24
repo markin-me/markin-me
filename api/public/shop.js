@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const {restrictedOrder} = require('../helpers/customerOrderPrivacy');
 const { sendNewOrderNotification } = require('../telegramNotifications');
 const { sendNewOrderMaxNotification } = require('../maxNotifications');
 const { sendOrderToPrintBot } = require('../printPush');
@@ -3772,7 +3773,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if(!guest&&!customer)return res.status(401).json({ok:false,error:'UNAUTHORIZED'});
       const items=req.body?.items;
       if(!Array.isArray(items)||items.length>200||items.some(item=>!item||!Number.isFinite(Number(item.line_total))||Number(item.line_total)<0||Number(item.line_total)>1e8))return res.status(400).json({ok:false,error:'BAD_ITEMS'});
-      const context=await customerBonus.phoneContext(db,tenantId,guest?customerAuth.phone(req.body.customer_phone||guest.phone):customer.phone);
+      if (guest || customer.auth_strength !== 'strong') return res.json({ok:true,data:{amount:null,restricted:true}});
+      const context=await customerBonus.phoneContext(db,tenantId,customer.phone);
       const [[settings]]=await db.query('SELECT bonus_program_enabled FROM mkt_bonus_program_settings WHERE tenant_id=?',[tenantId]);
       const amount=Number(settings?.bonus_program_enabled)===1&&context.status==='active'&&context.levelId
         ?await customerBonus.calculateAccrual(db,{tenantId,customerId:context.customerId,levelId:context.levelId,items}):0;
@@ -3791,7 +3793,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       let customer = token ? await getCustomerByToken(tenantId, token) : null;
       const ksoPhone = req.query.kso_phone != null ? helpers.normalizePhone(req.query.kso_phone) : null;
       if(req.query.kso_phone != null && !/^7\d{10}$/.test(ksoPhone))return res.status(400).json({ok:false,error:'INVALID_PHONE'});
-      if(ksoPhone){const [rows]=await db.query('SELECT id FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 1',[tenantId,ksoPhone]);customer=rows[0]||null;}
+      // A typed phone is not authorization to read a bonus account.
+      if (customer?.auth_strength !== 'strong' || (ksoPhone && ksoPhone !== customer.phone)) customer = null;
       const [[settingsRow]] = await db.query(
         `SELECT bonus_program_enabled, referral_program_enabled,
                 bonus_point_amount, bonus_ruble_amount, bonus_point_rate,
@@ -3876,12 +3879,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       }
       const promotedAccount = await promotePublicBonusAccountIfEligible(db, tenantId, customer, loadedAccount, levelRows);
       let account = mapPublicBonusAccountRow(promotedAccount);
-      if(guest){
-        // Expose only the balance and public card level, never the customer's identity or ledger.
-        const context=await customerBonus.phoneContext(db,tenantId,guest.phone);
-        account={balance:context.balance,level_id:context.levelId,is_guest:true,is_joined:context.joined,can_redeem:false,
-          notice:'Только начисление'};
-      }
+      if(guest) account={is_guest:true,is_joined:false,can_redeem:false};
       const progressByLevel = await loadPublicBonusProgressByLevel(tenantId, customer, levelRows, promotedAccount);
       const [referralRows] = await db.query(
         `SELECT id, code, title, invited_count, percent, sort_order, is_active
@@ -9115,6 +9113,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   // GET /api/public/orders/by-phone
   // public endpoint for chat assistant: finds active orders by customer phone
   router.get('/orders/by-phone', async (req, res) => {
+    res.set('Cache-Control','no-store');
     try {
       const tenantId = helpers.getTenantId(req);
       const storeId = helpers.getStoreId(req);
@@ -9161,10 +9160,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          WHERE o.tenant_id=? AND o.store_id=? AND o.is_active=1
            AND COALESCE(s.is_final, 0)=0
            AND LOWER(COALESCE(s.code, '')) NOT IN ('canceled', 'cancelled')
-           AND o.customer_id=?
+           AND (o.customer_id=? OR (o.customer_id IS NULL AND o.customer_phone=?))
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ?`,
-        [tenantId, storeId, customer.id, fetchLimit]
+        [tenantId, storeId, customer.id, customer.auth_strength==='strong'?customer.phone:null, fetchLimit]
       );
 
       const hasMore = rows.length > limit;
@@ -9221,8 +9220,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = req.authGuest ? null : await getCustomerByToken(tenantId, token);
       if (!customer && !req.authGuest) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
-      const ownerClause=req.authGuest?'o.guest_session_hash=? AND o.customer_id IS NULL':'o.customer_id=?';
-      const ownerValue=req.authGuest?req.authGuest.token_hash:customer.id;
+      const ownerClause=req.authGuest
+        ? '(o.customer_phone=? OR (o.guest_session_hash=? AND o.customer_id IS NULL))'
+        : '(o.customer_id=? OR (o.customer_id IS NULL AND o.customer_phone=?))';
+      const guestPhone=req.authGuest && /^7\d{10}$/.test(req.authGuest.phone || '') ? req.authGuest.phone : null;
+      const ownerParams=req.authGuest?[guestPhone,req.authGuest.token_hash]:[customer.id,customer.auth_strength==='strong'?customer.phone:null];
 
       let limit = Number(req.query.limit ?? 50);
       if (!Number.isFinite(limit) || limit <= 0) limit = 50;
@@ -9259,7 +9261,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            LEFT JOIN order_statuses s
              ON s.tenant_id=o.tenant_id AND s.store_id=o.store_id AND s.id=o.status_id
            WHERE o.tenant_id=? AND o.store_id=? AND ${ownerClause} AND o.is_active=1`,
-          [tenantId, storeId, ownerValue]
+          [tenantId, storeId, ...ownerParams]
         );
         const summaryRow = summaryRows?.[0] || {};
         summary = {
@@ -9271,7 +9273,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const [rows] = await db.query(
         `SELECT
-           o.id,
+           o.id, o.customer_id, o.guest_session_hash,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at_utc,
            o.total_price, o.items, o.public_id, o.address,
            o.is_paid,o.online_payment_required,o.online_payment_status,o.online_payment_total,o.payment_projection,o.manual_paid_at,
@@ -9309,20 +9311,25 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          ORDER BY o.created_at DESC, o.id DESC
          LIMIT ?
          OFFSET ?`,
-        [tenantId, storeId, ownerValue, statusIsFinal, statusIsFinal, fetchLimit, offset]
+        [tenantId, storeId, ...ownerParams, statusIsFinal, statusIsFinal, fetchLimit, offset]
       );
 
       const hasMore = rows.length > limit;
       const pageRows = hasMore ? rows.slice(0, limit) : rows;
       await onlinePayments.attachRefundSummaries(tenantId,storeId,pageRows);
 
-      const data = pageRows.map(r => {
+      const data = [];
+      for (const r of pageRows) {
+        if(req.authGuest && (r.customer_id != null || !Buffer.isBuffer(r.guest_session_hash) || !r.guest_session_hash.equals(req.authGuest.token_hash))) {
+          data.push(await restrictedOrder(tenantId,r));
+          continue;
+        }
         let items = [];
         try {
           const parsed = r.items ? JSON.parse(r.items) : [];
           if (Array.isArray(parsed)) items = parsed;
         } catch {}
-        return {
+        data.push({
           id: Number(r.id),
           public_id: r.public_id || null,
           created_at: helpers.utcToStoreDateTime(r.created_at_utc ?? r.created_at, storeTimezone),
@@ -9346,8 +9353,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           payment_title: r.payment_title || null,
           payment_code: r.payment_code || null,
           items,
-        };
-      });
+        });
+      }
 
       res.json({
         ok: true,
@@ -9380,19 +9387,20 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      if(req.authGuest){
-        const [[owned]]=await db.query('SELECT id FROM order_orders WHERE tenant_id=? AND store_id=? AND id=? AND guest_session_hash=? AND customer_id IS NULL',[tenantId,storeId,orderId,req.authGuest.token_hash]);
-        if(!owned)return res.status(404).json({ok:false,error:'NOT_FOUND'});
-      }
+      const [[access]]=await db.query(`SELECT customer_id,customer_phone,guest_session_hash FROM order_orders
+        WHERE tenant_id=? AND store_id=? AND id=? AND is_active=1`,[tenantId,storeId,orderId]);
+      const guestOwns=req.authGuest && access?.customer_id == null && Buffer.isBuffer(access?.guest_session_hash)
+        && access.guest_session_hash.equals(req.authGuest.token_hash);
+      const allowed=req.authGuest ? guestOwns || (/^7\d{10}$/.test(req.authGuest.phone || '') && access?.customer_phone===req.authGuest.phone)
+        : Number(access?.customer_id)===Number(customer.id) || (customer.auth_strength==='strong' && customer.phone && access?.customer_id==null && access?.customer_phone===customer.phone);
+      if(!access || !allowed)return res.status(404).json({ok:false,error:'NOT_FOUND'});
       const payload = await fetchOrderPayload(tenantId, storeId, orderId);
       if (!payload) {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
 
       // Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЏР ВµР С, РЎвЂЎРЎвЂљР С• Р В·Р В°Р С”Р В°Р В· Р С—РЎР‚Р С‘Р Р…Р В°Р Т‘Р В»Р ВµР В¶Р С‘РЎвЂљ Р С”Р В»Р С‘Р ВµР Р…РЎвЂљРЎС“
-      if (!req.authGuest && Number(payload.customer_id) !== Number(customer.id)) {
-        return res.status(403).json({ ok: false, error: 'FORBIDDEN' });
-      }
+      if(req.authGuest && !guestOwns)return res.json({ok:true,data:await restrictedOrder(tenantId,payload)});
 
       res.json({ ok: true, data: payload });
     } catch (e) {
@@ -26648,6 +26656,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (payload) {
             if (ordersEvents && typeof ordersEvents.publish === 'function') {
               ordersEvents.publish(tenantId, orderStoreId, 'order.created', payload);
+              if (!payload.customer_id && payload.customer_phone) {
+                const [cards] = await db.query('SELECT id FROM cust_customers WHERE tenant_id=? AND phone=? AND is_active=1 LIMIT 1', [tenantId, payload.customer_phone]);
+                if (cards[0]) ordersEvents.publish(tenantId, orderStoreId, 'client.changed', {client_id:Number(cards[0].id),section:'orders'});
+              }
             }
           }
           if (payload && isOrderEligibleForFulfillment(payload) && (!Number(payload.online_payment_required) || Number(payload.total_price)===0)) {

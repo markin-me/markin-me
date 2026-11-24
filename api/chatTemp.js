@@ -3007,6 +3007,12 @@ function mergeReactionsByActor(existingRows, nextMessages, actorKey) {
   });
 }
 
+function customerOrderCardReferences(req, message) {
+  if (!req.customerChatRequest || !message || typeof message !== 'object') return message;
+  // Persisted previews are historical snapshots, not current permission to read an order.
+  return {...message, orderCards: sanitizeOrderCards(message.orderCards).map(card => ({id:card.id}))};
+}
+
 function mapDbMessageRowToApi(row) {
   const messageId = String(row.message_id || "");
   const direction = normalizeMessageDirection(row.direction, messageId);
@@ -5054,7 +5060,7 @@ function makeChatTempRouter() {
         if(existing){
           const meta=await readThreadMeta(tenantId,clientId,conn);
           await conn.commit();conn.release();conn=null;
-          return res.json({ok:true,data:{client_id:Number(clientId),updated_at:toIsoOrEmpty(meta?.updated_at),message:mapDbMessageRowToApi(existing)}});
+          return res.json({ok:true,data:{client_id:Number(clientId),updated_at:toIsoOrEmpty(meta?.updated_at),message:customerOrderCardReferences(req,mapDbMessageRowToApi(existing))}});
         }
       }
       const updatedAt = new Date();
@@ -5172,7 +5178,7 @@ function makeChatTempRouter() {
         data: {
           client_id: Number(clientId),
           updated_at: updatedAt.toISOString(),
-          message: row ? mapDbMessageRowToApi(row) : (nextMessage || existingMessage),
+          message: customerOrderCardReferences(req, row ? mapDbMessageRowToApi(row) : (nextMessage || existingMessage)),
         },
       });
     } catch (err) {
@@ -5444,7 +5450,7 @@ function makeChatTempRouter() {
           client_id: Number(clientId),
           updated_at: toIsoOrEmpty(metaRow?.updated_at),
           message_count: Number(totalCount || 0),
-          messages: sanitizeThread(changedRows.map(mapDbMessageRowToApi)),
+          messages: sanitizeThread(changedRows.map(mapDbMessageRowToApi)).map(message => customerOrderCardReferences(req, message)),
         },
       });
     } catch (err) {
@@ -5498,7 +5504,7 @@ function makeChatTempRouter() {
           updated_at: updatedAt,
           message_count: Number(totalCount || 0),
           meta,
-          messages: Array.isArray(page?.messages) ? page.messages : [],
+          messages: (Array.isArray(page?.messages) ? page.messages : []).map(message => customerOrderCardReferences(req, message)),
           page: {
             limit: Number(page?.limit || pageLimit),
             before_id: page?.beforeId ? Number(page.beforeId) : null,
@@ -5562,7 +5568,7 @@ function makeChatTempRouter() {
           client_id: Number(clientId),
           updated_at: updatedAt.toISOString(),
           meta: sanitizeMeta(mergedMeta),
-          messages: mergedMessages,
+          messages: mergedMessages.map(message => customerOrderCardReferences(req, message)),
         },
       });
     } catch (err) {

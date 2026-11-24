@@ -28315,3 +28315,25 @@ body.page-shop .shop-products-grid > .sp-card .sp-cart-total-stack{
 .shop-auto-add-gift-card>.shop-checkout-benefit-gift-action{width:100%}
 .shop-auto-add-gift-card>.shop-checkout-benefit-gift-action:disabled{background:var(--color-surface-2);color:var(--color-text-muted);box-shadow:none;cursor:default;opacity:1}
 @media(max-width:380px){.shop-checkout-benefits-list--gift-stack>.shop-auto-add-gift-card{grid-template-columns:76px minmax(0,1fr);gap:8px}.shop-auto-add-gift-card>.shop-checkout-benefit-gift-media{height:76px}}
+
+/* Only safe masks are blurred; protected originals are never used as masks. */
+.shop-private-value {
+  filter: blur(4px);
+  user-select: none;
+}
+
+.is-restricted-order :is(.shop-order-summary-card__head,
+  .shop-order-summary-card__address, .shop-order-summary-card__price,
+  .shop-company-chat-order-card__title, .shop-company-chat-order-card__meta,
+  .shop-company-chat-order-card__total, .shop-order-details-title,
+  .shop-order-info-value, .shop-order-customer, .shop-cart-items,
+  .shop-order-address, .shop-order-summary,
+  [data-order-section-subtitle], [data-order-section-summary],
+  [data-order-products], [data-order-delivery], [data-order-payment]) {
+  filter: blur(4px);
+  user-select: none;
+}
+
+.is-restricted-order :is(.shop-profile-order-photo, .shop-company-chat-order-card__photo) {
+  filter: blur(2px);
+}

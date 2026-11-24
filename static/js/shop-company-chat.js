@@ -4522,7 +4522,7 @@
       read: message.read === true,
       deliveredAt: String(message.deliveredAt || ""),
       readAt: String(message.readAt || ""),
-      orderCards: cacheHotQuestionOrderPreviews(message.orderCards),
+      orderCards: isAdminClientChatMode ? cacheHotQuestionOrderPreviews(message.orderCards) : (Array.isArray(message.orderCards) ? message.orderCards : []).map(card => ({id:toPositiveOrderId(card.id)})).filter(card => card.id),
     };
   }
 
@@ -4615,7 +4615,7 @@
       deliveryStatus: status,
       deliveredAt: String(entry.deliveredAt || ""),
       readAt: String(entry.readAt || ""),
-      orderCards: cacheHotQuestionOrderPreviews(entry.orderCards),
+      orderCards: isAdminClientChatMode ? cacheHotQuestionOrderPreviews(entry.orderCards) : (Array.isArray(entry.orderCards) ? entry.orderCards : []).map(card => ({id:toPositiveOrderId(card.id)})).filter(card => card.id),
     };
   }
 
@@ -10362,7 +10362,7 @@
 
   function buildChatOrderDetailsHtml(order) {
     const source = order && typeof order === "object" ? order : {};
-    let html = '<div class="shop-order-details">';
+    let html = '<div class="shop-order-details' + (source.privacy_restricted ? ' is-restricted-order' : '') + '">';
 
     html += '<div class="shop-order-details-header">';
     html += '<div class="shop-order-details-title">\u0417\u0430\u043a\u0430\u0437 '
@@ -10598,6 +10598,7 @@
     const safeOrderId = toPositiveOrderId(source.id || orderId);
     const photos = Array.isArray(source.photos) ? source.photos.slice(0, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX) : [];
     button.innerHTML = "";
+    button.classList.toggle("is-restricted-order", !!source.privacy_restricted);
 
     const head = document.createElement("div");
     head.className = "shop-company-chat-order-card__head";
@@ -13500,6 +13501,7 @@
       : [];
     const preview = {
       id: id,
+      privacy_restricted: source.privacy_restricted === true,
       publicId: String(source.public_id || source.publicId || "").trim(),
       statusTitle: String(
         source.status_title || source.statusTitle || HOT_QUESTION_ORDER_STATUS_UNKNOWN
@@ -13576,7 +13578,9 @@
     const resolved = [];
     const seen = new Set();
 
-    cacheHotQuestionOrderPreviews(source.orderCards).forEach(function (preview) {
+    const references=isAdminClientChatMode ? cacheHotQuestionOrderPreviews(source.orderCards)
+      : (Array.isArray(source.orderCards) ? source.orderCards : []).map(card => hotQuestionOrderCardsCache.get(toPositiveOrderId(card.id)) || {id:toPositiveOrderId(card.id)});
+    references.forEach(function (preview) {
       const orderId = toPositiveOrderId(preview && preview.id);
       if (!orderId || seen.has(orderId)) return;
       seen.add(orderId);
@@ -13653,7 +13657,7 @@
       "/api/public/me/orders/" + encodeURIComponent(String(safeOrderId)) + "?_ts=" + Date.now()
     );
     const order = json && json.data ? json.data : null;
-    return cacheHotQuestionOrderPreview(order);
+    return mapHotQuestionOrderPreview(order);
   }
 
   async function ensureHotQuestionOrderCardPreview(orderId, refresh) {
@@ -13665,17 +13669,20 @@
     if (hotQuestionOrderCardsFetchInFlight.has(safeOrderId)) {
       return hotQuestionOrderCardsFetchInFlight.get(safeOrderId);
     }
+    const requestToken=getCustomerToken();
     const pending = fetchHotQuestionOrderPreviewById(safeOrderId)
       .then(function (preview) {
+        if (requestToken!==getCustomerToken()) return null;
         hotQuestionOrderCardsCache.set(safeOrderId, preview || null);
         return preview || null;
       })
       .catch(function () {
+        if(requestToken!==getCustomerToken()) return null;
         hotQuestionOrderCardsCache.set(safeOrderId, null);
         return null;
       })
       .finally(function () {
-        hotQuestionOrderCardsFetchInFlight.delete(safeOrderId);
+        if(hotQuestionOrderCardsFetchInFlight.get(safeOrderId)===pending) hotQuestionOrderCardsFetchInFlight.delete(safeOrderId);
       });
     hotQuestionOrderCardsFetchInFlight.set(safeOrderId, pending);
     return pending;
@@ -14905,7 +14912,15 @@
   });
 
   // Same-tab customer auth/profile updates do not fire window.storage.
+  let orderCardsCustomerToken=getCustomerToken();
   window.addEventListener("shop:customer-profile-changed", function () {
+    if (!isAdminClientChatMode && orderCardsCustomerToken!==getCustomerToken()) {
+      orderCardsCustomerToken=getCustomerToken();
+      hotQuestionOrderCardsCache.clear();
+      hotQuestionOrderCardsFetchInFlight.clear();
+      hideChatOrderDetailsView();
+      if(chatOrderDetailsView) chatOrderDetailsView.replaceChildren();
+    }
     refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
     if (isAdminClientChatMode) {
       if (isSupportChatOpen()) {

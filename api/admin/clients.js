@@ -1992,16 +1992,20 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
           : '';
       const actorParams = actorClause ? [Number(req.user?.userId || 0)] : [];
       const chatContext=String(req.headers['x-rbac-context'] || '').toLowerCase()==='chat' && req.query.chat_sessions==='1';
+      // CRM association only: retain the guest session as the actual order owner.
+      const phoneOrderClause=`(o.customer_id IS NULL AND EXISTS (
+        SELECT 1 FROM cust_customers card WHERE card.tenant_id=o.tenant_id AND card.id=?
+          AND card.is_active=1 AND card.phone=o.customer_phone))`;
       const ownerClause=chatContext
-        ? `(o.customer_id=? OR (o.customer_id IS NULL AND EXISTS (SELECT 1 FROM chat_visitor_identities origin
+        ? `(o.customer_id=? OR ${phoneOrderClause} OR (o.customer_id IS NULL AND EXISTS (SELECT 1 FROM chat_visitor_identities origin
             WHERE origin.tenant_id=o.tenant_id AND origin.claimed_customer_id=? AND origin.claimed_at IS NOT NULL
               AND origin.guest_session_hash=o.guest_session_hash)))`
-        : 'o.customer_id=?';
-      const ownerParams=chatContext?[customerId,customerId]:[customerId];
+        : `(o.customer_id=? OR ${phoneOrderClause})`;
+      const ownerParams=chatContext?[customerId,customerId,customerId]:[customerId,customerId];
 
       const [rows] = await db.query(
         `SELECT
-           o.id, o.public_id, o.customer_id,
+           o.id, o.public_id, o.customer_id, o.customer_phone,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
            o.total_price, o.items, o.status_id,
            s.code AS status_code,
@@ -2158,15 +2162,19 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
           : '';
       const actorParams = actorClause ? [Number(req.user?.userId || 0)] : [];
       const chatContext=String(req.headers['x-rbac-context'] || '').toLowerCase()==='chat' && req.query.chat_sessions==='1';
+      // CRM association only: retain the guest session as the actual order owner.
+      const phoneOrderClause=`(o.customer_id IS NULL AND EXISTS (
+        SELECT 1 FROM cust_customers card WHERE card.tenant_id=o.tenant_id AND card.id=?
+          AND card.is_active=1 AND card.phone=o.customer_phone))`;
       const ownerClause=chatContext
-        ? `(o.customer_id=? OR (o.customer_id IS NULL AND EXISTS (SELECT 1 FROM chat_visitor_identities origin
+        ? `(o.customer_id=? OR ${phoneOrderClause} OR (o.customer_id IS NULL AND EXISTS (SELECT 1 FROM chat_visitor_identities origin
             WHERE origin.tenant_id=o.tenant_id AND origin.claimed_customer_id=? AND origin.claimed_at IS NOT NULL
               AND origin.guest_session_hash=o.guest_session_hash)))`
-        : 'o.customer_id=?';
-      const ownerParams=chatContext?[customerId,customerId]:[customerId];
+        : `(o.customer_id=? OR ${phoneOrderClause})`;
+      const ownerParams=chatContext?[customerId,customerId,customerId]:[customerId,customerId];
       const [rows] = await db.query(
         `SELECT
-           o.id, o.public_id, o.customer_id,
+           o.id, o.public_id, o.customer_id, o.customer_phone,
            DATE_FORMAT(o.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
            o.total_price, o.items, o.status_id,
            s.title AS status_title, s.color AS status_color

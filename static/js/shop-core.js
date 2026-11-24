@@ -4594,6 +4594,10 @@
   }
   function setCustomerToken(t) {
     try {
+      if (getCustomerToken() !== String(t || "")) {
+        localStorage.removeItem(CUSTOMER_CACHE_KEY);
+        for (const key of Object.keys(sessionStorage)) if (key.startsWith(`shop-auth-status:${tenantId}:`)) sessionStorage.removeItem(key);
+      }
       if (!t) localStorage.removeItem(CUSTOMER_TOKEN_KEY);
       else localStorage.setItem(CUSTOMER_TOKEN_KEY, String(t));
     } catch {}
@@ -4610,6 +4614,8 @@
     try {
       const raw = localStorage.getItem(CUSTOMER_CACHE_KEY);
       const cached = raw ? JSON.parse(raw) : null;
+      const token = getCustomerToken();
+      if (!token || (token.startsWith("g_") && !cached?.is_guest)) return null;
       return cached?.is_guest ? { ...cached, name: 'Гость', photo: null } : cached;
     } catch { return null; }
   }
@@ -4665,15 +4671,15 @@
     state._addressListBackMode = null;
     state._addressPendingAddress = null;
     state._addressPendingPickupStoreId = null;
+    try { window._activeOrders = []; } catch {}
+    try { window._savedActiveOrdersForBack = []; } catch {}
+    try { window._activeOrdersSourceScreen = ""; } catch {}
+    renderHomeBonusCard();
+    renderHomeActiveOrdersBlock();
     if (fullReset) {
       clearAddressDraft();
-      try { window._activeOrders = []; } catch {}
-      try { window._savedActiveOrdersForBack = []; } catch {}
-      try { window._activeOrdersSourceScreen = ""; } catch {}
       setSelectedAddress(null);
-      renderHomeActiveOrdersBlock();
       renderCatalogPromoBlock();
-      renderHomeBonusCard();
       void loadHomeBonusConfig({ force: true, skipPendingModal: true });
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge({ force: true }).catch(() => {});
@@ -11896,11 +11902,13 @@ function showProductView() {
         addresses: Array.isArray(state.addresses) ? state.addresses : [],
       };
     }
-    if (meBootstrapPromise) return meBootstrapPromise;
+    if (meBootstrapPromise && meBootstrapToken === token) return meBootstrapPromise;
 
-    meBootstrapPromise = (async () => {
+    meBootstrapToken = token;
+    const request = (async () => {
       try {
         const json = await apiJson("/api/public/me/bootstrap");
+        if (getCustomerToken() !== token || meBootstrapPromise !== request) return null;
         const payload = json?.data || {};
         const customer = payload?.customer || null;
         const addresses = Array.isArray(payload?.addresses) ? payload.addresses : [];
@@ -11910,6 +11918,7 @@ function showProductView() {
         meBootstrapToken = token;
         return { customer, addresses };
       } catch (e) {
+        if (getCustomerToken() !== token || meBootstrapPromise !== request) return null;
         if (String(e?.message || "").includes("UNAUTHORIZED")) {
           clearCustomer();
           state.addresses = [];
@@ -11917,11 +11926,12 @@ function showProductView() {
         }
         throw e;
       } finally {
-        meBootstrapPromise = null;
+        if (meBootstrapPromise === request) meBootstrapPromise = null;
       }
     })();
 
-    return meBootstrapPromise;
+    meBootstrapPromise = request;
+    return request;
   }
   window.loadShopMeBootstrap = loadMeBootstrap;
 

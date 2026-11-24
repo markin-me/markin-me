@@ -17,7 +17,7 @@
     return 1;
   }
   const tenantId = getTenantId();
-  const CLIENT_DETAILS_CACHE_KEY = `dashboard:clients:details:v1:${tenantId}`;
+  const CLIENT_DETAILS_CACHE_KEY = `dashboard:clients:details:v3:${tenantId}`;
   const CLIENT_DETAILS_CACHE_TTL_MS = 10 * 60 * 1000;
   const CLIENT_DETAILS_CACHE_MAX_CLIENTS = 120;
   const SHARED_ORDER_DETAILS_CACHE_KEY = `dashboard:orders:details:v1:${tenantId}`;
@@ -2793,6 +2793,8 @@
     addresses: [],
     clientOrders: [],
     clientActiveOrder: null,
+    clientActiveOrders: [],
+    clientActiveOrdersClientId: 0,
     clientCompletedOrders: [],
     clientCompletedNextOffset: 0,
     clientCompletedHasMore: false,
@@ -3610,7 +3612,7 @@
 
   function clientCacheKey(clientId) {
     const storeId = localStorage.getItem('activeStoreId') || '1';
-    return `admin:client-card:v1:${tenantId}:${storeId}:${Number(clientId || 0)}`;
+    return `admin:client-card:v3:${tenantId}:${storeId}:${Number(clientId || 0)}`;
   }
 
   async function hydrateClientCache(clientId) {
@@ -26671,6 +26673,7 @@
       client: state.activeClient,
       addresses: Array.isArray(state.addresses) ? state.addresses.slice() : [],
       activeOrder: state.clientActiveOrder || null,
+      activeOrders: state.clientActiveOrdersClientId===clientId ? state.clientActiveOrders.slice() : null,
       completedOrders: Array.isArray(state.clientCompletedOrders) ? state.clientCompletedOrders.slice() : [],
       completedNextOffset: Number(state.clientCompletedNextOffset || 0),
       completedHasMore: state.clientCompletedHasMore === true,
@@ -26701,6 +26704,8 @@
     state.activeClient = snapshot.client;
     state.addresses = snapshot.addresses.slice();
     state.clientActiveOrder = snapshot.activeOrder || null;
+    state.clientActiveOrders = snapshot.activeOrders || [];
+    state.clientActiveOrdersClientId = Array.isArray(snapshot.activeOrders) ? Number(snapshot.client.id) : 0;
     state.clientCompletedOrders = snapshot.completedOrders.slice();
     state.clientCompletedNextOffset = snapshot.completedNextOffset;
     state.clientCompletedHasMore = snapshot.completedHasMore;
@@ -27329,26 +27334,37 @@
       if (Number(item?.id || 0) !== id) return item;
       return { ...item, ...order };
     });
-    const customerId = Number(order?.customer_id || state.activeClientId || 0);
+    const existingOrder = state.clientCompletedOrders.find(item => Number(item.id) === id)
+      || state.clientOrders.find(item => Number(item.id) === id)
+      || (state.clientActiveOrdersClientId===Number(state.activeClientId) && state.clientActiveOrders.find(item => Number(item.id)===id))
+      || (Number(state.clientActiveOrder?.id) === id ? state.clientActiveOrder : null);
+    const orderPhone = String(order?.customer_phone || '').replace(/\D/g, '');
+    const cardPhone = String(state.activeClient?.phone || '').replace(/\D/g, '');
+    const customerId = Number(order?.customer_id || ((existingOrder || (orderPhone && orderPhone === cardPhone)) ? state.activeClientId : 0) || 0);
     if (customerId > 0) {
       const statusMeta = state.orderStatuses.find((item) => Number(item?.id || 0) === Number(order?.status_id || 0));
       const isFinal = Number(order?.status_is_final ?? statusMeta?.is_final ?? 0) === 1;
+      const isCancelled=['canceled','cancelled'].includes(String(order.status_code || statusMeta?.code || '').toLowerCase())
+        || /^(\u043e\u0442\u043c\u0435\u043d|cancel)/i.test(String(order.status_title || statusMeta?.title || ''));
       if (Number(state.activeClientId) === customerId) {
         const completedIndex = state.clientCompletedOrders.findIndex((item) => Number(item?.id || 0) === id);
         if (isFinal) {
-          if (Number(state.clientActiveOrder?.id || 0) === id) state.clientActiveOrder = null;
-          if (completedIndex === -1) {
-            state.clientCompletedOrders.unshift({ ...order });
-            state.clientCompletedNextOffset += 1;
-          } else {
-            state.clientCompletedOrders[completedIndex] = { ...state.clientCompletedOrders[completedIndex], ...order };
-          }
+          if (Number(state.clientActiveOrder?.id || 0) === id) state.clientActiveOrder=null;
+          if(isCancelled){
+            if(completedIndex!==-1){state.clientCompletedOrders.splice(completedIndex,1);state.clientCompletedNextOffset=Math.max(0,state.clientCompletedNextOffset-1);}
+          } else if (completedIndex===-1 && state.clientCompletedLoaded) {
+            state.clientCompletedOrders.unshift({...order});state.clientCompletedNextOffset+=1;
+          } else if(completedIndex!==-1) state.clientCompletedOrders[completedIndex]={...state.clientCompletedOrders[completedIndex],...order};
         } else {
-          if (completedIndex !== -1) {
-            state.clientCompletedOrders.splice(completedIndex, 1);
-            state.clientCompletedNextOffset = Math.max(0, state.clientCompletedNextOffset - 1);
-          }
-          state.clientActiveOrder = { ...(state.clientActiveOrder || {}), ...order };
+          if(completedIndex!==-1){state.clientCompletedOrders.splice(completedIndex,1);state.clientCompletedNextOffset=Math.max(0,state.clientCompletedNextOffset-1);}
+          state.clientActiveOrder={...order};
+        }
+        if(state.clientActiveOrdersClientId===customerId){
+          const index=state.clientActiveOrders.findIndex(item=>Number(item.id)===id);
+          if(isFinal){if(index!==-1)state.clientActiveOrders.splice(index,1);}
+          else if(index!==-1)state.clientActiveOrders[index]={...state.clientActiveOrders[index],...order};
+          else state.clientActiveOrders.unshift({...order});
+          state.clientActiveOrder=state.clientActiveOrders[0] || null;
         }
         renderClientActiveOrder();
         renderClientCompletedOrders();
@@ -27435,15 +27451,24 @@
 
   function renderClientActiveOrder() {
     if (!clientActiveOrderCard) return;
-    const order = state.clientActiveOrder;
+    const orders = state.clientActiveOrdersClientId===Number(state.activeClientId)
+      ? state.clientActiveOrders : (state.clientActiveOrder ? [state.clientActiveOrder] : []);
     clientActiveOrderCard.classList.remove('hidden');
-    if (!order) {
-      clientActiveOrderCard.innerHTML = '<div class="muted">Текущих заказов нет.</div>';
-      clientActiveOrderCard.onclick = null;
+    clientActiveOrderCard.classList.toggle('shop-profile-list', orders.length>1);
+    clientActiveOrderCard.classList.toggle('shop-profile-card', orders.length<=1);
+    clientActiveOrderCard.replaceChildren();
+    clientActiveOrderCard.onclick=null;
+    if (!orders.length) {
+      clientActiveOrderCard.innerHTML = '<div class="muted">\u0422\u0435\u043a\u0443\u0449\u0438\u0445 \u0437\u0430\u043a\u0430\u0437\u043e\u0432 \u043d\u0435\u0442.</div>';
       return;
     }
-    clientActiveOrderCard.innerHTML = `<strong>Текущий заказ #${escapeHtml(order.id)}</strong><div class="muted">${escapeHtml(order.status_title || 'В работе')} · ${escapeHtml(fmtDateTime(order.created_at))}</div><div>${money(order.total_price || 0)}</div>`;
-    clientActiveOrderCard.onclick = () => openOrderTab(order.id);
+    for (const order of orders) {
+      const card=orders.length===1 ? clientActiveOrderCard : document.createElement('div');
+      if(card!==clientActiveOrderCard)card.className='shop-profile-card order-client-history-card';
+      card.innerHTML = `<strong>\u0422\u0435\u043a\u0443\u0449\u0438\u0439 \u0437\u0430\u043a\u0430\u0437 #${escapeHtml(order.id)}</strong><div class="muted">${escapeHtml(order.status_title || '\u0412 \u0440\u0430\u0431\u043e\u0442\u0435')} &middot; ${escapeHtml(fmtDateTime(order.created_at))}</div><div>${money(order.total_price || 0)}</div>`;
+      card.onclick=()=>openOrderTab(order.id);
+      if(card!==clientActiveOrderCard)clientActiveOrderCard.appendChild(card);
+    }
   }
 
   async function loadClientActiveOrder(clientId, options = {}) {
@@ -27455,16 +27480,27 @@
       state.clientActiveOrder = cachedActiveOrder;
       renderClientActiveOrder();
     }
-    if (options.refresh === false) return;
+    if (options.refresh === false && state.clientActiveOrdersClientId===Number(clientId)) return;
     if (state.clientActiveOrderRequest?.clientId === Number(clientId)) {
       await state.clientActiveOrderRequest.promise;
       return;
     }
     const requestPromise = (async () => {
       try {
-        const json = await apiJson(`/api/admin/clients/${clientId}/orders/header-candidate`);
-        if (Number(state.activeClientId) !== Number(clientId)) return;
-        state.clientActiveOrder = json?.data || null;
+        const orders=[];
+        let offset=0;
+        while (true) {
+          const json=await apiJson(`/api/admin/clients/${clientId}/orders?view=active&limit=50&offset=${offset}`);
+          if (Number(state.activeClientId)!==Number(clientId)) return;
+          orders.push(...(Array.isArray(json.data)?json.data:[]));
+          if(!json.has_more)break;
+          const next=Number(json.next_offset);
+          if(!Number.isFinite(next)||next<=offset)throw new Error('INVALID_ORDER_PAGINATION');
+          offset=next;
+        }
+        state.clientActiveOrders=orders;
+        state.clientActiveOrdersClientId=Number(clientId);
+        state.clientActiveOrder=orders[0] || null;
         setCachedClientDetails(clientId, { activeOrder: state.clientActiveOrder });
         renderClientActiveOrder();
       } catch (err) {
@@ -27819,6 +27855,7 @@
     if (passportSnapshot && !dirty.base && !dirty.addresses && !dirty.orders) {
       state.activeClientId = requestedClientId;
       restoreClientPassportSnapshot(passportSnapshot);
+      if(!Array.isArray(passportSnapshot.activeOrders))void loadClientActiveOrder(requestedClientId,{refresh:true});
       if (passportSnapshot.completedExpanded && !state.clientCompletedLoaded) void loadMoreClientCompletedOrders();
       hideEmptyState();
       forceShowClientProfilePanel();
@@ -28022,12 +28059,12 @@
     const ids = event.detail?.resync ? [...state.clientDetailsCache.keys()].map(Number) : event.detail?.ids || [];
     ids.forEach(id => {
       const sections = event.detail?.resync ? [] : event.detail?.sections?.[id] || [];
-      const unknown = !sections.length || sections.some(section => !['profile', 'addresses', 'benefits'].includes(section));
+      const unknown = !sections.length || sections.some(section => !['profile', 'addresses', 'benefits', 'orders'].includes(section));
       if (unknown || sections.includes('profile')) state.clientDetailsCache.delete(String(id));
       markClientPassportDirty(id, {
         base: unknown || sections.includes('profile') || sections.includes('benefits'),
         addresses: unknown || sections.includes('addresses'),
-        orders: unknown,
+        orders: unknown || sections.includes('orders'),
       });
     });
     const activeId = Number(state.activeClientId || 0);

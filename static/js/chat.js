@@ -8174,14 +8174,6 @@
     const guest=Boolean(state.activeClientId && client?.client_state==='guest');
     const warning=document.getElementById('chatGuestWarning');
     warning?.classList.toggle('hidden',!guest);
-    const recipient=document.getElementById('chatRecipientContext');
-    if(recipient){
-      const selected=findClientById(state.activeClientId);
-      const visible=Boolean(state.activeClientId && selected);
-      recipient.classList.toggle('hidden',!visible);
-      const text=visible?`${dialogueLabel(selected)}${selected.session_state==='completed'?' · Сессия завершена':''}`:'';
-      if(recipient.textContent!==text)recipient.textContent=text;
-    }
   }
 
   function ensureMessageAlertAudioContext() {
@@ -10924,6 +10916,16 @@
     const openClientThreadAndDetails = async (event) => {
       if(client._groupRow){
         event?.preventDefault();event?.stopPropagation();
+        if(isAdminMobileChatLayout()){
+          if(client._singleActiveId){
+            await selectClient(client._singleActiveId,{openDetails:false,preserveAccordion:true});
+          } else {
+            if(state.expandedClientGroups.has(client.group_key))state.expandedClientGroups.delete(client.group_key);
+            else state.expandedClientGroups.add(client.group_key);
+            renderClientsList();
+          }
+          return;
+        }
         if(!client._singleActiveId){
           if(state.expandedClientGroups.has(client.group_key))state.expandedClientGroups.delete(client.group_key);
           else state.expandedClientGroups.add(client.group_key);
@@ -17940,7 +17942,10 @@
           if (Number(state.activeClientId || 0) !== Number(clientId)) return;
           const freshOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
           setCachedActiveClientOrders(clientId, freshOrders);
-          setSharedClientDetailsToLocalStorage(clientId, { orders: freshOrders.filter(order=>Number(order.customer_id)===Number(clientId)) });
+          const cardPhone=normalizePhoneDigits(state.activeClient?.phone);
+          setSharedClientDetailsToLocalStorage(clientId, { orders: freshOrders.filter(order=>
+            Number(order.customer_id)===Number(clientId)
+            || (order.customer_id==null && cardPhone && normalizePhoneDigits(order.customer_phone)===cardPhone)) });
           setActiveOrders(freshOrders, { forceRender: true, forceRightOrderRefresh: true });
           try {
             const candidateJson = await fetchHeaderOrderCandidateFresh(clientId);

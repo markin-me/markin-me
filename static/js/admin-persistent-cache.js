@@ -803,7 +803,7 @@
             const kinds = new Set();
             for (const section of sections) {
               (section === 'addresses' ? ['addresses'] : section === 'benefits' ? ['discounts']
-                : section === 'profile' ? ['profile'] : ['profile', 'addresses', 'discounts']).forEach(kind => kinds.add(kind));
+                : section === 'profile' ? ['profile'] : section === 'orders' ? ['orders', 'header'] : ['profile', 'addresses', 'discounts']).forEach(kind => kinds.add(kind));
             }
             await Promise.all([...kinds].map(kind => invalidateClientResource(kind, id)));
             if (sections.some(section => section !== 'addresses')) await clientBenefits.invalidate(id);
