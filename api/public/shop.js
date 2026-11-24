@@ -44,6 +44,8 @@ const {
   buildStockAvailabilityForOrderItems,
   checkStockAvailabilityForOrderItems,
   createStockAvailabilityContext,
+  resolveOrderPackaging,
+  annotateOrderPackaging,
 } = require('../helpers/orderStock');
 const {
   registerCheckoutBenefitsPreviewProvider,
@@ -52,6 +54,7 @@ const {
   registerOrderBenefitsAccrualProvider,
 } = require('../../services/order-benefits-accrual-provider');
 const productPassportSnapshots = require('../../services/product-passport-snapshots');
+const catalogSync = require('../../services/catalog-sync');
 const {createOrderOnlinePayment,paymentError} = require('../../data/order-online-payment');
 const {isOrderEligibleForFulfillment} = require('../helpers/orderFulfillment');
 const {usesProductPriceSource,applyProductPromoPricing,buildOnlineItemPrices, autoAddFreeQty, loadAutoAddRuleConfig, validateAutoAddOrder, syncAutoAddOrderUsage, normalizeProductConfiguration} = require('../helpers/orderOnlinePricing');
@@ -1808,26 +1811,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     });
 
     return result;
-  }
-
-  async function getResolvedProductBlocksConfig(tenantId, storeId, productRow) {
-    const map = await resolveProductBlocksConfigMap(tenantId, storeId, [productRow]);
-    return map.get(Number(productRow?.id || productRow?.product_id || 0)) || getDefaultProductBlocksConfig();
-  }
-
-  async function loadPublicProductBlockRows(tenantId, productIds = []) {
-    const ids = Array.isArray(productIds)
-      ? Array.from(new Set(productIds.map(Number).filter((id) => Number.isFinite(id) && id > 0)))
-      : [];
-    if (!ids.length) return [];
-    const placeholders = ids.map(() => '?').join(',');
-    const [rows] = await db.query(
-      `SELECT id, blocks_config_json
-       FROM prod_products
-       WHERE tenant_id=? AND id IN (${placeholders})`,
-      [tenantId, ...ids]
-    );
-    return Array.isArray(rows) ? rows : [];
   }
 
   async function applyPublicProductBlocksToRows(rows, tenantId, storeId, { includeEditorData = false } = {}) {
@@ -4851,7 +4834,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return Number(row.quantity_min || 0) > 0;
   }
 
-  async function buildPublicProductAvailabilityMap(tenantId, storeId, productIds) {
+  async function buildPublicProductAvailabilityMap(tenantId, storeId, productIds, includeRootPackaging = true) {
     const rootIds = getPositiveIds(productIds);
     if (!rootIds.length) return new Map();
 
@@ -4908,8 +4891,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (optionParents.length) {
         const ph = optionParents.map(() => '?').join(',');
         const [optionRows] = await db.query(
-          `SELECT oa.assign_id AS product_id, og.id AS group_id, oi.target_product_id,
-                  og.out_of_stock_action, COALESCE(settings.is_locked,0) AS is_locked
+          `SELECT oa.assign_id AS product_id, og.id AS group_id, og.is_packaging, COALESCE(oa.is_component, og.is_component_default) AS is_component_default, oi.id AS option_item_id, oi.target_product_id,
+                  og.out_of_stock_action, CASE WHEN og.is_packaging=1 THEN 1 ELSE COALESCE(settings.is_locked,0) END AS is_locked
            FROM prod_option_assignments oa
            JOIN prod_option_groups og
              ON og.tenant_id=oa.tenant_id AND og.id=oa.group_id
@@ -4923,8 +4906,9 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
              AND oa.assign_id IN (${ph})
              AND oa.is_active=1
              AND og.is_active=1
-             AND NOT EXISTS (SELECT 1 FROM prod_option_item_exclusions e WHERE e.tenant_id=oa.tenant_id
-               AND e.product_id=oa.assign_id AND e.group_id=og.id AND e.option_item_id=oi.id)
+             AND (og.is_packaging=1
+               OR (og.is_packaging=0 AND NOT EXISTS (SELECT 1 FROM prod_option_item_exclusions e WHERE e.tenant_id=oa.tenant_id
+               AND e.product_id=oa.assign_id AND e.group_id=og.id AND e.option_item_id=oi.id)))
              AND oi.target_type='product'
              AND oi.is_active=1
              AND oi.target_product_id IS NOT NULL`,
@@ -4936,28 +4920,29 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
           const groupId = Number(row.group_id || 0);
           const targetProductId = Number(row.target_product_id || 0);
           if (!(productId > 0) || !(groupId > 0) || !(targetProductId > 0)) return;
-          if (!normalizeProductBlocksConfig(productsById.get(productId)?.blocks_config_json).options) return;
           recipeOptionParents.add(productId);
           if (!loadedProductIds.has(targetProductId)) pendingIds.add(targetProductId);
           if (Number(row.out_of_stock_action ?? 1) !== 0 && Number(row.is_locked) !== 1) return;
           if (!optionGroupsByProductId.has(productId)) optionGroupsByProductId.set(productId, new Map());
           const groups = optionGroupsByProductId.get(productId);
-          if (!groups.has(groupId)) groups.set(groupId, []);
-          groups.get(groupId).push(targetProductId);
+          const availabilityKey = Number(row.is_packaging) === 1 ? `packaging:${row.option_item_id}` : groupId;
+          if (!groups.has(availabilityKey)) groups.set(availabilityKey, []);
+          groups.get(availabilityKey).push({ targetProductId, includePackaging: Number(row.is_packaging) !== 1 && Number(row.is_component_default) !== 1 });
           if (!loadedProductIds.has(targetProductId)) pendingIds.add(targetProductId);
         });
       }
     }
 
     const memo = new Map();
-    function isAvailable(productId, stack = new Set()) {
+    function isAvailable(productId, stack = new Set(), includePackaging = true) {
       const id = Number(productId || 0);
       if (!(id > 0)) return false;
-      if (memo.has(id)) return memo.get(id);
+      const key = includePackaging ? id : -id;
+      if (memo.has(key)) return memo.get(key);
       if (stack.has(id)) return false;
       const product = productsById.get(id);
       if (!product || Number(product.is_active || 0) !== 1) {
-        memo.set(id, false);
+        memo.set(key, false);
         return false;
       }
 
@@ -4966,7 +4951,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (normalizeProductFulfillmentMode(product.fulfillment_mode) === 'made_to_order') {
         const requiredIngredients = (ingredientsByProductId.get(id) || []).filter(isRequiredIngredient);
         available = (requiredIngredients.length > 0 || recipeOptionParents.has(id))
-          && requiredIngredients.every((row) => isAvailable(Number(row.ingredient_id || 0), stack));
+          && requiredIngredients.every((row) => isAvailable(Number(row.ingredient_id || 0), stack, false));
       } else {
         available = isStockQtyAvailable(product.stock_qty);
       }
@@ -4974,8 +4959,10 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (available) {
         const groups = optionGroupsByProductId.get(id);
         if (groups && groups.size) {
-          for (const targetIds of groups.values()) {
-            if (!targetIds.some((targetId) => (product.sale_mode === 'preorder' || productsById.get(targetId)?.sale_mode !== 'preorder') && isAvailable(targetId, stack))) {
+          for (const [groupKey, targets] of groups) {
+            if (!includePackaging && typeof groupKey === 'string') continue;
+            if (!targets.some(target => (product.sale_mode === 'preorder' || productsById.get(target.targetProductId)?.sale_mode !== 'preorder')
+              && isAvailable(target.targetProductId, stack, target.includePackaging))) {
               available = false;
               break;
             }
@@ -4984,12 +4971,12 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       }
 
       stack.delete(id);
-      memo.set(id, available);
+      memo.set(key, available);
       return available;
     }
 
     const result = new Map();
-    rootIds.forEach((id) => result.set(id, isAvailable(id)));
+    rootIds.forEach((id) => result.set(id, isAvailable(id, new Set(), includeRootPackaging)));
     return result;
   }
 
@@ -5113,7 +5100,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return rawIndex;
   }
 
-  function getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle) {
+  function getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle, packaging) {
+    if (packaging) return items;
     const locked = items.filter(item => item.is_locked);
     const choices = items.filter(item => !item.is_locked);
     const defaults = choices.filter(item => item.effective_default_selected);
@@ -5247,6 +5235,28 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     return roundPrice(minPrice);
   }
 
+  async function calculatePublicCatalogPrices(tenantId, storeId, items, roundPrice, conversion) {
+    const queries = new Map();
+    const pricingDb = { query(sql, params) {
+      const key = JSON.stringify([sql, params]);
+      if (!queries.has(key)) queries.set(key, db.query(sql, params));
+      return queries.get(key);
+    } };
+    const revision = await catalogSync.getManifest({ db, tenantId, storeId });
+    const rounding = [roundPrice(1.2345), roundPrice(1.7654)];
+    const results = await Promise.all(items.map(async item => {
+      const key = makePublicCacheKey('configured-catalog-price-v1', { tenantId, storeId, revision, rounding, item });
+      const { payload } = await loadPublicCachedPayload(key, PUBLIC_CACHE_TTL_MS.productsBatchPassports, async () => {
+        const prices = await buildOnlineItemPrices({ db: pricingDb, tenantId, storeId,
+          items: [item], roundPrice, variantPrice: computeDisplayPriceForProduct,
+          conversion, validateAvailability: false });
+        return prices.get(item);
+      });
+      return [item, payload];
+    }));
+    return new Map(results);
+  }
+
   async function enrichProductsWithDisplayPrice(rows, tenantId, storeId) {
     if (!rows.length) return;
     const productIds = [...new Set(rows.map((r) => Number(r.id)).filter(Boolean))];
@@ -5316,8 +5326,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     const variantByProductId = new Map();
     for (const r of vaRows) {
       const pid = Number(r.product_id);
-      const blocksConfig = blocksConfigMap.get(pid) || getDefaultProductBlocksConfig();
-      if (!blocksConfig.variants) continue;
       if (variantByProductId.has(pid)) continue;
       const values = safeJsonArray(r.values);
       if (!values.length) continue;
@@ -5363,8 +5371,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     for (const row of optionAssignmentRows) {
       const pid = Number(row.product_id);
       if (!Number.isFinite(pid) || pid <= 0) continue;
-      const blocksConfig = blocksConfigMap.get(pid) || getDefaultProductBlocksConfig();
-      if (!blocksConfig.options) continue;
       if (!optionAssignmentsByProductId.has(pid)) optionAssignmentsByProductId.set(pid, []);
       optionAssignmentsByProductId.get(pid).push({
         group_id: Number(row.group_id),
@@ -5398,7 +5404,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     if (optionGroupIds.size > 0) {
       const groupIdsArr = Array.from(optionGroupIds).filter((id) => Number.isFinite(id) && id > 0);
       const [groupRows] = await db.query(
-        `SELECT id, selection_type, min_select, is_required
+        `SELECT id, selection_type, min_select, is_required, is_packaging
          FROM prod_option_groups
          WHERE tenant_id=? AND id IN (${groupIdsArr.map(() => '?').join(',')})`,
         [tenantId, ...groupIdsArr]
@@ -5552,6 +5558,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         optionGroupDetailsById.set(Number(groupId), {
           group: {
             selection_type: meta.selection_type || 'single',
+            is_packaging: Number(meta.is_packaging) === 1,
             min_select: meta.min_select ?? 0,
             is_required: Number(meta.is_required ?? 0) === 1,
           },
@@ -5581,8 +5588,6 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         if (!(Number(ing.quantity || 0) > 0)) return;
         const pid = Number(ing.product_id || 0);
         if (!Number.isFinite(pid) || pid <= 0) return;
-        const blocksConfig = blocksConfigMap.get(pid) || getDefaultProductBlocksConfig();
-        if (!blocksConfig.ingredients) return;
         const qty = Number(ing.quantity || 0);
         const line = formatCatalogDefaultQtyLine(qty, ing.unit_short_title || '', ing.ingredient_name || '');
         if (!line) return;
@@ -5594,13 +5599,16 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     for (const row of rows) {
       const pid = Number(row.id);
       const blocksConfig = blocksConfigMap.get(pid) || getDefaultProductBlocksConfig();
-      row.blocks_config = blocksConfig;
-      const variant = blocksConfig.variants ? variantByProductId.get(pid) : null;
+      const variant = variantByProductId.get(pid);
       let displayPrice = await computeDisplayPriceForProduct(row, variant, getConversionFactor, roundPrice);
       let originalDisplayPrice = await computeDisplayPriceForProduct({ ...row, price: Math.max(Number(row.price || 0), Number(row.old_price || 0)) },
         variant ? { ...variant, discount_tiers: [] } : null, getConversionFactor, roundPrice);
-      const optionAssignments = blocksConfig.options ? (optionAssignmentsByProductId.get(pid) || []) : [];
-      const catalogDefaultLines = blocksConfig.ingredients ? [...(ingredientLinesByProductId.get(pid) || [])] : [];
+      const optionAssignments = optionAssignmentsByProductId.get(pid) || [];
+      const catalogDefaultLines = [...(ingredientLinesByProductId.get(pid) || [])];
+      row.has_options = optionAssignments.length > 0;
+      row.has_variants = Boolean(variant);
+      row.has_ingredients = catalogDefaultLines.length > 0;
+      row.blocks_config = { ...blocksConfig, variants: row.has_variants, options: row.has_options, ingredients: row.has_ingredients };
       for (const assignment of optionAssignments) {
         const groupId = Number(assignment?.group_id || 0);
         if (!Number.isFinite(groupId) || groupId <= 0) continue;
@@ -5609,20 +5617,20 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         const groupMeta = details.group || {};
         const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, pid, groupId);
         const items = (Array.isArray(details.items) ? details.items : [])
-          .filter((item) => !excludedItemIds.has(Number(item?.id || 0))
-            && (row.sale_mode === 'preorder' || item.product_sale_mode === 'order'))
+          .filter((item) => groupMeta.is_packaging || (!excludedItemIds.has(Number(item?.id || 0))
+            && (row.sale_mode === 'preorder' || item.product_sale_mode === 'order')))
           .map((item) => {
             const setting = optionItemSettingsByScope.get(`${pid}:${groupId}:${item.id}`);
             return {
               ...item,
-              configuration_json: setting?.configuration_json == null ? item.configuration_json
+              configuration_json: groupMeta.is_packaging || setting?.configuration_json == null ? item.configuration_json
                 : (typeof setting.configuration_json === 'string' ? JSON.parse(setting.configuration_json) : setting.configuration_json),
               is_locked: Boolean(setting?.is_locked),
               effective_default_selected: setting?.is_locked ? true : setting?.default_selected == null
                 ? item.default_selected : Number(setting.default_selected) === 1,
-              effective_default_variant_group_id: setting?.variant_override_enabled
+              effective_default_variant_group_id: !groupMeta.is_packaging && setting?.variant_override_enabled
                 ? setting.default_variant_group_id : item.default_variant_group_id,
-              effective_default_variant_value_index: setting?.variant_override_enabled
+              effective_default_variant_value_index: !groupMeta.is_packaging && setting?.variant_override_enabled
                 ? setting.default_variant_value_index : item.default_variant_value_index,
             };
           });
@@ -5630,7 +5638,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
         const minSelect = Number(groupMeta.min_select ?? assignment.min_select ?? 0);
         const requiredSingle = selectionType === 'single' && (Number(groupMeta.is_required || 0) === 1 || minSelect > 0);
-        const selected = getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle);
+        const selected = getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle, groupMeta.is_packaging);
         for (const defaultItem of selected) {
           const qty = Math.max(1, Number(defaultItem.qty_min || 1));
           if (usesProductPriceSource(row, "options")) {
@@ -5639,7 +5647,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
             originalDisplayPrice += Math.max(defaultOptionPrice, await computeOptionItemResolvedDefaultPrice(defaultItem, getConversionFactor, roundPrice, true)) * qty;
           }
           const line = formatCatalogDefaultOptionLine(defaultItem, qty);
-          if (line) catalogDefaultLines.push(line);
+          if (line && !groupMeta.is_packaging) catalogDefaultLines.push(line);
         }
       }
       row.display_price = applyProductPromoPricing(row, displayPrice, originalDisplayPrice, roundPrice);
@@ -5665,6 +5673,28 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
         }
       }
     }
+    const automaticRows = rows.filter(row => {
+      if ((row.site_visibility != null && Number(row.site_visibility) !== 1)
+          || (row.is_active != null && Number(row.is_active) !== 1)) return false;
+      const config = typeof row.pricing_config_json === 'string' ? JSON.parse(row.pricing_config_json) : row.pricing_config_json;
+      return config?.mode === 'auto' || (config?.mode !== 'manual' && row.price_source === 'auto');
+    });
+    if (automaticRows.length) {
+      const details = await buildPublicProductPassportDetails(tenantId, storeId, automaticRows.map(row => Number(row.id)));
+      const items = automaticRows.map(row => ({ ...details.defaultConfigs[Number(row.id)], product_id: Number(row.id), qty: 1 }));
+      const prices = await calculatePublicCatalogPrices(tenantId, storeId, items, roundPrice, getConversionFactor);
+      automaticRows.forEach((row, index) => {
+        const price = prices.get(items[index]);
+        row.display_price = price.unitPrice;
+        row.catalog_original_price = price.originalPrice > price.unitPrice ? price.originalPrice : null;
+        row.original_price = row.catalog_original_price;
+        if (row.default_variant) {
+          row.default_variant.variant_unit_price = price.unitPrice;
+          row.default_variant.variant_original_price = price.originalPrice;
+        }
+      });
+    }
+
   }
 
   /**
@@ -6224,6 +6254,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       if (Array.isArray(parsed)) items = parsed;
     } catch {}
     await enrichPublicOrderItemsWithBuyXGetYBadges(tenantId, storeId, items);
+    await annotateOrderPackaging(db, tenantId, items);
     let discountsJson = [];
     try {
       if (Array.isArray(r.discounts_json)) {
@@ -9187,6 +9218,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       });
 
+      await annotateOrderPackaging(db, tenantId, data.flatMap(order => order.items || []));
       res.json({
         ok: true,
         data,
@@ -9338,6 +9370,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         };
       });
 
+      await annotateOrderPackaging(db, tenantId, data.flatMap(order => order.items || []));
       res.json({
         ok: true,
         data,
@@ -14194,8 +14227,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               ingredientsByProductId.get(productId).push(row);
             }
 
-            const productBlockRows = await loadPublicProductBlockRows(tenantId, comboProductIds);
-            const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
 
             const roundPrice = (value) => Math.round(Number(value || 0) * 100) / 100;
             const discountPercent = Number(combo.discount_percent) || 0;
@@ -14214,9 +14245,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             };
             const buildComboProductPreview = async (product) => {
               const productId = Number(product.product_id || 0);
-              const blocksConfig = blocksConfigMap.get(productId) || getDefaultProductBlocksConfig();
-              const variants = blocksConfig.variants ? (variantsByProductId.get(productId) || []) : [];
-              const ingredients = blocksConfig.ingredients ? (ingredientsByProductId.get(productId) || []) : [];
+              const variants = variantsByProductId.get(productId) || [];
+              const ingredients = ingredientsByProductId.get(productId) || [];
               const vGroup = Array.isArray(variants) && variants.length ? variants[0] : null;
               const values = Array.isArray(vGroup?.values) ? vGroup.values : [];
               let vIdx = vGroup?.default_value_index != null ? Number(vGroup.default_value_index) : 0;
@@ -15363,7 +15393,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     }
   });
 
-  async function buildPublicProductPassportDetails(tenantId, storeId, sortedIds) {
+  async function buildPublicProductPassportDetails(tenantId, storeId, sortedIds, includeOptionPackaging = false, packagingOnly = false) {
     const empty = { assignments: {}, ingredients: {}, variants: {}, optionGroupsByProduct: {}, defaultConfigs: {} };
     const ids = Array.isArray(sortedIds)
       ? sortedIds.map(Number).filter((id) => Number.isFinite(id) && id > 0)
@@ -15371,11 +15401,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     if (!ids.length) return empty;
 
     const placeholders = ids.map(() => '?').join(',');
-    const productBlockRows = await loadPublicProductBlockRows(tenantId, ids);
-    const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
 
     const [productRows] = await db.query(
-      `SELECT id, name, price, old_price, promo_enabled, promo_discount_percent, base_unit_id, base_qty, unit_id, sale_mode
+      `SELECT id, name, price, old_price, promo_enabled, promo_discount_percent, base_unit_id, base_qty, unit_id, sale_mode, pricing_config_json
        FROM prod_products
        WHERE tenant_id=? AND id IN (${placeholders})`,
       [tenantId, ...ids]
@@ -15389,7 +15417,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          a.group_id,
          a.priority,
          a.sort_order,
-         a.product_display_order,
+         a.product_display_order, a.is_component,
          a.is_active,
          a.selection_type AS assignment_selection_type,
          a.min_select AS assignment_min_select,
@@ -15398,7 +15426,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          g.selection_type AS group_selection_type,
          g.min_select AS group_min_select,
          g.max_select AS group_max_select,
-         g.is_required,
+         g.is_required, g.is_packaging, g.is_component_default,
          g.out_of_stock_action
        FROM prod_option_assignments a
        JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
@@ -15407,6 +15435,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
          AND a.assign_id IN (${placeholders})
          AND a.is_active=1
          AND g.is_active=1
+         ${packagingOnly ? 'AND g.is_packaging=1' : ''}
        ORDER BY a.assign_id ASC, (a.product_display_order IS NULL) ASC, a.product_display_order ASC, g.sort_order ASC, g.id ASC`,
       [tenantId, ...ids]
     );
@@ -15425,25 +15454,24 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         min_select: r.assignment_min_select ?? r.group_min_select ?? 0,
         max_select: r.assignment_max_select ?? r.group_max_select ?? null,
         is_required: Number(r.is_required ?? 0) === 1,
+        is_packaging: Number(r.is_packaging) === 1,
+        is_component_default: Number(r.is_component_default) === 1,
         is_active: Number(r.is_active || 0) === 1,
         out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
         priority: Number(r.priority || 0),
         sort_order: Number(r.sort_order || 0),
+        is_component: r.is_component == null ? null : Number(r.is_component) === 1,
         product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
       });
     });
-    ids.forEach((pid) => {
-      const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-      if (!blocksConfig.options) assignments[pid] = [];
-    });
 
-    const [pcsRows] = await db.query(
+    const [pcsRows] = packagingOnly ? [[]] : await db.query(
       `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
       [tenantId]
     );
     const pcsUnitId = pcsRows.length ? Number(pcsRows[0].id) : null;
 
-    const [ingredientRows] = await db.query(
+    const [ingredientRows] = packagingOnly ? [[]] : await db.query(
       `SELECT
          i.product_id,
          i.id,
@@ -15492,12 +15520,8 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (!ingredients[pid]) ingredients[pid] = [];
       ingredients[pid].push(r);
     });
-    ids.forEach((pid) => {
-      const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-      if (!blocksConfig.ingredients) ingredients[pid] = [];
-    });
 
-    const [variantRows] = await db.query(
+    const [variantRows] = packagingOnly ? [[]] : await db.query(
       `SELECT
          va.product_id,
          va.id AS assignment_id,
@@ -15570,10 +15594,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       });
     }
     await attachPublicVariantGramFactors(new Map(ids.map((pid) => [Number(pid), variants[pid] || []])), tenantId);
-    ids.forEach((pid) => {
-      const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-      if (!blocksConfig.variants) variants[pid] = [];
-    });
 
     const optionGroupIds = Array.from(new Set(Object.values(assignments).flat().map((row) => Number(row.group_id)).filter((id) => id > 0)));
     const optionGroupsById = {};
@@ -15626,6 +15646,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            p.unit_id AS product_unit_id,
            p.photos_json AS product_photos_json
          FROM prod_option_items i
+         JOIN prod_option_groups og ON og.tenant_id=i.tenant_id AND og.id=i.group_id
          JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
          LEFT JOIN prod_product_stocks ps
            ON ps.tenant_id = p.tenant_id AND ps.store_id = ? AND ps.product_id = p.id
@@ -15634,7 +15655,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            AND i.target_type='product'
            AND i.is_active=1
            AND p.is_active=1
-           AND p.site_visibility=1
+           AND (p.site_visibility=1 OR og.is_packaging=1)
            AND (ps.qty IS NULL OR ps.qty > 0)
          ORDER BY i.group_id ASC, i.sort_order ASC, i.id ASC`,
         [storeId, tenantId, ...optionGroupIds]
@@ -15714,7 +15735,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         await attachPublicVariantGramFactors(optionVariantsByProductId, tenantId);
       }
 
-      await attachPublicNutritionToOptionItemRows(items, tenantId);
+      if (!packagingOnly) await attachPublicNutritionToOptionItemRows(items, tenantId);
       for (const item of items) {
         if (item.configuration_json) item.configuration_json = await normalizeProductConfiguration(db, tenantId, Number(item.target_product_id),
           typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json);
@@ -15769,6 +15790,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                 id: Number(group.id),
                 title: str(group.title || ""),
                 selection_type: group.selection_type || "single",
+                is_packaging: Number(group.is_packaging) === 1,
+                hide_packaging_price: Number(group.hide_packaging_price) === 1,
+                is_component_default: Number(group.is_component_default) === 1,
                 min_select: group.min_select ?? 0,
                 max_select: group.max_select ?? null,
                 is_required: Number(group.is_required ?? 0) === 1,
@@ -15824,30 +15848,31 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const groupId = Number(assignment?.group_id || 0);
         const details = optionGroupsById[String(groupId)] || optionGroupsById[groupId] || null;
         const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, pid, groupId);
-        const configuredItems = (Array.isArray(details?.items) ? details.items : [])
-          .filter((item) => Number(item?.is_active || 0) === 1)
+        const activeOptionItems = (details?.items || []).filter(item => Number(item?.is_active || 0) === 1);
+        const configuredItems = activeOptionItems
           .map((item) => {
             const own = optionSettingsByScope.get(`${pid}:${groupId}:${item.id}`);
             return {
               ...item,
-              configuration_json: own?.configuration_json == null ? item.configuration_json
+              ...(details?.group?.is_packaging && { default_selected: true }),
+              configuration_json: details?.group?.is_packaging || own?.configuration_json == null ? item.configuration_json
                 : (typeof own.configuration_json === 'string' ? JSON.parse(own.configuration_json) : own.configuration_json),
               default_source: own?.default_selected == null ? 'group' : 'product',
-              is_locked: Boolean(own?.is_locked),
-              effective_default_selected: own?.is_locked ? true : own?.default_selected == null
+              is_locked: Boolean(details?.group?.is_packaging || own?.is_locked),
+              effective_default_selected: details?.group?.is_packaging || own?.is_locked ? true : own?.default_selected == null
                 ? Boolean(item.default_selected)
                 : Number(own.default_selected) === 1,
-              effective_default_variant_group_id: own?.variant_override_enabled
+              effective_default_variant_group_id: !details?.group?.is_packaging && own?.variant_override_enabled
                 ? (own.default_variant_group_id == null ? null : Number(own.default_variant_group_id))
                 : item.default_variant_group_id,
-              effective_default_variant_value_index: own?.variant_override_enabled
+              effective_default_variant_value_index: !details?.group?.is_packaging && own?.variant_override_enabled
                 ? (own.default_variant_value_index == null ? null : Number(own.default_variant_value_index))
                 : item.default_variant_value_index,
               variant_override_enabled: Boolean(own?.variant_override_enabled),
               has_explicit_default: Boolean(item.default_selected) || own?.default_selected != null,
             };
           });
-        const activeItems = configuredItems.filter((item) => !excludedItemIds.has(Number(item.id))
+        const activeItems = configuredItems.filter((item) => (details?.group?.is_packaging || !excludedItemIds.has(Number(item.id)))
           && (item.is_locked || product?.sale_mode === 'preorder' || item.product_sale_mode === 'order'));
         if (!details) return;
         if (!activeItems.length && !details.group?.is_required && !(Number(details.group?.min_select) > 0)) return;
@@ -15855,6 +15880,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           id: groupId,
           title: str(assignment.title || details.group?.title || ""),
           selection_type: details.group?.selection_type || assignment.selection_type || "single",
+          is_packaging: Boolean(details.group?.is_packaging),
+          hide_packaging_price: Number(details.group?.hide_packaging_price) === 1,
+          is_component_default: assignment.is_component_default,
+          is_component: assignment.is_component ?? null,
+          ...(details.group?.is_packaging && { packaging_item_count: activeOptionItems.length }),
           min_select: details.group?.min_select ?? assignment.min_select ?? 0,
           max_select: details.group?.max_select ?? assignment.max_select ?? null,
           allow_variants: Boolean(details.group?.allow_variants),
@@ -15960,7 +15990,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           selectedOptionItems.push(out);
         };
 
-        getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle)
+        getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle, group.is_packaging)
           .forEach(item => addDefaultOptionItem(item, item.qty_min));
       });
 
@@ -15992,7 +16022,23 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       };
     });
 
-    return { assignments, ingredients, variants, optionGroupsByProduct, defaultConfigs };
+    if (includeOptionPackaging) {
+      const separateItems = Object.values(optionGroupsByProduct).flatMap(groups => groups
+        .filter(group => !group.is_packaging && Number(group.is_component ?? group.is_component_default) !== 1)
+        .flatMap(group => group.items));
+      const targetIds = [...new Set(separateItems.map(item => Number(item.target_product_id)).filter(id => id > 0))];
+      const targetDetails = targetIds.length
+        ? await buildPublicProductPassportDetails(tenantId, storeId, targetIds, false, true) : null;
+      for (const item of separateItems) {
+        const targetId = Number(item.target_product_id);
+        item.packaging_groups = (targetDetails?.optionGroupsByProduct[targetId] || []).filter(group => group.is_packaging);
+        item.packaging_product = targetDetails?.packagingProducts?.[targetId] || null;
+      }
+    }
+    const packagingProducts = Object.fromEntries(productRows.map(product => [product.id, {
+      id: product.id, pricing_config_json: product.pricing_config_json,
+    }]));
+    return { assignments, ingredients, variants, optionGroupsByProduct, defaultConfigs, packagingProducts };
   }
 
   async function buildPublicFullProductPassportSupport(tenantId, storeId, sortedIds, options = {}) {
@@ -16575,7 +16621,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   function sanitizePublicProductPassport(passport) {
     const product = pickPublicFields(passport?.product, [
       'id', 'name', 'description_short', 'description', 'price', 'old_price',
-      'display_price', 'catalog_original_price', 'catalog_default_lines', 'default_variant', 'original_price', 'discounted_price',
+      'display_price', 'catalog_original_price', 'catalog_default_lines', 'default_variant', 'has_options', 'has_variants', 'has_ingredients', 'original_price', 'discounted_price',
       'promo_enabled', 'promo_title', 'promo_discount_percent', 'pricing_config_json',
       'unit_id', 'base_unit_id', 'base_qty', 'fulfillment_mode', 'sale_mode', 'preorder_settings_json',
       'photos_json', 'photos', 'photo', 'photo_thumb',
@@ -16606,6 +16652,12 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       variants: Array.isArray(passport?.variants) ? passport.variants : [],
       options: Array.isArray(passport?.options) ? passport.options : [],
       optionAssignments: Array.isArray(passport?.optionAssignments) ? passport.optionAssignments : [],
+      packaging_assignments_included: true,
+      component_assignments_included: true,
+      dependencies_included: passport?.dependencies_included === true,
+      dependency_ids: Array.isArray(passport?.dependency_ids) ? passport.dependency_ids : [],
+      relatedProducts: Object.fromEntries(Object.entries(passport?.relatedProducts || {}).map(([id, product]) =>
+        [id, sanitizePublicProductPassport({ product }).product])),
       defaultConfig: passport?.defaultConfig || null,
       comboRefs: Array.isArray(passport?.comboRefs) ? passport.comboRefs : [],
       benefits: pickPublicFields(passport?.benefits, ['discount', 'buy_x_get_y_badge']),
@@ -16623,11 +16675,15 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   async function buildFullProductPassportsPayload(tenantId, storeId, ids, options = {}) {
       const sortedIds = [...ids].sort((a, b) => a - b);
-      const productsStamp = await readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]);
+      const [productsStamp, assignmentsStamp, groupsStamp] = await Promise.all([
+        readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]),
+        readPublicTableStamp('prod_option_assignments', "tenant_id=? AND assign_type='product' AND assign_id IN (?)", [tenantId, sortedIds]),
+        readPublicTableStamp('prod_option_groups', 'tenant_id=?', [tenantId]),
+      ]);
       const includeInactiveHidden = options.includeInactiveHidden === true;
       const cacheKey = makePublicCacheKey(
-        includeInactiveHidden ? 'admin-products-batch-full-passports-v1' : 'products-batch-full-passports-v3',
-        { tenantId, storeId, ids: sortedIds, productsStamp }
+        includeInactiveHidden ? 'admin-products-batch-full-passports-v1' : 'products-batch-full-passports-v10',
+        { tenantId, storeId, ids: sortedIds, productsStamp, assignmentsStamp, groupsStamp }
       );
       const cached = includeInactiveHidden || options.fresh ? null : getPublicCache(cacheKey);
       if (cached) return { payload: cached, cacheStatus: 'HIT' };
@@ -16656,11 +16712,49 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       await attachPublicProductCategoryIds(rows, tenantId);
 
       const rowIds = rows.map((row) => Number(row.id || 0)).filter((id) => id > 0).sort((a, b) => a - b);
-      const details = await buildPublicProductPassportDetails(tenantId, storeId, rowIds);
-      const support = await buildPublicFullProductPassportSupport(tenantId, storeId, rowIds, {
-        includeEditorData: includeInactiveHidden,
-      });
+      const [details, support] = await Promise.all([
+        buildPublicProductPassportDetails(tenantId, storeId, rowIds, !includeInactiveHidden),
+        buildPublicFullProductPassportSupport(tenantId, storeId, rowIds, {
+          includeEditorData: includeInactiveHidden,
+        }),
+      ]);
       const availabilityByProductId = await buildPublicFullProductAvailabilityMap(tenantId, storeId, rows, details);
+
+      const dependenciesByProduct = new Map();
+      const relatedProductIds = new Set();
+      if (!includeInactiveHidden) {
+        for (const productId of rowIds) {
+          const related = new Set();
+          const pending = (support.ingredientsByProductId?.[productId] || []).map(item => Number(item.ingredient_id));
+          for (const group of details.optionGroupsByProduct?.[productId] || []) {
+            for (const item of group.items || []) {
+              pending.push(Number(item.target_product_id));
+              for (const packaging of item.packaging_groups || []) {
+                for (const entry of packaging.items || []) pending.push(Number(entry.target_product_id));
+              }
+            }
+          }
+          for (let index = 0; index < pending.length; index++) {
+            const id = pending[index];
+            if (!(id > 0) || id === productId || related.has(id)) continue;
+            related.add(id);
+            relatedProductIds.add(id);
+            for (const ingredient of support.nestedIngredientsByProductId?.[id] || []) pending.push(Number(ingredient.ingredient_id));
+          }
+          dependenciesByProduct.set(productId, related);
+        }
+      }
+      const relatedProducts = new Map();
+      if (relatedProductIds.size) {
+        const [relatedRows] = await db.query(
+          `SELECT p.*, s.qty AS stock_qty FROM prod_products p
+           LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.product_id=p.id AND s.store_id=?
+           WHERE p.tenant_id=? AND p.id IN (?)`,
+          [storeId, tenantId, [...relatedProductIds]]
+        );
+        await enrichProductsWithDiscounts(relatedRows, tenantId, storeId);
+        relatedRows.forEach(product => relatedProducts.set(Number(product.id), product));
+      }
 
       const data = {};
       const versions = {};
@@ -16668,6 +16762,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         const id = Number(product?.id || 0);
         if (!(id > 0)) return;
         const passport = buildPublicFullProductPassport(product, details, support, availabilityByProductId);
+        if (!includeInactiveHidden) {
+          passport.dependencies_included = true;
+          passport.dependency_ids = [...dependenciesByProduct.get(id)];
+          passport.relatedProducts = Object.fromEntries([...dependenciesByProduct.get(id)]
+            .filter(relatedId => relatedProducts.has(relatedId))
+            .map(relatedId => [relatedId, relatedProducts.get(relatedId)]));
+        }
         if (includeInactiveHidden) {
           passport.editor.variants_visibility_respected = true;
           const recipes = {};
@@ -16707,6 +16808,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
     return result.payload;
   };
 
+  router.get('/products/passports-manifest', async (req, res) => {
+    try {
+      const tenantId = helpers.getTenantId(req);
+      const storeId = helpers.getStoreId(req);
+      const [rows] = await db.query(
+        'SELECT id, updated_at FROM prod_products WHERE tenant_id=? AND is_active=1 AND site_visibility=1 ORDER BY id',
+        [tenantId]
+      );
+      const revision = await catalogSync.getManifest({ db, tenantId, storeId });
+      res.json({ ok: true, revision, products: rows });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
+
   router.post('/products/batch/full-passports', async (req, res) => {
     try {
       const tenantId = helpers.getTenantId(req);
@@ -16717,7 +16834,13 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (ids.length > 300) return res.status(400).json({ ok: false, error: 'TOO_MANY' });
       const result = await buildFullProductPassportsPayload(tenantId, storeId, ids, { fresh: req.body?.fresh === true });
       res.set('x-public-cache', result.cacheStatus);
-      res.json(result.payload);
+      const known = new Set(getPositiveIds(req.body?.known_related_ids || []));
+      const data = Object.fromEntries(Object.entries(result.payload.data).map(([id, passport]) => [id, {
+        ...passport,
+        relatedProducts: Object.fromEntries(Object.entries(passport.relatedProducts || {})
+          .filter(([relatedId]) => !known.has(Number(relatedId)))),
+      }]));
+      res.json({ ...result.payload, data });
     } catch (e) {
       console.error(e);
       res.status(500).json({ ok: false, error: 'DB_ERROR' });
@@ -16961,10 +17084,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             err.httpStatus = 404;
             throw err;
           }
-          const blocksConfig = await getResolvedProductBlocksConfig(tenantId, storeId, productRow);
-          if (!blocksConfig.ingredients) {
-            return { ok: true, data: [] };
-          }
 
           const [pcsRows] = await db.query(
             `SELECT id FROM prod_units WHERE tenant_id=? AND code='pcs' LIMIT 1`,
@@ -17100,12 +17219,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             if (!result[pid]) result[pid] = [];
             result[pid].push(r);
           }
-          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
-          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, 0, productBlockRows);
-          sortedIds.forEach((pid) => {
-            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-            if (!blocksConfig.ingredients) result[pid] = [];
-          });
 
           return { ok: true, data: result };
         }
@@ -17205,12 +17318,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               discount_tiers: variantData.discount_tiers,
             });
           }
-          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
-          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, 0, productBlockRows);
-          sortedIds.forEach((pid) => {
-            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-            if (!blocksConfig.variants) result[pid] = [];
-          });
 
           return { ok: true, data: result };
         }
@@ -17252,7 +17359,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                a.group_id,
                a.priority,
                a.sort_order,
-               a.product_display_order,
+               a.product_display_order, a.is_component,
                a.is_active,
                a.selection_type AS assignment_selection_type,
                a.min_select AS assignment_min_select,
@@ -17292,14 +17399,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
               priority: Number(r.priority || 0),
               sort_order: Number(r.sort_order || 0),
+              is_component: r.is_component == null ? null : Number(r.is_component) === 1,
               product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
             });
-          });
-          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
-          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
-          sortedIds.forEach((pid) => {
-            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-            if (!blocksConfig.options) result[pid] = [];
           });
 
           return { ok: true, data: result };
@@ -17331,8 +17433,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         PUBLIC_CACHE_TTL_MS.productsBatchDetails,
         async () => {
           const nutritionCache = new Map();
-          const productBlockRows = await loadPublicProductBlockRows(tenantId, sortedIds);
-          const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
 
           const placeholders = sortedIds.map(() => '?').join(',');
           const [assignmentRows] = await db.query(
@@ -17342,7 +17442,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                a.group_id,
                a.priority,
                a.sort_order,
-               a.product_display_order,
+               a.product_display_order, a.is_component,
                a.is_active,
                a.selection_type AS assignment_selection_type,
                a.min_select AS assignment_min_select,
@@ -17382,12 +17482,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
               priority: Number(r.priority || 0),
               sort_order: Number(r.sort_order || 0),
+              is_component: r.is_component == null ? null : Number(r.is_component) === 1,
               product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
             });
-          });
-          sortedIds.forEach((pid) => {
-            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-            if (!blocksConfig.options) assignments[pid] = [];
           });
 
           const [pcsRows] = await db.query(
@@ -17444,10 +17541,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             const pid = Number(r.product_id);
             if (!ingredients[pid]) ingredients[pid] = [];
             ingredients[pid].push(r);
-          });
-          sortedIds.forEach((pid) => {
-            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-            if (!blocksConfig.ingredients) ingredients[pid] = [];
           });
 
           const [variantRows] = await db.query(
@@ -17519,10 +17612,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             });
           }
           await attachPublicVariantGramFactors(new Map(sortedIds.map((pid) => [Number(pid), variants[pid] || []])), tenantId, nutritionCache);
-          sortedIds.forEach((pid) => {
-            const blocksConfig = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
-            if (!blocksConfig.variants) variants[pid] = [];
-          });
 
           const optionGroupIds = Array.from(new Set(Object.values(assignments).flat().map((row) => Number(row.group_id)).filter((id) => id > 0)));
           const optionGroups = {};
@@ -17684,6 +17773,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                       id: Number(group.id),
                       title: str(group.title || ""),
                       selection_type: group.selection_type || "single",
+                      is_packaging: Number(group.is_packaging) === 1,
+                      hide_packaging_price: Number(group.hide_packaging_price) === 1,
+                      is_component_default: Number(group.is_component_default) === 1,
                       min_select: group.min_select ?? 0,
                       max_select: group.max_select ?? null,
                       is_required: Number(group.is_required ?? 0) === 1,
@@ -17759,7 +17851,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       const [productRows] = await db.query(
         `SELECT p.id, p.name, p.price, p.old_price, p.promo_enabled, p.promo_discount_percent, p.base_unit_id, p.base_qty, p.unit_id,
-                s.qty AS stock_qty
+                p.price_source, p.pricing_config_json, p.is_active, p.site_visibility, s.qty AS stock_qty
          FROM prod_products p
          LEFT JOIN prod_product_stocks s
            ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
@@ -17888,7 +17980,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
            a.group_id,
            a.priority,
            a.sort_order,
-           a.product_display_order,
+           a.product_display_order, a.is_component,
            a.is_active,
            a.selection_type AS assignment_selection_type,
            a.min_select AS assignment_min_select,
@@ -17928,6 +18020,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
           priority: Number(r.priority || 0),
           sort_order: Number(r.sort_order || 0),
+          is_component: r.is_component == null ? null : Number(r.is_component) === 1,
           product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
         });
         optionGroupIds.add(Number(r.group_id));
@@ -17956,7 +18049,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       if (optionGroupIds.size > 0) {
         const groupIdsArr = Array.from(optionGroupIds).filter((n) => Number.isFinite(n) && n > 0);
         const [groupRows] = await db.query(
-          `SELECT id, title, selection_type, min_select, max_select, is_required, allow_variants, is_active
+          `SELECT id, title, selection_type, min_select, max_select, is_required, allow_variants, is_active, is_packaging, hide_packaging_price, is_component_default
            FROM prod_option_groups
            WHERE tenant_id=? AND id IN (${groupIdsArr.map(() => '?').join(',')})`,
           [tenantId, ...groupIdsArr]
@@ -18113,6 +18206,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               id: Number(meta.id),
               title: str(meta.title || ''),
               selection_type: meta.selection_type || 'single',
+              is_packaging: Number(meta.is_packaging) === 1,
+              hide_packaging_price: Number(meta.hide_packaging_price) === 1,
+              is_component_default: Number(meta.is_component_default) === 1,
               min_select: meta.min_select ?? 0,
               max_select: meta.max_select ?? null,
               is_required: Number(meta.is_required ?? 0) === 1,
@@ -18167,26 +18263,26 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           if (!details) return;
           const groupMeta = details.group || {};
           const excludedItemIds = getOptionItemExclusionSet(optionItemExclusionsByScope, Number(pid), groupId);
-          const configuredItems = (Array.isArray(details.items) ? details.items : [])
-            .filter((item) => Number(item?.is_active ?? 1) === 1)
+          const activeOptionItems = (details.items || []).filter(item => Number(item?.is_active ?? 1) === 1);
+          const configuredItems = activeOptionItems
             .map((item) => {
               const own = optionItemSettingsByScope.get(`${pid}:${groupId}:${item.id}`);
               return {
                 ...item,
-                configuration_json: own?.configuration_json == null ? item.configuration_json
+                configuration_json: groupMeta.is_packaging || own?.configuration_json == null ? item.configuration_json
                   : (typeof own.configuration_json === 'string' ? JSON.parse(own.configuration_json) : own.configuration_json),
                 is_locked: Boolean(own?.is_locked),
               effective_default_selected: own?.is_locked ? true : own?.default_selected == null
                   ? Boolean(item.default_selected) : Number(own.default_selected) === 1,
-                effective_default_variant_group_id: own?.variant_override_enabled
+                effective_default_variant_group_id: !groupMeta.is_packaging && own?.variant_override_enabled
                   ? own.default_variant_group_id : item.default_variant_group_id,
-                effective_default_variant_value_index: own?.variant_override_enabled
+                effective_default_variant_value_index: !groupMeta.is_packaging && own?.variant_override_enabled
                   ? own.default_variant_value_index : item.default_variant_value_index,
                 variant_override_enabled: Boolean(own?.variant_override_enabled),
                 has_explicit_default: Boolean(item.default_selected) || own?.default_selected != null,
               };
             });
-          const items = configuredItems.filter((item) => !excludedItemIds.has(Number(item?.id || 0)));
+          const items = configuredItems.filter((item) => groupMeta.is_packaging || !excludedItemIds.has(Number(item?.id || 0)));
           if (!items.length) return;
 
           const selectionType = str(groupMeta.selection_type || assignment.selection_type || 'single').trim().toLowerCase() || 'single';
@@ -18252,10 +18348,10 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               out.ingredients = configuration.ingredients;
               out.price += Number(configuration.ingredient_price_diff || 0);
             }
-            selectedOptionItems.push(out);
+            selectedOptionItems.push({ ...out, is_packaging: Boolean(groupMeta.is_packaging) });
           };
 
-          getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle)
+          getDefaultOptionGroupItems(items, selectionType, minSelect, requiredSingle, groupMeta.is_packaging)
             .forEach(item => addDefaultOptionItem(item, item.qty_min));
         });
 
@@ -18573,7 +18669,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             const quantity = Number(ingredient.quantity || 0);
             return `${quantity} ${str(ingredient.unit_label || '').trim()} ${str(ingredient.ingredient_name || ingredient.name || '').trim()}`.replace(/\s+/g, ' ').trim();
           }),
-          ...entry.option_items.map((option) => {
+          ...entry.option_items.filter(option => !option.is_packaging).map((option) => {
             const quantity = Math.max(1, Number(option.qty || option.quantity || 1));
             const title = str(option.title || option.name || '').trim();
             const variantLabel = str(option.variant_label || '').trim();
@@ -18593,10 +18689,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       }
 
-      const productBlockRows = await loadPublicProductBlockRows(tenantId, ids);
-      const blocksConfigMap = await resolveProductBlocksConfigMap(tenantId, storeId, productBlockRows);
       for (const pid of ids) {
-        const config = blocksConfigMap.get(Number(pid)) || getDefaultProductBlocksConfig();
         const entry = result[pid] || {
           option_item_ids: [],
           option_items: [],
@@ -18607,20 +18700,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           variant_label: '',
           variant_unit_price: 0,
         };
-        if (!config.options) {
-          entry.option_item_ids = [];
-          entry.option_items = [];
-        }
-        if (!config.ingredients) {
-          entry.ingredients = [];
-          entry.ingredient_price_diff = 0;
-        }
-        if (!config.variants) {
-          entry.variant_group_id = null;
-          entry.variant_value_index = null;
-          entry.variant_label = '';
-          entry.variant_unit_price = 0;
-        }
         const product = productsById.get(Number(pid));
         entry.display_price = Number(entry.variant_unit_price || product?.price || 0)
           + Number(entry.ingredient_price_diff || 0)
@@ -18638,7 +18717,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             const quantity = Number(ingredient.quantity || 0);
             return `${quantity} ${str(ingredient.unit_label || '').trim()} ${str(ingredient.ingredient_name || ingredient.name || '').trim()}`.replace(/\s+/g, ' ').trim();
           }),
-          ...entry.option_items.map((option) => {
+          ...entry.option_items.filter(option => !option.is_packaging).map((option) => {
             const quantity = Math.max(1, Number(option.qty || option.quantity || 1));
             const title = str(option.title || option.name || '').trim();
             const variantLabel = str(option.variant_label || '').trim();
@@ -18648,6 +18727,21 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         result[pid] = entry;
       }
 
+      const pricedIds = ids.filter(id => {
+        const product = productsById.get(Number(id));
+        if (!product || Number(product.is_active) !== 1 || Number(product.site_visibility) !== 1) return false;
+        const config = typeof product.pricing_config_json === 'string' ? JSON.parse(product.pricing_config_json) : product.pricing_config_json;
+        return config?.mode === 'auto' || (config?.mode !== 'manual' && product.price_source === 'auto');
+      });
+      if (pricedIds.length) {
+        const items = pricedIds.map(id => ({ ...result[id], product_id: Number(id), qty: 1 }));
+        const prices = await calculatePublicCatalogPrices(tenantId, storeId, items, roundPrice, getConversionFactorMap(tenantId, db));
+        pricedIds.forEach((id, index) => {
+          const price = prices.get(items[index]);
+          result[id].display_price = price.unitPrice;
+          result[id].original_price = price.originalPrice;
+        });
+      }
       res.json({ ok: true, data: result });
     } catch (e) {
       console.error(e);
@@ -18664,7 +18758,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         return res.status(400).json({ ok: false, error: 'BAD_ID' });
       }
 
-      const cacheKey = makePublicCacheKey('product-option-assignments', { tenantId, storeId, productId });
+      const cacheKey = makePublicCacheKey('product-option-assignments-v2', { tenantId, storeId, productId });
       const { payload, cacheState } = await loadPublicCachedPayload(
         cacheKey,
         PUBLIC_CACHE_TTL_MS.productOptionAssignments,
@@ -18682,11 +18776,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             err.httpStatus = 404;
             throw err;
           }
-          const blocksConfig = await getResolvedProductBlocksConfig(tenantId, storeId, productRow);
-          if (!blocksConfig.options) {
-            return { ok: true, data: [] };
-          }
-
           const [productCheck] = await db.query(
             `SELECT id FROM prod_products
              WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1
@@ -18705,7 +18794,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
                a.group_id,
                a.priority,
                a.sort_order,
-               a.product_display_order,
+               a.product_display_order, a.is_component,
                a.is_active,
                a.selection_type AS assignment_selection_type,
                a.min_select AS assignment_min_select,
@@ -18739,6 +18828,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             out_of_stock_action: r.out_of_stock_action == null ? 1 : Number(r.out_of_stock_action),
             priority: Number(r.priority || 0),
             sort_order: Number(r.sort_order || 0),
+            is_component: r.is_component == null ? null : Number(r.is_component) === 1,
             product_display_order: r.product_display_order == null ? null : Number(r.product_display_order),
           }));
 
@@ -18986,6 +19076,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             id: Number(group.id),
             title: str(group.title || ""),
             selection_type: group.selection_type || "single",
+            is_packaging: Number(group.is_packaging) === 1,
+            hide_packaging_price: Number(group.hide_packaging_price) === 1,
+            is_component_default: Number(group.is_component_default) === 1,
             min_select: group.min_select ?? 0,
             max_select: group.max_select ?? null,
             is_required: Number(group.is_required ?? 0) === 1,
@@ -19266,6 +19359,9 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             id: Number(group.id),
             title: str(group.title || ""),
             selection_type: group.selection_type || "single",
+            is_packaging: Number(group.is_packaging) === 1,
+            hide_packaging_price: Number(group.hide_packaging_price) === 1,
+            is_component_default: Number(group.is_component_default) === 1,
             min_select: group.min_select ?? 0,
             max_select: group.max_select ?? null,
             is_required: Number(group.is_required ?? 0) === 1,
@@ -19310,10 +19406,6 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             const err = new Error('NOT_FOUND');
             err.httpStatus = 404;
             throw err;
-          }
-          const blocksConfig = await getResolvedProductBlocksConfig(tenantId, storeId, productRow);
-          if (!blocksConfig.variants) {
-            return { ok: true, data: [] };
           }
 
           const [variants] = await db.query(
@@ -24943,6 +25035,22 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           }
 
           options.push(optionEntry);
+        }
+        if (options.some(option => option.target_product_id)) {
+          const [resolved] = await resolveOrderPackaging(db, tenantId, [{ product_id: pid, options }]);
+          for (const entry of resolved.options) {
+            if (entry.is_packaging && !entry.packaging_for_option_id) {
+              const stored = options.find(option => option.id === entry.id);
+              if (stored) stored.is_packaging = true;
+            }
+            if (!entry.is_packaging || !entry.packaging_for_option_id) continue;
+            const owner = options.find(option => option.id === entry.packaging_for_option_id);
+            if (!owner) continue;
+            (owner.packaging_items ||= []).push({
+              id: entry.id, title: entry.title, target_product_id: entry.target_product_id,
+              qty: entry.qty / owner.qty,
+            });
+          }
         }
 
         // Р С›Р В±РЎР‚Р В°Р В±Р В°РЎвЂљРЎвЂ№Р Р†Р В°Р ВµР С Р С‘Р Р…Р С–РЎР‚Р ВµР Т‘Р С‘Р ВµР Р…РЎвЂљРЎвЂ№ (РЎвЂљР С•Р В»РЎРЉР С”Р С• Р Т‘Р В»РЎРЏ РЎРѓР С•РЎвЂ¦РЎР‚Р В°Р Р…Р ВµР Р…Р С‘РЎРЏ РЎРѓР С•РЎРѓРЎвЂљР В°Р Р†Р В°, Р Р…Р Вµ Р Т‘Р В»РЎРЏ Р С—Р ВµРЎР‚Р ВµРЎРѓРЎвЂЎР ВµРЎвЂљР В° РЎвЂ Р ВµР Р…РЎвЂ№)

@@ -12,6 +12,7 @@ const {paymentPermissions}=require('../middleware/auth');
 const {
   applyStockDeductionForOrderItems,
   checkStockAvailabilityForOrderItems,
+  annotateOrderPackaging,
 } = require("../helpers/orderStock");
 const discountHelpers = require("../helpers/discounts");
 const {
@@ -1867,6 +1868,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const [productRows]=productIds.length ? await db.query(`SELECT id,production_zone_id FROM prod_products WHERE tenant_id=? AND id IN (${productIds.map(()=>'?').join(',')})`,[tenantId,...productIds]) : [[]];
       const productZoneById=new Map(productRows.map(row=>[Number(row.id),Number(row.production_zone_id)]));
       await enrichOrderItemsWithBuyXGetYBadges(tenantId,storeId,allItems);
+      await annotateOrderPackaging(db, tenantId, allItems);
       // The same parsed item objects carry the enriched badges into each payload.
       const itemsById=new Map();let offset=0;
       for(const row of rows){const count=parseOrderItemsJson(row.items).length;itemsById.set(Number(row.id),allItems.slice(offset,offset+count));offset+=count;}
@@ -1878,6 +1880,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
     const r = rows[0];
 
     const items = opts.prefetchedItems || parseOrderItemsJson(r.items);
+    await annotateOrderPackaging(db, tenantId, items);
 
     const itemProductIds = [...new Set(items
       .map((item) => Number(item?.product_id || 0))
@@ -2557,6 +2560,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
         };
       });
       await enrichOrdersWithBuyXGetYBadges(tenantId, storeId, baseData);
+      await annotateOrderPackaging(db, tenantId, baseData.flatMap(order => order.items || []));
       const data = await attachRefundDataToOrders(db, tenantId, storeId, baseData, { storeTimezone });
 
       res.json({ ok: true, data });
@@ -5048,7 +5052,7 @@ module.exports = function makeAdminOrdersRouter({ db, helpers, ordersEvents, can
       const [preorderStores] = await editConnection.query('SELECT timezone FROM ten_stores WHERE tenant_id=? AND id=?',[tenantId,storeId]);
       if (!preorderStores.length) throw new Error('ORDER_STORE_NOT_FOUND');
       const preorderSnapshot = await validateCheckoutPreorders(editConnection,{tenantId,storeId,items,timeOptionCode,scheduledAt,methodCode,timezone:preorderStores[0].timezone,existingOrder:lockedOrders[0]});
-      await validateAutoAddOrder(editConnection, { tenantId, storeId, orderId: id, items, scheduledAt, createdAt: helpers.utcToStoreDateTime(lockedOrders[0].created_at, preorderStores[0].timezone), timezone: preorderStores[0].timezone });
+      await validateAutoAddOrder(editConnection, { tenantId, storeId, orderId: id, authenticated: !existing.guest_session_hash && Number(customerId || 0) > 0, items, scheduledAt, createdAt: helpers.utcToStoreDateTime(lockedOrders[0].created_at, preorderStores[0].timezone), timezone: preorderStores[0].timezone });
       await syncAutoAddOrderUsage(editConnection, { tenantId, orderId: id, items, release: isSavedCanceled });
       updateParams[updateFields.indexOf('items=?')] = JSON.stringify(items);
       if (preorderSnapshot?.time_option_id) updateParams[updateParams.length-5] = preorderSnapshot.time_option_id;

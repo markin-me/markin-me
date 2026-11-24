@@ -466,7 +466,7 @@
   const CHECKOUT_DRAFT_KEY = `shop_checkout_draft_t${tenantId}`;
   const ADDRESS_DRAFT_KEY = `shop_address_draft_t${tenantId}`;
   const AUTO_ADD_DISMISSED_KEY = `shop_auto_add_dismissed_t${tenantId}_s${getActiveStoreId()}`;
-  const CATALOG_SNAPSHOT_VERSION = 2;
+  const CATALOG_SNAPSHOT_VERSION = document.body.classList.contains('page-kso') ? 2 : 3;
   const isKsoCatalogCache = document.body.classList.contains('page-kso');
   const CATALOG_SNAPSHOT_MAX_AGE_MS = (isKsoCatalogCache ? 7 * 24 : 6) * 60 * 60 * 1000;
   const CATALOG_SNAPSHOT_KEY = `shop_catalog_snapshot_v${CATALOG_SNAPSHOT_VERSION}_t${tenantId}_s${getActiveStoreId()}`;
@@ -666,7 +666,7 @@
   const checkoutSettingsRequests = new Map();
   const checkoutSettingsWantedVersions = new Map();
   function checkoutSettingsScope() { return `${tenantId}:${getActiveStoreId()}:site:v1`; }
-  const storefrontCatalogScope = () => `web:v1:${checkoutSettingsScope()}:`;
+  const storefrontCatalogScope = () => `web:v2:${checkoutSettingsScope()}:`;
   let storefrontCatalogRevision = "0";
   let storefrontCatalogSocketScope = "";
   let storefrontCatalogPending = false;
@@ -674,6 +674,8 @@
   let storefrontCatalogReset = false;
   let storefrontCatalogGeneration = 0;
   const storefrontChangedProducts = new Set();
+  let storefrontStorageFromRevision = null;
+  let storefrontStorageUpdate = Promise.resolve();
 
   function syncStorefrontCatalogScope() {
     const scope = storefrontCatalogScope();
@@ -682,10 +684,12 @@
     storefrontCatalogRevision = localStorage.getItem(scope + "revision") || "0";
     storefrontCatalogGeneration++;
     storefrontChangedProducts.clear();
+    storefrontStorageFromRevision = null;
     storefrontCatalogReset = storefrontCatalogRevision === "0";
   }
 
   async function storefrontPassportStorage(ids, payload = null, scope = storefrontCatalogScope(), revision = storefrontCatalogRevision) {
+    await storefrontStorageUpdate;
     const db = await checkoutSettingsDb();
     return new Promise((resolve, reject) => {
       const tx = db.transaction("catalog", payload ? "readwrite" : "readonly");
@@ -694,13 +698,31 @@
       for (const id of ids) {
         const key = scope + "passport:" + id;
         if (payload) {
-          if (payload[id]) store.put({ revision, ts: Date.now(), value: payload[id] }, key);
+          if (payload[id]) {
+            const passport = payload[id];
+            for (const [relatedId, product] of Object.entries(passport.relatedProducts || {})) {
+              store.put({ revision, ts: Date.now(), value: { product } }, scope + "product:" + relatedId);
+            }
+            store.put({ revision, ts: Date.now(), value: { ...passport, relatedProducts: {} } }, key);
+          }
           else store.delete(key);
         } else {
           const request = store.get(key);
           request.onsuccess = () => {
             const row = request.result;
-            if (row?.revision === revision && Date.now() - row.ts <= CATALOG_SNAPSHOT_MAX_AGE_MS) rows[id] = row.value;
+            if (row?.revision === revision && Date.now() - row.ts <= CATALOG_SNAPSHOT_MAX_AGE_MS) {
+              const passport = { ...row.value, relatedProducts: { ...row.value.relatedProducts } };
+              rows[id] = passport;
+              for (const relatedId of passport.dependency_ids || []) {
+                const relatedRequest = store.get(scope + "product:" + relatedId);
+                relatedRequest.onsuccess = () => {
+                  const related = relatedRequest.result;
+                  if (related?.revision === revision && Date.now() - related.ts <= CATALOG_SNAPSHOT_MAX_AGE_MS) {
+                    passport.relatedProducts[relatedId] = related.value.product;
+                  }
+                };
+              }
+            }
           };
         }
       }
@@ -721,15 +743,24 @@
 
   function applyStorefrontCatalogChanges(payload, socket) {
     storefrontCatalogPending = false;
+    if (storefrontStorageFromRevision === null) storefrontStorageFromRevision = storefrontCatalogRevision;
     const next = String(payload.next_revision ?? storefrontCatalogRevision);
-    if (next !== storefrontCatalogRevision || payload.reset_required) storefrontCatalogGeneration++;
+    const catalogChanged = (payload.changes || []).some(change =>
+      change.entity_type !== "inventory" && change.entity_type !== "checkout_settings" &&
+      change.entity_type !== "option-group" && !(change.entity_type === "product" && change.operation === "stock"));
+    if (catalogChanged || payload.reset_required) storefrontCatalogGeneration++;
     storefrontCatalogRevision = next;
     localStorage.setItem(storefrontCatalogScope() + "revision", next);
     storefrontCatalogReset ||= payload.reset_required === true;
     for (const change of payload.changes || []) {
       const id = Number(change.entity_id);
+      if (change.entity_type === "inventory" || (change.entity_type === "product" && change.operation === "stock")) {
+        if (id > 0) queueProductStockAvailabilityRefresh([id], { reason: "catalog_stock" });
+        else queueVisibleProductStockRefresh("catalog_stock");
+        continue;
+      }
       if (change.entity_type === "product" && id > 0) storefrontChangedProducts.add(id);
-      else if (change.entity_type !== "checkout_settings") storefrontCatalogReset = true;
+      else if (change.entity_type !== "checkout_settings" && change.entity_type !== "option-group") storefrontCatalogReset = true;
     }
     if (payload.has_more) {
       requestStorefrontCatalogSync(socket);
@@ -737,6 +768,36 @@
     }
     const ids = [...storefrontChangedProducts];
     const reset = storefrontCatalogReset;
+    const scope = storefrontCatalogScope();
+    const fromRevision = storefrontStorageFromRevision;
+    storefrontStorageFromRevision = null;
+    storefrontStorageUpdate = storefrontStorageUpdate.then(async () => {
+      const db = await checkoutSettingsDb();
+      const changed = new Set(ids);
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("catalog", "readwrite");
+        const request = tx.objectStore("catalog").openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return;
+          if (String(cursor.key).startsWith(scope + "passport:") || String(cursor.key).startsWith(scope + "product:")) {
+            const row = cursor.value;
+            const passport = row.value;
+            const affected = reset || changed.has(Number(passport?.product?.id))
+              || passport?.dependency_ids?.some(id => changed.has(Number(id)))
+              || Object.keys(passport?.nestedIngredients || {}).some(id => changed.has(Number(id)))
+              || passport?.ingredients?.some(item => changed.has(Number(item.ingredient_id)))
+              || (passport?.options || passport?.optionGroups || []).some(group => group.items?.some(item =>
+                changed.has(Number(item.target_product_id || item.product_id))));
+            if (affected) cursor.delete();
+            else if (row.revision === fromRevision) cursor.update({ ...row, revision: next });
+          }
+          cursor.continue();
+        };
+        tx.oncomplete = resolve;
+        tx.onabort = tx.onerror = () => reject(tx.error || new Error("STOREFRONT_CACHE_REVISION_FAILED"));
+      });
+    }).catch(error => console.warn("Storefront passport cache synchronization failed:", error));
     storefrontChangedProducts.clear();
     storefrontCatalogReset = false;
     if (ids.length || reset) window.dispatchEvent(new CustomEvent("shop:storefront-catalog-changed", { detail: { ids, reset } }));
@@ -5276,6 +5337,19 @@
       promise: Promise.resolve(config), data: config, ts: Date.now(), generation: currentGeneration,
     });
     mergeProductPassport(pid, { product, defaultConfig: config });
+    if (!isKsoCatalogCache && defaultPriceCache.has(pid)) {
+      const pricing = typeof product.pricing_config_json === "string"
+        ? JSON.parse(product.pricing_config_json) : product.pricing_config_json;
+      if (pricing?.mode === "auto" || (pricing?.mode !== "manual" && product.price_source === "auto")) {
+        const presentation = window.SharedProductDetails.getSelectionPresentation(pid, config);
+        if (!presentation) throw new Error(`PRODUCT_PASSPORT_UNAVAILABLE:${pid}`);
+        product.display_price = presentation.price;
+        product.catalog_original_price = presentation.oldPrice || null;
+        config.display_price = presentation.price;
+        config.original_price = presentation.oldPrice || presentation.price;
+        defaultPriceCache.set(pid, presentation.price);
+      }
+    }
 
     if (isKsoCatalogCache) scheduleSyncAllProductCardsFromCart([pid]);
     if (elProductsGrid && !isKsoCatalogCache) {
@@ -5419,7 +5493,7 @@
     stockRefreshInFlight = true;
     try {
       const openedProductId = Number(openProductCtx?.productId || 0);
-      if (Number.isFinite(openedProductId) && openedProductId > 0) {
+      if (Number.isFinite(openedProductId) && openedProductId > 0 && !document.body.matches(".page-shop:not(.page-kso)")) {
         try {
           const json = await apiJson(`/api/public/products/${openedProductId}`);
           const product = json?.data || null;
@@ -5656,8 +5730,6 @@
           visibleIds.forEach((id) => {
             advanceStockConfigGeneration(id);
             upsellDefaultConfigCache.delete(id);
-            const passport = getProductPassport(id);
-            if (passport && typeof passport === "object") delete passport.defaultConfig;
           });
           queueProductStockAvailabilityRefresh(visibleIds, { reason: "stock_ws_resync", delayMs: 0 });
         }
@@ -5734,8 +5806,6 @@
       if (isCatchupDuplicate) return;
       advanceStockConfigGeneration(id);
       upsellDefaultConfigCache.delete(id);
-      const passport = getProductPassport(id);
-      if (passport && typeof passport === "object") delete passport.defaultConfig;
       refreshIds.push(id);
     });
     queueProductStockAvailabilityRefresh(refreshIds, { reason: "stock_event_ids", delayMs: 0 });
@@ -6848,6 +6918,7 @@
                 qty: Math.max(0, Number(opt.qty || opt.quantity || 1)) || 1,
                 target_product_id: optionTargetProductId,
                 product_id: optionTargetProductId,
+                ...(Array.isArray(opt.packaging_items) && { packaging_items: opt.packaging_items }),
                 ...(opt.configuration_json ? { configuration_json: opt.configuration_json, price_mode: opt.price_mode,
                   price_value: opt.price_value, product_price: opt.product_price, variants: opt.variants } : {}),
                 // ???????? ?????
@@ -7680,6 +7751,36 @@
     return !canUseCartDraftForProductIds(state.cart, collectRegularCartAffectedProductIds(pid));
   }
 
+  function getCartOptionGroupsByItemId(productId) {
+    const groups = getProductPassport(productId)?.optionGroups || [];
+    return new Map(groups.flatMap(group => (group.items || []).map(option => [Number(option.id), group])));
+  }
+
+  function usesParentPackaging(group) {
+    if (!group) return false;
+    return Number(group.is_packaging) === 1 || Number(group.is_component ?? group.is_component_default) === 1;
+  }
+
+  function resolveCartOptionPackaging(productId, options) {
+    if (!Array.isArray(options)) return [];
+    const groups = getCartOptionGroupsByItemId(productId);
+    return options.map(option => {
+      const group = groups.get(Number(option.id));
+      const isComponent = group && Number(group.is_packaging) !== 1
+        && Number(group.is_component ?? group.is_component_default) === 1;
+      if (isComponent) {
+        const definition = group.items.find(item => Number(item.id) === Number(option.id));
+        const pricing = window.SharedProductDetails.getOptionItemDisplayPricing({ ...definition, ...option,
+          configuration_json: definition.configuration_json, is_component: true }, option, false);
+        const { packaging_items, ...component } = option;
+        return { ...component, is_component: true, price: pricing.currentPrice };
+      }
+      if (!option.packaging_items?.length || !usesParentPackaging(group)) return option;
+      const { packaging_items, ...component } = option;
+      return component;
+    });
+  }
+
   function cartItemsResolved(sourceCart = state.cart, opts = {}) {
     const includeDormantAutoAdd = opts?.includeDormantAutoAdd === true;
     const includeUnavailable = opts?.includeUnavailable === true;
@@ -7722,7 +7823,7 @@
         product: p,
         qty,
         option_item_ids: Array.isArray(item.option_item_ids) ? item.option_item_ids : [],
-        option_items: Array.isArray(item.option_items) ? item.option_items : [],
+        option_items: resolveCartOptionPackaging(pid, item.option_items),
         ingredients: Array.isArray(item.ingredients) ? item.ingredients : [],
         ingredient_price_diff: Number(item.ingredient_price_diff || 0),
         old_price: Number(item.old_price || 0),
@@ -8282,53 +8383,15 @@
   }
 
   function getAutoAddGiftBenefits() {
-    const groups = state.autoAdd?.groups || [];
-    const rules = window.SharedProductRuntime.resolveAutoAddRules(groups, state.autoAdd?.items || [], {
-      timezone: state.autoAdd.timezone, scheduledAt: state.autoAdd.scheduledAt,
+    return window.SharedProductRuntime.getAutoAddGiftBenefits({
+      groups: state.autoAdd?.groups || [],
+      rules: window.SharedProductRuntime.resolveAutoAddRules(state.autoAdd?.groups || [], state.autoAdd?.items || [], {
+        timezone: state.autoAdd.timezone, scheduledAt: state.autoAdd.scheduledAt,
+      }),
+      cart: state.cart, totals: computeCartTotals(cartItemsResolved()),
+      getProduct: id => state.productCache.get(id), isAvailable: isProductAvailable,
+      authenticated: isAutoAddCustomerAuthenticated(), money,
     });
-    const totals = computeCartTotals(cartItemsResolved());
-    const hasBase = state.cart.some(item => Number(item.qty) > 0 && Number(item.auto_add) !== 1 && Number(item.is_gift_reward) !== 1
-      && (item.type === 'combo' || !rules.some(rule => Number(rule.group?.rule_version) === 1 && Number(rule.product_id) === Number(item.product_id || item.id))));
-    const budget = new Map(groups.map(group => {
-      const reserved = state.cart.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_group_id) === Number(group.id))
-        .reduce((sum, item) => sum + Math.max(0, Number(item.qty || 0)), 0);
-      return [Number(group.id), group.remaining_qty == null ? Infinity : Math.max(0, Number(group.remaining_qty) - reserved)];
-    }));
-    return rules.filter(rule => Number(rule.group?.rule_version) === 1).map(rule => {
-      const group = rule.group, pid = Number(rule.product_id), gid = Number(group.id);
-      if (Number(group.first_free) !== 1 && !(Number(rule.free_per_amount) > 0)) return null;
-      const product = state.productCache.get(pid) || rule.product;
-      if (!product || (rule.configuration_json ? rule.configuration_available !== true : !isProductAvailable(product))) return null;
-      const base = Number(group.include_auto_in_total) === 1 ? totals.autoEligibleTotal : totals.nonAutoTotal;
-      const maxAmount = group.max_cart_amount == null ? Infinity : Number(group.max_cart_amount);
-      if (base > maxAmount) return null;
-      const uncapped = { ...rule, current_free_limit: null };
-      const inCart = state.cart.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_group_id) === gid && Number(item.product_id) === pid)
-        .reduce((sum, item) => sum + Math.max(0, Number(item.qty || 0)), 0);
-      const entitled = hasBase ? Math.min(calcAutoFreeQty(uncapped, base), inCart + budget.get(gid)) : 0;
-      const authRequired = Number(group.available_to_guests ?? 1) === 0 && !isAutoAddCustomerAuthenticated();
-      const available = authRequired ? 0 : Math.max(0, entitled - inCart);
-      budget.set(gid, Math.max(0, budget.get(gid) - available));
-      const step = Number(rule.free_per_amount || 0);
-      const minimum = Number(group.min_cart_amount || 0);
-      const next = base < minimum && Number(group.first_free) === 1 ? minimum
-        : Math.max(minimum, step > 0 ? (Math.floor(Math.round(base * 100) / Math.round(step * 100)) + 1) * step : minimum);
-      const limit = Math.min(rule.max_free_qty == null ? Infinity : Number(rule.max_free_qty), inCart + available + budget.get(gid));
-      const finished = entitled >= limit || next > maxAmount || (step <= 0 && entitled > 0);
-      const remaining = finished ? 0 : Math.max(0, next - base);
-      const span = base < Number(group.min_cart_amount || 0) ? next : step;
-      const ratio = finished ? 1 : span > 0 ? Math.max(0, Math.min(1, 1 - remaining / span)) : 0;
-      const conditions = [Number(group.first_free) === 1 ? '\u041f\u0435\u0440\u0432\u0430\u044f \u0448\u0442\u0443\u043a\u0430 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e' : '', step > 0 ? `\u0417\u0430 \u043a\u0430\u0436\u0434\u044b\u0435 ${money(step)} \u2014 1 \u0448\u0442.` : '',
-        group.min_cart_amount != null ? `\u041e\u0442 ${money(group.min_cart_amount)}` : '', group.max_cart_amount != null ? `\u0414\u043e ${money(group.max_cart_amount)}` : '',
-        rule.max_free_qty != null ? `\u041c\u0430\u043a\u0441\u0438\u043c\u0443\u043c ${rule.max_free_qty} \u0448\u0442.` : ''].filter(Boolean).join(' \u00b7 ');
-      return { action_mode: 'auto_add', rule_id: Number(rule.id), group_id: gid, product_id: pid,
-        title: product.name, max_claim_qty: rule.max_free_qty == null ? null : Number(rule.max_free_qty), photo_url: product.photos?.[0] || '', product_count: 1,
-        auth_required: authRequired, finished, amount_step: step, progress_value: step > 0 ? Math.max(0, Math.round((span - remaining) * 100) / 100) : Math.min(base, minimum), progress_target: step > 0 ? span : minimum,
-        products: [{ id: pid, title: product.name }], configuration: typeof rule.configuration_json === 'string' ? JSON.parse(rule.configuration_json) : rule.configuration_json,
-        available_qty: available, entitled, in_cart: inCart,
-        is_receivable: available > 0, campaign_title: group.title, conditions,
-        progress_ratio: ratio, progress_text: finished ? '\u041b\u0438\u043c\u0438\u0442 \u043f\u043e\u0434\u0430\u0440\u043a\u043e\u0432 \u0434\u043e\u0441\u0442\u0438\u0433\u043d\u0443\u0442' : `\u0414\u043e \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0433\u043e \u043f\u043e\u0434\u0430\u0440\u043a\u0430 \u2014 ${money(remaining)}` };
-    }).filter(Boolean);
   }
 
   function getAutoAddGiftQuantityContext(productId, groupId, cartKey = null) {
@@ -8607,6 +8670,47 @@
     return getSharedShopProductRuntime().formatIngredientLineForOrder(...arguments);
   }
 
+  function appendOptionPackagingLines(lines, option) {
+    const optionQty = Math.max(1, Number(option.qty ?? option.quantity ?? 1));
+    for (const item of option.packaging_items || []) {
+      const qty = optionQty * Math.max(1, Number(item.qty ?? item.quantity ?? 1));
+      const label = item.variant_label ? `${qty} ? ${item.variant_label}` : "";
+      const line = formatOptionLineForOrder({ ...item, qty, variant_label: label });
+      if (line) lines.push(line);
+    }
+  }
+
+  function getCartPackagingItems(productId, options, quantity) {
+    const groups = getCartOptionGroupsByItemId(productId);
+    return getSharedShopProductRuntime().collectPackagingItems(resolveCartOptionPackaging(productId, options).map(option => ({
+      ...option,
+      is_packaging: Number(option.is_packaging) === 1 || Number(groups.get(Number(option.id))?.is_packaging) === 1,
+    })), quantity);
+  }
+
+  function createCartPackagingAccordion(productId, options, quantity) {
+    const element = document.createElement("details");
+    element.className = "shop-packaging-accordion cart-packaging-accordion";
+    const summary = document.createElement("summary");
+    summary.textContent = "\u0423\u043f\u0430\u043a\u043e\u0432\u043a\u0430";
+    const list = document.createElement("div");
+    list.className = "cart-sub-details";
+    element.append(summary, list);
+    element.addEventListener("click", event => event.stopPropagation());
+    const update = count => {
+      const items = getCartPackagingItems(productId, options, count);
+      element.hidden = !items.length;
+      list.replaceChildren(...items.map(item => {
+        const line = document.createElement("div");
+        line.className = "cart-sub-detail-item";
+        line.textContent = `\u2022 ${formatOptionLineForOrder(item)}`;
+        return line;
+      }));
+    };
+    update(quantity);
+    return { element, update };
+  }
+
   function formatOptionLineForOrder(opt) {
     const qtyText = Math.max(1, Number(opt?.qty || opt?.quantity || 1));
     const title = str(opt?.title || opt?.name || "").trim();
@@ -8742,6 +8846,7 @@
       if (Number(opt?.qty ?? opt?.quantity ?? 0) <= 0) return;
       const line = formatOptionLineForOrder(opt);
       if (line) detailLines.push(line);
+      appendOptionPackagingLines(detailLines, opt);
     });
 
     let html = `<div class="cart-row">`;
@@ -8836,10 +8941,56 @@
       if (!qty || !Number.isFinite(pid)) continue;
       if (!state.productCache.has(pid)) missing.push(pid);
     }
-    if (!missing.length) return;
-
+    const packaged = state.cart.filter(item => item.option_items?.length && !item.combo_id);
     try {
-      await refreshProductsByIds(missing);
+      if (missing.length) await refreshProductsByIds(missing);
+      if (!packaged.length || typeof window.preloadProductPassportsBatch !== "function") return;
+      const ids = [...new Set(packaged.map(item => Number(item.product_id)).filter(id => id > 0))];
+      await window.preloadProductPassportsBatch(ids, { details: true });
+      const outdatedIds = ids.filter(id => {
+        const groups = getProductPassport(id)?.optionGroups;
+        return getProductPassport(id)?.component_assignments_included !== true || (Array.isArray(groups) && groups.some(group =>
+          typeof group.is_component_default !== "boolean" ||
+          (group.is_component !== null && typeof group.is_component !== "boolean")
+        ));
+      });
+      if (outdatedIds.length) {
+        await window.preloadProductPassportsBatch(outdatedIds, { details: true, force: true });
+      }
+      const standalone = [];
+      let changed = false;
+      for (const item of packaged) {
+        const groupsByOptionId = getCartOptionGroupsByItemId(item.product_id);
+        for (const option of item.option_items) {
+          const group = groupsByOptionId.get(Number(option.id));
+          if (!group || typeof group.is_component_default !== "boolean" ||
+              (group.is_component !== null && typeof group.is_component !== "boolean")) continue;
+          if (usesParentPackaging(group)) {
+            if (!option.packaging_items?.length) continue;
+            delete option.packaging_items;
+            changed = true;
+          } else {
+            const id = Number(option.target_product_id || option.product_id);
+            if (id > 0) standalone.push({ option, id });
+          }
+        }
+      }
+      const targetIds = [...new Set(standalone.map(({ id }) => id))];
+      if (targetIds.length) await window.preloadProductPassportsBatch(targetIds, { details: true });
+      const incompleteTargets = targetIds.filter(id => getProductPassport(id)?.packaging_assignments_included !== true);
+      if (incompleteTargets.length) await window.preloadProductPassportsBatch(incompleteTargets, { details: true, force: true });
+      const runtime = getSharedShopProductRuntime();
+      for (const { option, id } of standalone) {
+        const passport = getProductPassport(id);
+        if (!Array.isArray(passport?.optionGroups) ||
+            passport.optionGroups.some(group => typeof group.is_packaging !== "boolean")) continue;
+        const packaging = runtime.getStandaloneOptionPackaging(passport.optionGroups, passport.product);
+        if (JSON.stringify(option.packaging_items || []) === JSON.stringify(packaging)) continue;
+        if (packaging.length) option.packaging_items = packaging;
+        else delete option.packaging_items;
+        changed = true;
+      }
+      if (changed) saveCart();
     } catch (e) {
       console.warn("warmupCartProducts: failed to load products", e);
     }
@@ -8915,7 +9066,7 @@
       entry.product = mergedProduct;
       entry.updated_at = mergedProduct.updated_at || mergedProduct.updatedAt || entry.updated_at || null;
     }
-    ["ingredients", "nestedIngredients", "variants", "optionAssignments", "optionGroups", "defaultConfig"].forEach((key) => {
+    ["ingredients", "nestedIngredients", "variants", "optionAssignments", "optionGroups", "defaultConfig", "packaging_assignments_included", "component_assignments_included", "dependencies_included", "dependency_ids", "relatedProducts"].forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         entry[key] = clonePassportValue(patch[key]);
       }
@@ -14129,7 +14280,9 @@ async function initAddresses() {
 
   async function warmInitialCatalogInteractionData(opts = {}) {
     if (isKsoCatalogCache) return;
-    const productLimit = Math.max(1, Number(opts.productLimit || INITIAL_CATALOG_PREFETCH_PRODUCTS));
+    const categoryIds = Array.isArray(opts.categoryIds) ? opts.categoryIds : [state.activeCategoryId];
+    const categoryProductCount = categoryIds.reduce((count, id) => count + (state.productsByCategory.get(Number(id))?.length || 0), 0);
+    const productLimit = Math.max(1, Number(opts.productLimit || INITIAL_CATALOG_PREFETCH_PRODUCTS), categoryProductCount);
     const comboLimit = Math.max(0, Number(opts.comboLimit || INITIAL_CATALOG_PREFETCH_COMBOS));
     const { productIds, comboIds } = collectInitialCatalogWarmIds({
       categoryIds: opts.categoryIds,
@@ -15377,6 +15530,9 @@ async function initAddresses() {
       // ????????? ???????? ? ?????????? ???????: ???????? ? ??????????? ? ?????
       const ingredientParts = [];
       const optionParts = [];
+      const storefrontPackaging = document.body.matches(".page-shop:not(.page-kso)")
+        ? createCartPackagingAccordion(product.id, optionItems, qty) : null;
+      const optionGroupsForPackaging = storefrontPackaging ? getCartOptionGroupsByItemId(product.id) : null;
       
       // 2. ??????????? (???????) ? ?? ?????????? ? ??????????? 0
       if (Array.isArray(cartIngredients) && cartIngredients.length > 0) {
@@ -15391,8 +15547,10 @@ async function initAddresses() {
       if (Array.isArray(optionItems) && optionItems.length > 0) {
         optionItems.forEach(opt => {
           if (Number(opt.qty ?? opt.quantity ?? 0) <= 0) return;
+          if (storefrontPackaging && (Number(opt.is_packaging) === 1 || Number(optionGroupsForPackaging.get(Number(opt.id))?.is_packaging) === 1)) return;
           const formatted = formatOptionLineForOrder(opt);
           if (formatted) optionParts.push(formatted);
+          if (!storefrontPackaging) appendOptionPackagingLines(optionParts, opt);
         });
       }
 
@@ -15433,6 +15591,8 @@ async function initAddresses() {
       }
       
       mid.appendChild(subContainer);
+
+      if (storefrontPackaging) mid.appendChild(storefrontPackaging.element);
 
       const q = document.createElement("div");
       q.className = "cart-qty";
@@ -15476,6 +15636,7 @@ async function initAddresses() {
 
         regularQtyLabel.textContent = `${newQty} \u0448\u0442`;
         t.textContent = `${newQty} x ${titleText}`;
+        storefrontPackaging?.update(newQty);
 
         syncCartRowMinusButton(btnMinus, newQty);
 
@@ -17557,7 +17718,9 @@ function updateCartBadge() {
     renderProducts();
     saveCatalogSnapshotFromState();
     // Don't block click -> scroll; load in background.
-    ensureCategoryLoaded(categoryId, { limit: 200 });
+    void Promise.resolve(ensureCategoryLoaded(categoryId, { limit: 200 })).then(() =>
+      warmInitialCatalogInteractionData({ categoryIds: [id] })
+    ).catch(error => console.error("Category details warmup failed:", error));
     scrollToCategory(id, { alignFirstCard });
     await warmupCartProducts();
     renderCart();
@@ -17582,7 +17745,8 @@ function updateCartBadge() {
         ts: Date.now(),
         activeCategoryId: Number(state.activeCategoryId || 0) || null,
         categories: Array.isArray(state.categories) ? state.categories : [],
-        productsByCategory: mapToPlainObject(state.productsByCategory),
+        productsByCategory: Object.fromEntries([...state.productsByCategory].map(([id, products]) => [id,
+          products.map(product => state.productCache.get(Number(product.id)) || product)])),
         combosByCategory: mapToPlainObject(state.combosByCategory),
         productPassports: mapToPlainObject(state.productPassports),
       };
@@ -20458,6 +20622,8 @@ function withShopSplashTimeout(promise, timeoutMs) {
 
 function scheduleAllProductIngredientBatch() {
   if (isKsoCatalogCache) return; // Full missing passports are loaded once by the KSO cache warmup.
+  void warmInitialCatalogInteractionData({ categoryIds: [Number(state.activeCategoryId)] })
+    .catch(error => console.error("Storefront catalog passport warmup failed:", error));
   const allProductIds = [];
   if (state.productsByCategory instanceof Map) {
     state.productsByCategory.forEach(function(products) {

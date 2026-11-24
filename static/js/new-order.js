@@ -310,6 +310,7 @@
       orderId: 0,
       mode: "customer",
       screen: "main",
+      giftsOnly: false,
       title: "Выгоды",
       payload: null,
       promoInputValue: "",
@@ -1047,6 +1048,7 @@
                         const qtyVal = Math.max(0, Number(opt?.qty || 0));
                         if (!(groupId > 0) || !(itemId > 0) || qtyVal <= 0) return null;
                         const details = state.optionGroupDetails.get(groupId);
+                        if (isRightCartPackagingOption(item, opt)) return null;
                         const detailItems = Array.isArray(details?.items) ? details.items : [];
                         const detailItem = detailItems.find((x) => Number(x?.id || 0) === itemId) || null;
                         const detailName = String(detailItem?.name || detailItem?.product_name || opt?.label || "РћРїС†РёСЏ").trim();
@@ -1107,7 +1109,8 @@
                     const productId = Number(item?.product_id || 0);
                     const groups = productId > 0 ? (state.productOptionGroups.get(productId) || []) : [];
                     const selectedOptionItems = Array.isArray(item?.option_items) ? item.option_items : [];
-                    return (Array.isArray(groups) && groups.length > 0) || selectedOptionItems.length > 0;
+                    return (Array.isArray(groups) && groups.some(group => Number(group.is_packaging ?? state.optionGroupDetails.get(Number(group.group_id || group.id))?.group?.is_packaging) !== 1)) ||
+                      selectedOptionItems.some(option => !isRightCartPackagingOption(item, option));
                   })(),
                 }];
               const renderCompositionRowHtml = row => window.SharedProductDetails.renderCompositionRow(row, {
@@ -1122,7 +1125,8 @@
                   `).join("")}
                   ${optionRows.length ? `<div class="new-order-right-cart-combo-section is-separated">${optionRows.map((row) => renderCompositionRowHtml(row)).join("")}</div>` : ""}
                 `
-                : [...compositionRows, ...optionRows].map((row) => renderCompositionRowHtml(row)).join("");
+                : [...compositionRows, ...optionRows].map((row) => renderCompositionRowHtml(row)).join("") +
+                  window.SharedProductDetails.renderPackagingDetails(Number(item.product_id), getRightCartPackagingOptions(item), qty);
               const autoFreeLineHtml = autoFreeQty > 0
                 ? `<div class="new-order-right-cart-composition-row">• Бесплатно: ${escapeHtml(formatQtyPlain(autoFreeQty))} шт.</div>`
                 : "";
@@ -1531,6 +1535,7 @@
   }
 
   async function loadRightPickupStores() {
+    const previousTimezones = JSON.stringify(state.rightPickupStores.map(store => [store.id, store.timezone]));
     try {
       const tenantId = getTenantIdFromStorage();
       if (!(tenantId > 0)) {
@@ -1553,6 +1558,10 @@
         .sort((a, b) => (a.id - b.id));
     } catch {
       state.rightPickupStores = [];
+    }
+    if (previousTimezones !== JSON.stringify(state.rightPickupStores.map(store => [store.id, store.timezone]))) {
+      const ids = sharedCatalogCards.filter(entry => entry.product?.sale_mode === "preorder").map(entry => Number(entry.product.id));
+      if (ids.length) syncNewOrderSharedCards(ids);
     }
     schedulePersistBootstrapSnapshot();
   }
@@ -3008,7 +3017,7 @@
       const qty = Math.max(0, Number(row?.qty || 0));
       const basePrice = Number(row?.basePrice || 0);
       const variantDiff = Number(row?.variantDiff || 0);
-      return sum + ((basePrice + variantDiff) * qty);
+      return sum + ((basePrice + variantDiff + window.SharedProductDetails.getOptionPackagingPricing(row).current) * qty);
     }, 0));
     const ingredientDiff = roundPrice(calculateIngredientSnapshotDiff(item?.ingredients));
     const selectedVariantIndex = Number.isFinite(Number(item?.variant?.selected_index))
@@ -3229,7 +3238,8 @@
       const baseTotal = Number(group?.include_auto_in_total || 0) === 1 ? totals.autoEligibleTotal : totals.nonAutoTotal;
       const minAmount = group?.min_cart_amount != null ? Number(group.min_cart_amount) : null;
       const maxAmount = group?.max_cart_amount != null ? Number(group.max_cart_amount) : null;
-      const eligible = (minAmount == null || baseTotal >= minAmount) && (maxAmount == null || baseTotal <= maxAmount);
+      const eligible = (minAmount == null || baseTotal >= minAmount) && (maxAmount == null || baseTotal <= maxAmount)
+        && (Number(group.rule_version) !== 1 || Number(group.available_to_guests ?? 1) !== 0 || (Number(form?.clientId || 0) > 0 && !form?.guestOrigin));
 
       if (!eligible) {
         groupRules.forEach((rule) => {
@@ -3290,8 +3300,12 @@
         const maxQty = rule?.max_qty != null ? Math.max(0, Number(rule.max_qty)) : null;
         const isNewRule = Number(group.rule_version) === 1;
         rule.current_free_limit = null;
-        if (isNewRule) rule.current_free_limit = Math.min(window.SharedProductRuntime.autoAddFreeQty(rule, baseTotal), freeBudget);
-        const desiredQty = isNewRule ? rule.current_free_limit : Math.max(minQty, defaultQty);
+        if (isNewRule) rule.current_free_limit = Math.min(window.SharedProductRuntime.autoAddFreeQty(rule, baseTotal), freeBudget, selected?.auto_add_customer_qty ?? Infinity);
+        const desiredQty = isNewRule
+          ? (Number(group.add_automatically ?? 1) === 0
+            ? Math.min(rule.current_free_limit, Math.max(Number(group.first_free) === 1 ? 1 : 0, Number(selected?.qty || 0)))
+            : rule.current_free_limit)
+          : Math.max(minQty, defaultQty);
         if (isNewRule) freeBudget -= desiredQty;
 
         if (!selected && desiredQty > 0) {
@@ -3419,7 +3433,8 @@
       if (Number(item.auto_add) !== 1 || Number(item.auto_add_rule_version) !== 1) continue;
       const previous = previousItems.find(row => Number(row.id) === Number(item.id));
       const extra = previous ? Number(item.qty) - Number(previous.qty) : 0;
-      if (!(extra > 0)) continue;
+      if (extra < 0) item.auto_add_customer_qty = Math.max(0, Number(item.qty));
+      if (!(extra > 0) || opts.claimAutoGift === true) continue;
       const regular = buildPlainAutoAddCartItem(item.product_id, extra);
       if (!regular) return false;
       regular.auto_add = 0;
@@ -5157,6 +5172,8 @@
     state.benefitsModal.mainView = {
       orderId: id,
       mode: activeMode,
+      giftsOnly: Boolean(state.benefitsModal.giftsOnly),
+      cartItems: state.rightOrders.find(row => Number(row.id) === id)?.form?.cartItems,
       requestKey: getRightBenefitsMainViewRequestKey(id, activeMode),
       snapshot: getRightBenefitsMainViewSnapshot(id, activeMode),
       root: frame.root,
@@ -5175,6 +5192,8 @@
     const id = Number(orderId || state.benefitsModal.orderId || 0);
     if (!(id > 0)) return false;
     const mainView = state.benefitsModal.mainView;
+    if (Boolean(mainView?.giftsOnly) !== Boolean(state.benefitsModal.giftsOnly)) return false;
+    if (state.benefitsModal.giftsOnly && mainView?.cartItems !== state.rightOrders.find(row => Number(row.id) === id)?.form?.cartItems) return false;
     if (!mainView || Number(mainView.orderId || 0) !== id) return false;
     if (!(mainView.root instanceof Element)) return false;
     const activeMode = normalizeRightOrderBenefitsMode(state.benefitsModal.mode || mainView.mode);
@@ -5183,9 +5202,9 @@
     if (mainView.snapshot !== getRightBenefitsMainViewSnapshot(id, activeMode)) return false;
 
     window.AdminBenefitsModal?.show({
-      title: "Выгоды",
+      title: state.benefitsModal.giftsOnly ? "Подарки" : "Выгоды",
       showBack: false,
-      showModeToggle: true,
+      showModeToggle: !state.benefitsModal.giftsOnly,
       mode: activeMode,
       onClose: closeRightBenefitsOverlay,
       onModeChange: (nextMode) => {
@@ -6708,9 +6727,14 @@
         </div>
       </div>
       ${renderRightOrderShopBonusRedeemHtml(orderId, cartSummary)}
+      <div class="new-order-right-benefit-actions">
+      <button class="new-order-right-benefits-open" type="button" data-action="right-order-gifts-open" data-order-id="${orderId}">
+        <i class="fas fa-gift" aria-hidden="true"></i><span>Подарки</span>
+      </button>
       <button class="new-order-right-benefits-open" type="button" data-action="right-order-benefits-open" data-order-id="${orderId}">
         <i class="fas fa-tags" aria-hidden="true"></i><span>Выгоды</span>
       </button>
+      </div>
     `;
   }
 
@@ -7117,6 +7141,7 @@
         auto_add: Number(item?.auto_add || 0) === 1 ? 1 : 0,
         auto_add_group_id: Number(item?.auto_add_group_id || 0) > 0 ? Number(item.auto_add_group_id) : null,
         auto_add_rule_version: Number(item?.auto_add_rule_version || 0),
+        auto_add_customer_qty: item?.auto_add_customer_qty == null ? null : Number(item.auto_add_customer_qty),
         auto_add_free_qty: Number(item?.auto_add_free_qty || 0),
         line_total: lineTotal,
         original_line_total: originalLineTotal,
@@ -12918,12 +12943,75 @@
     });
   }
 
+  function getRightAutoAddGiftBenefits(order) {
+    const form = order?.form || {};
+    const cart = form.cartItems || [];
+    if (!order) return [];
+    return window.SharedProductRuntime.getAutoAddGiftBenefits({
+      groups: state.autoAdd.groups || [],
+      rules: window.SharedProductRuntime.resolveAutoAddRules(state.autoAdd.groups || [], state.autoAdd.items || [], {
+        timezone: state.autoAdd.timezone,
+        scheduledAt: getCookWhenKind(form.cookWhen) === 'on_date' ? form.scheduledDate : null,
+        createdAt: order?.autoAddCreatedAt || null,
+      }),
+      cart, totals: { nonAutoTotal: computeRightAutoNonAutoTotal(cart), autoEligibleTotal: computeRightAutoEligibleTotal(cart) },
+      getProduct: getProductById, isAvailable: isProductAvailableFlag,
+      authenticated: Number(form.clientId || 0) > 0 && !form.guestOrigin, money: toMoney,
+      issuedByGroup: order.autoAddIssuedByGroup || {},
+    });
+  }
+
+  function renderRightAutoAddGiftCard(orderId, item) {
+    return window.AdminBenefitsModal.renderAutoAddGiftCard(item, {
+      money: toMoney,
+      onOpen: () => {
+        const order = state.rightOrders.find(row => Number(row.id) === Number(orderId));
+        const current = getRightAutoAddGiftBenefits(order).find(row => row.rule_id === item.rule_id && row.group_id === item.group_id);
+        if (!current) return;
+        window.AdminBenefitsModal.hide({ clearBody: false });
+        void openProductOverlay(current.product_id, {
+          readOnly: true, initialValue: { ...current.configuration, qty: 1 },
+          onBack: () => renderRightBenefitsOverlay(orderId),
+        });
+      },
+      onAction: async () => {
+        try {
+          const order = state.rightOrders.find(row => Number(row.id) === Number(orderId));
+          const current = getRightAutoAddGiftBenefits(order).find(row => row.rule_id === item.rule_id && row.group_id === item.group_id);
+          if (current?.auth_required) {
+            showNewOrderAlert("Сначала выберите клиента для заказа.");
+            return;
+          }
+          if (!current || !(current.available_qty > 0)) return;
+          const cart = (order.form.cartItems || []).map(row => ({ ...row }));
+          let selected = cart.find(row => Number(row.auto_add) === 1 && Number(row.auto_add_group_id) === current.group_id && Number(row.product_id) === current.product_id);
+          if (!selected) {
+            const configured = Boolean(current.configuration);
+            selected = buildPlainAutoAddCartItem(current.product_id, 1, configured);
+            if (!selected) throw new Error('AUTO_ADD_PRODUCT_UNAVAILABLE');
+            Object.assign(selected, { qty: 0, auto_add: 1, auto_add_rule_version: 1, auto_add_gift: 1, auto_add_group_id: current.group_id });
+            cart.push(selected);
+          }
+          selected.qty = current.in_cart + Math.min(1, current.available_qty);
+          selected.auto_add_customer_qty = selected.qty;
+          clearRightAutoAddDismissedEntry(orderId, current.group_id, current.product_id);
+          updateRightOrderCartItems(orderId, cart, { render: true, claimAutoGift: true });
+          const latest = getRightAutoAddGiftBenefits(state.rightOrders.find(row => Number(row.id) === Number(orderId)));
+          const { body } = getRightBenefitsOverlayElements();
+          body?.querySelectorAll('.shop-auto-add-gift-card').forEach(card => card.updateAutoGift(latest.find(row => row.rule_id === Number(card.dataset.autoAddRule) && row.group_id === Number(card.dataset.autoAddGroup))));
+        } catch (error) {
+          showNewOrderAlert(getRightOrderBenefitsActionErrorMessage(error));
+        }
+      },
+    });
+  }
+
   function renderRightBenefitsMainScreen(order) {
     const orderId = Number(order?.id || 0);
     window.AdminBenefitsModal?.show({
-      title: "Выгоды",
+      title: state.benefitsModal.giftsOnly ? "Подарки" : "Выгоды",
       showBack: false,
-      showModeToggle: true,
+      showModeToggle: !state.benefitsModal.giftsOnly,
       mode: getActiveRightOrderBenefitsMode(),
       onClose: closeRightBenefitsOverlay,
       onModeChange: (nextMode) => {
@@ -12944,13 +13032,13 @@
     frame.scrollEl.appendChild(shell);
 
     const currentMode = getActiveRightOrderBenefitsMode();
-    const isCatalogMode = currentMode === "all";
+    const isCatalogMode = currentMode === "all" && !state.benefitsModal.giftsOnly;
     const hint = document.createElement("div");
     hint.className = "shop-checkout-benefits-hint";
     hint.textContent = isCatalogMode
       ? "Здесь можно смотреть общие акции и выдавать их клиенту. Применение к заказу доступно только во вкладке «Скидки клиента»."
       : "Здесь можно выбрать одну скидку и один промокод. Если у обоих включено совмещение, они применяются вместе.";
-    shell.appendChild(hint);
+    if (!state.benefitsModal.giftsOnly) shell.appendChild(hint);
 
     if (isCatalogMode) {
       if (state.clientBenefitsCatalogModal.loading) {
@@ -13015,7 +13103,7 @@
       }
     }
     const isLoading = state.rightBenefitsLoadingByOrder.has(getRightOrderBenefitsCacheSlot(orderId, currentMode));
-    if (!previewData) {
+    if (!previewData && !state.benefitsModal.giftsOnly) {
       const loading = document.createElement("div");
       loading.className = "shop-checkout-benefits-loading";
       loading.textContent = isLoading ? "Загрузка выгод..." : "Загружаем выгоды...";
@@ -13032,19 +13120,20 @@
       return;
     }
 
-    const data = getRightOrderBenefitsRenderData(previewData);
+    const data = getRightOrderBenefitsRenderData(previewData || {});
 
     const discountSection = createRightOrderBenefitsSection("Скидки", "Для этого заказа доступных скидок нет.");
     const promoSection = createRightOrderBenefitsSection("Промокоды", "Для этого заказа доступных промокодов нет.");
     const giftSection = createRightOrderBenefitsSection("Подарки", "Здесь появятся доступные подарки.", { horizontal: true });
+    if (state.benefitsModal.giftsOnly) giftSection.list.classList.add("shop-checkout-benefits-list--gift-stack");
     const progressSection = createRightOrderBenefitsSection("Задания", "Здесь появится прогресс заданий.");
     const completedSection = createRightOrderBenefitsSection("Завершенные", "Здесь появятся завершённые выгоды.");
 
-    shell.appendChild(discountSection.section);
-    shell.appendChild(promoSection.section);
+    if (!state.benefitsModal.giftsOnly) shell.appendChild(discountSection.section);
+    if (!state.benefitsModal.giftsOnly) shell.appendChild(promoSection.section);
     shell.appendChild(giftSection.section);
-    shell.appendChild(progressSection.section);
-    shell.appendChild(completedSection.section);
+    if (!state.benefitsModal.giftsOnly) shell.appendChild(progressSection.section);
+    if (!state.benefitsModal.giftsOnly) shell.appendChild(completedSection.section);
 
     setRightOrderBenefitsSectionItems(discountSection, data.discounts, (item) => renderRightOrderBenefitDiscountCard(item, {
       onOpenDetails: (discountItem) => {
@@ -13076,7 +13165,8 @@
         }
       },
     }));
-    setRightOrderBenefitsSectionItems(giftSection, data.gifts, (item) => renderRightOrderBenefitGiftCard(item, {
+    setRightOrderBenefitsSectionItems(giftSection, [...data.gifts, ...getRightAutoAddGiftBenefits(order)], (item) => item.action_mode === "auto_add"
+      ? renderRightAutoAddGiftCard(orderId, item) : renderRightOrderBenefitGiftCard(item, {
       onOpen: (giftReward) => {
         openRightOrderBenefitDetailScreen(orderId, {
           kind: "gift",
@@ -13091,8 +13181,10 @@
         }
       },
     }));
-    bindRightOrderHorizontalTrack(giftSection.list);
-    bindRightOrderWheelTrack(giftSection.list);
+    if (!state.benefitsModal.giftsOnly) {
+      bindRightOrderHorizontalTrack(giftSection.list);
+      bindRightOrderWheelTrack(giftSection.list);
+    }
     setRightOrderBenefitsSectionItems(progressSection, data.progress, (item) => renderRightOrderBenefitProgressCard(item, {
       onOpenDetails: (progressReward) => {
         openRightOrderBenefitDetailScreen(orderId, {
@@ -13149,7 +13241,9 @@
     renderRightBenefitsMainScreen(state.rightOrders[orderIndex] || {});
   }
 
-  async function openRightBenefitsOverlay(orderId) {
+  async function openRightBenefitsOverlay(orderId, { giftsOnly = false } = {}) {
+    if (Boolean(state.benefitsModal.giftsOnly) !== giftsOnly) state.benefitsModal.mainView = null;
+    state.benefitsModal.giftsOnly = giftsOnly;
     const id = Number(orderId || 0);
     if (!(id > 0)) return;
     const index = getRightOrderIndexById(id);
@@ -13157,10 +13251,11 @@
     const order = state.rightOrders[index] || {};
     const form = order.form && typeof order.form === "object" ? order.form : {};
     const customerId = Number(await ensureRightOrderBenefitsCustomerId(id) || 0);
+    await loadRightAutoAdd({ order });
     const cachedMainView = state.benefitsModal.mainView && Number(state.benefitsModal.mainView.orderId || 0) === id
       ? state.benefitsModal.mainView
       : null;
-    const initialMode = cachedMainView
+    const initialMode = giftsOnly ? "customer" : cachedMainView
       ? normalizeRightOrderBenefitsMode(cachedMainView.mode || "customer")
       : (customerId > 0 ? "customer" : "all");
     state.benefitsModal.orderId = id;
@@ -13173,7 +13268,7 @@
       return;
     }
     renderRightBenefitsOverlay(id);
-    const prefetchSecondaryPromise = prefetchRightOrderBenefitsModes(id, {
+    const prefetchSecondaryPromise = giftsOnly ? Promise.resolve() : prefetchRightOrderBenefitsModes(id, {
       force: false,
       skipMode: initialMode,
     });
@@ -15067,7 +15162,7 @@
       const qty = Math.max(0, Number(row?.qty || 0));
       const basePrice = Number(row?.basePrice || 0);
       const variantDiff = Number(row?.variantDiff || 0);
-      return sum + ((basePrice + variantDiff) * qty);
+      return sum + ((basePrice + variantDiff + window.SharedProductDetails.getOptionPackagingPricing(row).current) * qty);
     }, 0));
     if (item.pricing && typeof item.pricing === "object") {
       item.pricing = { ...item.pricing, option_total: optionTotal };
@@ -15079,7 +15174,16 @@
       safeIndex,
       Number(item?.pricing?.base_price || 0)
     );
-    const unitBeforeDiscount = roundPrice(basePrice + ingredientDiff);
+    const product = getProductById(Number(item.product_id));
+    const marginConfig = typeof product?.pricing_config_json === 'string' ? JSON.parse(product.pricing_config_json) : product?.pricing_config_json;
+    const marginPrice = marginConfig?.mode === 'auto' && marginConfig.target_margin != null
+      ? window.SharedProductDetails.getTargetMarginPrice(item.product_id, {
+          variant_group_id: item.pricing?.variant_group?.id || item.pricing?.variant_group?.variant_group_id,
+          variant_value_index: safeIndex,
+          option_items: (item.option_items || []).map(row => ({ ...row, variant_value_index: row.variantIndex ?? row.variant_value_index })),
+          ingredients: (item.ingredients || []).map(row => ({ ...row, quantity: row.qty ?? row.quantity })),
+        }) : null;
+    const unitBeforeDiscount = roundPrice(marginPrice ?? basePrice + ingredientDiff);
     const unitDiscountAmount = calculateProductDiscountAmount(unitBeforeDiscount, item?.pricing?.discount);
     const oldBasePrice = calcSnapshotPrice(
       item.pricing && typeof item.pricing === "object"
@@ -15088,7 +15192,7 @@
       safeIndex,
       Number(item?.pricing?.old_price || 0)
     );
-    const oldFromDb = roundPrice(oldBasePrice + ingredientDiff);
+    const oldFromDb = marginPrice != null ? unitBeforeDiscount : roundPrice(oldBasePrice + ingredientDiff);
     const unitPrice = roundPrice(Math.max(0, unitBeforeDiscount - unitDiscountAmount));
     const buyXGetYRule = Number(item?.auto_add || 0) === 1 ? null : getNewOrderBuyXGetYRule(item);
     const buyXGetYApplication = calculateNewOrderBuyXGetYApplication(qty, buyXGetYRule);
@@ -15480,6 +15584,9 @@
         out.push({
           id,
           group_id: Number(groupId || 0),
+          is_packaging: row.is_packaging,
+          target_product_id: row.target_product_id,
+          packaging_items: (row.packaging_items || []).map(item => ({ ...item })),
           ingredients: Array.isArray(row.ingredients) ? row.ingredients.map(ingredient => ({ ...ingredient })) : [],
           variant_group_id: row.variant_group_id ?? null,
           label: String(row?.label || "").trim(),
@@ -15764,6 +15871,11 @@
       const localProduct = passport ? applyCatalogPassportToNewOrder(passport) : null;
       if (localProduct) return localProduct;
       if (!navigator.onLine) return null;
+      await window.CatalogRepository.ensureProducts([pid], {
+        requiredCompleteness: "order-ready", priority: true, loader: loadNewOrderCatalogPassports,
+      });
+      const loaded = window.CatalogRepository.getProductPassport(pid);
+      if (loaded) return applyCatalogPassportToNewOrder(loaded);
     }
     try {
       const json = await apiJson(`/api/public/products/${pid}`);
@@ -17066,6 +17178,9 @@
       const existing = byGroup.get(groupId) || { type: "single", items: [] };
       existing.items.push({
         id: itemId,
+        is_packaging: row.is_packaging,
+        target_product_id: row.target_product_id,
+        packaging_items: (row.packaging_items || []).map(item => ({ ...item })),
         ingredients: Array.isArray(row.ingredients) ? row.ingredients.map(ingredient => ({ ...ingredient })) : [],
         variant_group_id: row.variant_group_id ?? null,
         label: String(row?.label || "").trim(),
@@ -17525,6 +17640,7 @@
     const pid = Number(productId || 0);
     if (!(pid > 0)) return;
     const generation = ++productOverlayRequestGeneration;
+    const onBack = () => { closeProductOverlay(); opts.onBack?.(); };
     const product = await ensureProductById(pid);
     if (generation !== productOverlayRequestGeneration) return;
     if (!product) {
@@ -17556,12 +17672,12 @@
     backdrop.onclick = (e) => {
       const closeBtn = e.target.closest("[data-action='product-overlay-close']");
       if (closeBtn || e.target === backdrop) {
-        closeProductOverlay();
+        onBack();
       }
     };
     if (isNewOrderEditorSurface() && !isCheckoutScreenActive()) {
       backdrop.classList.add("is-shared-product");
-    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), onBack);
       list.replaceChildren();
       const host = document.createElement("div");
       host.className = "new-order-shared-product-host";
@@ -17579,7 +17695,8 @@
         } : null;
         await window.SharedProductDetails.mount({
           container: host, productId: pid, product: getProductById(pid), passports,
-          mode: "admin-order", initialValue, onBack: closeProductOverlay,
+          mode: "admin-order", readOnly: opts.readOnly === true, initialValue: opts.initialValue || initialValue,
+          onBack,
           isCurrent: () => generation === productOverlayRequestGeneration && host.isConnected,
           cartContext: getNewOrderSharedCartContext(mode === "edit" ? editCartItemId : 0),
           onSave: (selection) => {
@@ -17598,7 +17715,7 @@
     }
     backdrop.classList.remove("is-shared-product");
     renderProductOverlay();
-    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), closeProductOverlay);
+    openNewOrderMobileOverlayPage(backdrop, repairUtf8Mojibake(String(product.title || product.name || "Товар")), onBack);
     if (list) list.scrollTop = 0;
 
     void (async () => {
@@ -18202,6 +18319,51 @@
         .catch(error => console.warn("Client cache mutation invalidation failed:", error));
     }
     return data;
+  }
+
+  const newOrderPassportWarmIds = new Set();
+  let newOrderPassportWarmTask = null;
+  let newOrderPassportWarmScope = null;
+
+  function warmNewOrderProductPassports(products) {
+    const repository = window.CatalogRepository;
+    const scope = repository?.getScope()?.namespace;
+    if (!scope) return;
+    if (newOrderPassportWarmScope !== scope) {
+      newOrderPassportWarmIds.clear();
+      newOrderPassportWarmScope = scope;
+    }
+    for (const product of products) {
+      const id = Number(product.id);
+      if (id > 0 && !repository.isOrderReadyPassport(repository.getProductPassport(id))) newOrderPassportWarmIds.add(id);
+    }
+    if (newOrderPassportWarmTask || !newOrderPassportWarmIds.size || !navigator.onLine) return;
+    const task = (async () => {
+      while (newOrderPassportWarmIds.size && repository.getScope()?.namespace === scope) {
+        const ids = [...newOrderPassportWarmIds].slice(0, 6);
+        ids.forEach(id => newOrderPassportWarmIds.delete(id));
+        await repository.ensureProducts(ids, {
+          requiredCompleteness: "order-ready", background: true, priority: false, loader: loadNewOrderCatalogPassports,
+        });
+        if (repository.getScope()?.namespace !== scope) return;
+        for (const id of ids) {
+          const passport = repository.getProductPassport(id);
+          if (!passport) continue;
+          applyCatalogPassportToNewOrder(passport);
+          const related = [
+            ...(passport.ingredients || []).map(row => Number(row.ingredient_id)),
+            ...(passport.optionGroups || passport.options || []).flatMap(group => (group.items || []).map(row => Number(row.target_product_id))),
+          ];
+          related.forEach(targetId => {
+            if (targetId > 0 && !repository.isOrderReadyPassport(repository.getProductPassport(targetId))) newOrderPassportWarmIds.add(targetId);
+          });
+        }
+      }
+    })().catch(error => console.error("Admin product passport warmup failed:", error)).finally(() => {
+      if (newOrderPassportWarmTask === task) newOrderPassportWarmTask = null;
+      if (repository.getScope()?.namespace !== scope) warmNewOrderProductPassports([]);
+    });
+    newOrderPassportWarmTask = task;
   }
 
   function loadNewOrderCatalogPassports(ids) {
@@ -19138,7 +19300,7 @@
         const selectedItem = itemsById.get(selectedId);
         const basePrice = selectedItem ? getOptionItemBasePrice(selectedItem) : Number(s?.basePrice || 0);
         const variantDiff = Number(s?.variantDiff || 0);
-        total += (basePrice + variantDiff) * qty;
+        total += (basePrice + variantDiff + window.SharedProductDetails.getOptionPackagingPricing(s).current) * qty;
       }
     }
     return total;
@@ -19304,26 +19466,6 @@
     const rows = (Array.isArray(state.categories) ? state.categories : [])
       .filter((cat) => cat?.parent_id == null);
 
-    const checkoutScreenActive = String(state.activeCategoryId) === CHECKOUT_SCREEN_ID;
-    const checkoutRow = document.createElement("div");
-    checkoutRow.setAttribute("role", "button");
-    checkoutRow.tabIndex = 0;
-    checkoutRow.addEventListener("keydown", (event) => {
-      if (event.target !== checkoutRow || !["Enter", " "].includes(event.key)) return;
-      event.preventDefault();
-      checkoutRow.click();
-    });
-    checkoutRow.className = `stage-item ${checkoutScreenActive ? "is-active" : ""}`;
-    checkoutRow.classList.toggle("is-checkout-disabled", !state.checkoutScreenEnabled);
-    checkoutRow.setAttribute("data-category-id", CHECKOUT_SCREEN_ID);
-    checkoutRow.innerHTML = `
-      <span class="stage-icon"><i class="fas fa-desktop"></i></span>
-      <span class="stage-meta stage-text"><b>Р­РєСЂР°РЅ РѕС„РѕСЂРјР»РµРЅРёСЏ</b></span>
-      <span class="acc-spacer"></span>
-      <button class="btn btn-ghost btn-icon new-order-checkout-settings" type="button" data-action="checkout-screen-settings" aria-label="Настройки экрана оформления" title="Настройки экрана оформления"><i class="fas fa-cog"></i></button>
-    `;
-    categoriesListEl.appendChild(checkoutRow);
-
     if (!rows.length) {
       if (categoriesEmptyEl) categoriesEmptyEl.classList.add("hidden");
       return;
@@ -19474,11 +19616,26 @@
     });
   }
 
+  function isRightCartPackagingOption(item, option) {
+    return Number(option?.is_packaging) === 1 || Number(state.optionGroupDetails.get(Number(option?.group_id))?.group?.is_packaging) === 1 ||
+      window.SharedProductDetails.isPackagingOption(Number(item?.product_id), option);
+  }
+
+  function getRightCartPackagingOptions(item) {
+    return (item.option_items || []).map(option => {
+      const details = state.optionGroupDetails.get(Number(option.group_id));
+      const source = (details?.items || []).find(row => Number(row.id) === Number(option.id));
+      return { ...source, ...option, title: option.title || option.label || source?.name || source?.product_name,
+        is_packaging: isRightCartPackagingOption(item, option) };
+    });
+  }
+
   async function getNewOrderSharedPassports(ids) {
     for (let offset = 0; offset < ids.length; offset += 100) {
       await window.CatalogRepository.ensureProducts(ids.slice(offset, offset + 100), {
         requiredCompleteness: "order-ready",
         loader: loadNewOrderCatalogPassports,
+        priority: ids.length === 1,
       });
     }
     ids.forEach((id) => {
@@ -19507,6 +19664,7 @@
 
   function renderNewOrderSharedCatalog(products, changedIds = null, changedComboIds = null) {
     const list = Array.isArray(products) ? products : [];
+    warmNewOrderProductPassports(list);
     productsGridEl.classList.add("is-shared-catalog");
     productsEmptyEl?.classList.toggle("hidden", list.length > 0);
     let host = productsGridEl.querySelector("[data-shared-product-catalog]");
@@ -21228,31 +21386,10 @@
     }
 
     categoriesListEl.addEventListener("click", (e) => {
-      if (e.target.closest('[data-action="checkout-screen-settings"]')) {
-        if (!state.checkoutEditMode) settingsBtnEl?.click();
-        if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Экран оформления");
-        return;
-      }
       const btn = e.target.closest("[data-category-id]");
       if (!btn) return;
       const rawCategoryId = String(btn.getAttribute("data-category-id") || "").trim();
       if (!rawCategoryId) return;
-      if (rawCategoryId === CHECKOUT_SCREEN_ID) {
-        if (!state.checkoutScreenEnabled && !state.checkoutEditMode) return;
-        state.activeCategoryId = CHECKOUT_SCREEN_ID;
-        state.activeProductCategoryId = null;
-        if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Каталог");
-        schedulePersistBootstrapSnapshot(0);
-        void loadCheckoutProductsForSelectedCategories().then(() => {
-          const ids = [...state.checkoutCategoryProducts.values()]
-            .flatMap((products) => Array.isArray(products) ? products : [])
-            .map((product) => Number(product?.id || 0));
-          return refreshNewOrderEffectiveStockConfigs(ids);
-        });
-        renderCategories();
-        renderMainContentMode();
-        return;
-      }
       const cid = Number(rawCategoryId);
       if (!Number.isFinite(cid) || cid <= 0) return;
       if (isNewOrderEditorSurface()) window.__adminMobilePages?.openCenter("Каталог");
@@ -21376,6 +21513,7 @@
             if (rowKind === "option") {
               const optionItems = Array.isArray(item.option_items) ? item.option_items.map((x) => ({ ...x })) : [];
               if (!(optionIndex >= 0) || optionIndex >= optionItems.length) return;
+              if (isRightCartPackagingOption(item, optionItems[optionIndex])) return;
               const opt = { ...optionItems[optionIndex] };
               const groupId = Number(opt?.group_id || 0);
               const itemId = Number(opt?.id || 0);
@@ -21535,6 +21673,7 @@
           const optionItems = Array.isArray(item.option_items) ? item.option_items.map((x) => ({ ...x })) : [];
           if (optionIndex >= optionItems.length) return;
           const opt = { ...optionItems[optionIndex] };
+          if (isRightCartPackagingOption(item, opt)) return;
           const groupId = Number(opt?.group_id || 0);
           const itemId = Number(opt?.id || 0);
           const details = state.optionGroupDetails.get(groupId);
@@ -21573,6 +21712,7 @@
           if (String(item?.type || "") === "combo") return;
           const optionItems = Array.isArray(item.option_items) ? item.option_items.map((x) => ({ ...x })) : [];
           if (optionIndex >= optionItems.length) return;
+          if (isRightCartPackagingOption(item, optionItems[optionIndex])) return;
           optionItems.splice(optionIndex, 1);
           item.option_items = optionItems;
           cartItems[itemIndex] = recalculateCartItemTotals(item);
@@ -21814,6 +21954,12 @@
         const catalogBtn = e.target.closest("[data-action='right-order-catalog-open']");
         if (catalogBtn) {
           window.__adminMobilePages?.openCenter?.("Каталог");
+          return;
+        }
+
+        const giftsBtn = e.target.closest("[data-action='right-order-gifts-open'][data-order-id]");
+        if (giftsBtn) {
+          void openRightBenefitsOverlay(Number(giftsBtn.dataset.orderId), { giftsOnly: true });
           return;
         }
 
@@ -23471,12 +23617,6 @@
 
       if (data.autoAdd) await loadRightAutoAdd({ force: true, data: data.autoAdd });
 
-      const blocks = Array.isArray(data.checkout?.blocks) ? data.checkout.blocks : [];
-      const normalizedBlocks = blocks.map(normalizeBlock).filter(Boolean);
-      state.checkoutSavedDraft = { blocks: normalizedBlocks, enabled: data.checkout?.enabled !== false };
-      state.checkoutScreenEnabled = state.checkoutSavedDraft.enabled;
-      state.checkoutDraftReady = true;
-      writeDraftCache(normalizedBlocks, state.checkoutScreenEnabled);
       schedulePersistBootstrapSnapshot(0);
       return true;
     } catch {
@@ -23509,20 +23649,15 @@
   }
 
   function ensureValidActiveCategory() {
-    if (isCheckoutScreenActive() && (state.checkoutScreenEnabled || state.checkoutEditMode)) return;
-    if (!state.checkoutScreenEnabled && (isCheckoutScreenActive() || !getCategoryById(state.activeCategoryId))) {
-      const first = state.categories.find(category => category.parent_id == null);
-      state.activeCategoryId = first ? Number(first.id) : null;
-      state.activeProductCategoryId = state.activeCategoryId;
-      return;
-    }
-    const activeId = Number(state.activeCategoryId || 0);
-    const activeCategory = getCategoryById(activeId);
+    let activeCategory = getCategoryById(Number(state.activeCategoryId || 0));
     if (!activeCategory) {
-      state.activeCategoryId = CHECKOUT_SCREEN_ID;
-      state.activeProductCategoryId = null;
-      return;
+      activeCategory = getCategoryById(Number(state.activeProductCategoryId || 0))
+        || state.categories.find(category => category.parent_id == null);
+      state.activeCategoryId = activeCategory ? Number(activeCategory.id) : null;
+      state.activeProductCategoryId = state.activeCategoryId;
+      if (!activeCategory) return;
     }
+    const activeId = Number(activeCategory.id);
     const parentId = Number(activeCategory.parent_id || 0);
     if (parentId > 0) {
       state.activeCategoryId = parentId;
@@ -23543,7 +23678,7 @@
       .filter((id) => Number.isFinite(id) && id > 0))];
   }
 
-  async function renderActiveCategoryContent() {
+  async function renderActiveCategoryContent({ preferMemory = false } = {}) {
     ensureValidActiveCategory();
     if (String(state.activeCategoryId) === CHECKOUT_SCREEN_ID) {
       await loadCheckoutProductsForSelectedCategories();
@@ -23552,7 +23687,18 @@
         .map((product) => Number(product?.id || 0));
       void refreshNewOrderEffectiveStockConfigs(checkoutIds);
     } else if (state.activeCategoryId) {
-      await loadProductsForCategory(getActiveProductCategoryId(), { preferCache: true });
+      const categoryId = getActiveProductCategoryId();
+      const ids = getProductCategoryLoadIds(categoryId);
+      const cached = preferMemory && ids.every(id => state.categoryProductsCache.has(Number(id)))
+        ? (ids.length > 1 ? buildCombinedCategoryPayload(ids) : state.categoryProductsCache.get(categoryId))
+        : null;
+      if (cached) {
+        state.currentProducts = cached.currentProducts || [];
+        seedRightOrderProductsByIdCache(cached.activeOnly || []);
+        renderProducts(state.currentProducts);
+      } else {
+        await loadProductsForCategory(categoryId, { preferCache: true });
+      }
       void refreshNewOrderEffectiveStockConfigs(
         state.currentProducts.map((product) => Number(product?.id || 0))
       );
@@ -23588,7 +23734,6 @@
     const categoriesChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "categories");
     const productsChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "products");
     const inventoryChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "inventory");
-    const checkoutChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "checkout");
     const refsChanged = forceFull || isManifestDomainChanged(prevManifest, nextManifest, "refs");
 
     if (categoriesChanged || !state.categories.length || !state.productCategories.length) {
@@ -23607,15 +23752,6 @@
       || !state.autoAddLoaded
     ) {
       await loadRefsFromApi();
-    }
-
-    if (checkoutChanged || !state.checkoutDraftReady || !Array.isArray(state.checkoutSavedDraft?.blocks)) {
-      try {
-        await loadCheckoutDraftFromApi(checkoutChanged || forceFull || !state.checkoutDraftReady);
-      } catch {
-        state.checkoutSavedDraft = { blocks: [] };
-        state.checkoutDraftReady = false;
-      }
     }
 
     if (productsChanged || !state.categoryProductsCache.size) {
@@ -23969,6 +24105,7 @@
       auto_add: autoAdd,
       auto_add_group_id: autoAddGroupId,
       auto_add_rule_version: Number(orderItem?.auto_add_rule_version || 0),
+      auto_add_customer_qty: orderItem?.auto_add_customer_qty == null ? null : Number(orderItem.auto_add_customer_qty),
       auto_add_free_qty: Number(orderItem?.auto_add_free_qty || 0),
       is_gift_reward: Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0,
       gift_reward_id: Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null,
@@ -24531,6 +24668,7 @@
       ...draft.form,
       phone: normalizedPhone.length ? `+${normalizedPhone}` : "+7",
       clientId: Number(src?.customer_id || 0) || null,
+      guestOrigin: Boolean(src?.guest_session_audit_id),
       name: String(src?.customer_name || "").trim(),
       pickupMethod: String(src?.method_code || draft.form.pickupMethod || "delivery").trim() || "delivery",
       address: String(src?.address || "").trim(),
@@ -24605,7 +24743,7 @@
     }
 
     return {
-      activeCategoryId: CHECKOUT_SCREEN_ID,
+      activeCategoryId: Number(state.activeCategoryId) > 0 ? Number(state.activeCategoryId) : Number(state.categories.find(row => row.parent_id == null)?.id) || null,
       quantities: {},
       selectedVariants: {},
       ingredientStateByProduct: {},
@@ -24912,7 +25050,7 @@
     renderCategories();
     renderRightOrderTabs();
     if (typeof opts?.onApplied === "function") opts.onApplied();
-    if (!opts.deferCatalog) await renderActiveCategoryContent();
+    if (!opts.deferCatalog) await renderActiveCategoryContent({ preferMemory: true });
     if (isCurrent && !isCurrent()) return false;
     requestAnimationFrame(() => {
       if (isCurrent && !isCurrent()) return;
@@ -24930,7 +25068,7 @@
   function buildBlankDraftSession(opts = {}) {
     const draft = buildRightOrderDraft(Number(opts?.id || 0), String(opts?.title || "").trim());
     return {
-      activeCategoryId: CHECKOUT_SCREEN_ID,
+      activeCategoryId: Number(state.activeCategoryId) > 0 ? Number(state.activeCategoryId) : Number(state.categories.find(row => row.parent_id == null)?.id) || null,
       quantities: {},
       selectedVariants: {},
       ingredientStateByProduct: {},
@@ -25009,7 +25147,7 @@
   };
 
   function renderStartupShell() {
-    if (!state.activeCategoryId && state.checkoutScreenEnabled) state.activeCategoryId = CHECKOUT_SCREEN_ID;
+    ensureValidActiveCategory();
     renderCategories();
     renderMainContentMode();
     if (!state.rightActiveOrderId) openRightNewOrderTab();
@@ -25034,18 +25172,18 @@
 
   async function refreshNewOrderData({ hydrated, bootstrapped, cachedManifest, repositoryReady }) {
     if (repositoryReady && window.CatalogRepository) {
-      if (navigator.onLine && !bootstrapped) {
-        const refreshed = await loadNewOrderBootstrapFromApi();
-        if (!refreshed) throw new Error('NEW_ORDER_BOOTSTRAP_REFRESH_FAILED');
-        renderRightOrderTabs();
-      }
       const inventoryPromise = startupInventoryPromise || (navigator.onLine && !state.inventoryReady
         ? refreshNewOrderInventory()
         : null);
       ensureValidActiveCategory();
       renderCategories();
-      await renderActiveCategoryContent();
+      await renderActiveCategoryContent({ preferMemory: true });
       reconcileDurableDraftInventory();
+      if (navigator.onLine && !bootstrapped) {
+        const refreshed = await loadNewOrderBootstrapFromApi();
+        if (!refreshed) throw new Error('NEW_ORDER_BOOTSTRAP_REFRESH_FAILED');
+        renderRightOrderTabs();
+      }
       await window.CatalogRepository.startSync();
       if (inventoryPromise) {
         void inventoryPromise.then(() => reconcileDurableDraftInventory());
@@ -25065,17 +25203,11 @@
       if (!hydrated && !bootstrapped) {
         await loadRefsFromApi();
         await loadCategoriesFromApi();
-        try {
-          await loadCheckoutDraftFromApi();
-        } catch {
-          state.checkoutSavedDraft = { blocks: [] };
-          state.checkoutDraftReady = false;
-        }
         await preloadAllCategoryProducts(getPreloadCategoryIds());
       }
     } else {
       const manifestChanged = !areManifestTokensEqual(prevManifest, nextManifest);
-      if ((!hydrated && !bootstrapped) || manifestChanged || !state.checkoutDraftReady) {
+      if ((!hydrated && !bootstrapped) || manifestChanged) {
         await syncDataByManifest(nextManifest, prevManifest, !hydrated && !bootstrapped);
       }
     }
@@ -25091,7 +25223,7 @@
 
     ensureValidActiveCategory();
     renderCategories();
-    await renderActiveCategoryContent();
+    await renderActiveCategoryContent({ preferMemory: true });
     schedulePersistBootstrapSnapshot(0);
     scheduleNewOrderIdleWarmup();
   }
@@ -25147,7 +25279,7 @@
       }
 
       const roundingPromise = ensureTenantPriceRoundingSettings();
-      const localEditorReady = state.categories.length > 0 && state.checkoutDraftReady
+      const localEditorReady = state.categories.length > 0
         && state.rightDeliveryTypes.length > 0 && state.rightPaymentTypes.length > 0 && state.rightTimeOptions.length > 0
         && state.unitConversions.length > 0 && state.tenantRoundingLoaded
         && (Boolean(window.CatalogRepository?.getAllProducts().length) || [...state.categoryProductsCache.values()].some(payload => payload?.source?.length));
@@ -25158,7 +25290,6 @@
       const needsBootstrap = (
         !state.categories.length
         || !hasLocalProducts
-        || !state.checkoutDraftReady
         || !state.rightDeliveryTypes.length
         || !state.rightPaymentTypes.length
         || !state.rightTimeOptions.length

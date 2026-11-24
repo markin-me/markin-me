@@ -1,6 +1,20 @@
 "use strict";
 const { checkStockAvailabilityForOrderItems } = require('./orderStock');
 
+const lockedOptionItemsSql = `
+  SELECT g.id AS group_id, oi.id AS option_item_id, g.is_packaging,
+         oi.qty_min, oi.default_variant_group_id, oi.default_variant_value_index
+  FROM prod_option_assignments a
+  JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id AND g.is_active=1
+  JOIN prod_option_items oi ON oi.tenant_id=g.tenant_id AND oi.group_id=g.id
+  LEFT JOIN prod_option_item_product_settings s ON s.tenant_id=oi.tenant_id AND s.group_id=oi.group_id AND s.option_item_id=oi.id AND s.product_id=a.assign_id
+  WHERE a.tenant_id=? AND a.assign_id=? AND a.assign_type='product' AND a.is_active=1
+  AND ((g.is_packaging=0 AND s.is_locked=1) OR (g.is_packaging=1 AND oi.is_active=1
+    AND a.id=(SELECT newer.id FROM prod_option_assignments newer
+      JOIN prod_option_groups packaging ON packaging.tenant_id=newer.tenant_id AND packaging.id=newer.group_id AND packaging.is_packaging=1 AND packaging.is_active=1
+      WHERE newer.tenant_id=a.tenant_id AND newer.assign_type='product' AND newer.assign_id=a.assign_id AND newer.is_active=1
+      ORDER BY newer.created_at DESC, newer.id DESC LIMIT 1)))`;
+
 function applyProductPromoPricing(product, current, original, roundPrice = value => Math.round(value * 100) / 100) {
   const amount = Math.max(0, Number(current || 0));
   const ordinary = Math.max(amount, Number(original || 0));
@@ -17,19 +31,27 @@ function usesProductPriceSource(product, source) {
   return config?.mode !== "auto" || !Array.isArray(config.sources) || config.sources.includes(source);
 }
 
-async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,roundPrice,variantPrice,conversion,availability}) {
+async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,roundPrice,variantPrice,conversion,availability,validateAvailability=true}) {
   const prices=new Map(),products=new Map(),giftQuantities=new Map();
+  const packagedIds = new Set();
   const fail=()=>{const error=new Error("BAD_ITEMS");error.code="BAD_ITEMS";error.status=422;throw error;};
   const quantity=value=>{const n=Number(value ?? 1);if(!Number.isInteger(n)||n<1||n>10000)fail();return n;};
-  async function product(id) {
+  async function product(id, allowHidden = false) {
     id=Number(id);if(!Number.isInteger(id)||id<1)fail();
-    if(products.has(id))return products.get(id);
-    const [rows]=await db.query("SELECT * FROM prod_products WHERE tenant_id=? AND id=? AND is_active=1 AND site_visibility=1",[tenantId,id]);
-    if(!rows.length)fail();products.set(id,rows[0]);return rows[0];
+    if(products.has(id)) {
+      const cached = products.get(id);
+      if (!allowHidden && Number(cached.site_visibility) !== 1) fail();
+      return cached;
+    }
+    const [rows]=await db.query("SELECT * FROM prod_products WHERE tenant_id=? AND id=? AND is_active=1",[tenantId,id]);
+    if(!rows.length || (!allowHidden && Number(rows[0].site_visibility) !== 1))fail();products.set(id,rows[0]);return rows[0];
   }
-  async function configuredPrice(id,selection,depth=0) {
-    if(depth>4)fail();const p=await product(id);
-    let price=Number(p.price || 0), originalPrice=Math.max(Number(p.price || 0), Number(p.old_price || 0));
+  async function configuredPrice(id,selection,depth=0,includePackaging=true,allowHidden=false,costing=false,respectSources=false) {
+    if(depth>4)fail();const p=await product(id,allowHidden);
+    if (includePackaging) packagedIds.add(Number(id));
+    let price=Number(costing ? (!respectSources || usesProductPriceSource(p, "composition") ? p.cost_price : 0) : p.price || 0);
+    let originalPrice=costing ? price : Math.max(Number(p.price || 0), Number(p.old_price || 0));
+    let variantAdjustment = 1;
     if(selection.variant_group_id!=null && Number(selection.variant_group_id)>0) {
       const [groups]=await db.query(`SELECT vg.*,va.default_value_index FROM prod_variant_assignments va
         JOIN prod_variant_groups vg ON vg.tenant_id=va.tenant_id AND vg.id=va.variant_group_id
@@ -40,14 +62,24 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       const [excluded]=await db.query("SELECT value_index FROM prod_variant_value_exclusions WHERE tenant_id=? AND product_id=? AND variant_group_id=? AND value_index=?",[tenantId,id,group.id,index]);
       if(excluded.length)fail();
       const [tiers]=await db.query("SELECT * FROM prod_variant_discount_tiers WHERE tenant_id=? AND variant_group_id=? ORDER BY sort_order",[tenantId,group.id]);
-      if (usesProductPriceSource(p, "variants")) {
-        price=await variantPrice(p,{...group,values,default_value_index:index,discount_tiers:tiers},conversion,roundPrice);
+      if (!costing && usesProductPriceSource(p, "variants")) {
+        const match = String(values[index]).replace(',', '.').match(/-?\d+(?:\.\d+)?/);
+        const factor = await conversion(Number(group.unit_id), Number(p.base_unit_id || p.unit_id || group.unit_id));
+        const quantityInBase = match && factor != null ? Number(match[0]) * Number(factor) : null;
+        if (quantityInBase > 0 && Math.abs(quantityInBase - Number(p.base_qty || 1)) > 0.000001) {
+          const tier = tiers.find(row => Number(row.sort_order) === index);
+          variantAdjustment = 1 - Number(tier?.discount_percent || 0) / 100;
+        }
+      }
+      if ((!costing || respectSources) ? usesProductPriceSource(p, "variants") : true) {
+        const variantProduct = costing ? { ...p, price } : p;
+        price=await variantPrice(variantProduct,{...group,values,default_value_index:index,discount_tiers:costing?[]:tiers},conversion,roundPrice);
         originalPrice=await variantPrice({...p,price:originalPrice},{...group,values,default_value_index:index,discount_tiers:[]},conversion,roundPrice);
       }
     }
     const requested=selection.ingredients_display || selection.ingredients;
     if(Array.isArray(requested) && requested.length) {
-      const [rows]=await db.query(`SELECT i.*,p.price AS ingredient_price,p.old_price AS ingredient_old_price,p.base_qty AS ingredient_base_qty,p.base_unit_id AS ingredient_base_unit_id
+      const [rows]=await db.query(`SELECT i.*,p.price AS ingredient_price,p.cost_price AS ingredient_cost_price,p.old_price AS ingredient_old_price,p.base_qty AS ingredient_base_qty,p.base_unit_id AS ingredient_base_unit_id
         FROM prod_product_ingredients i JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
         WHERE i.tenant_id=? AND i.product_id=?`,[tenantId,id]);
       const selected=new Map();for(const entry of requested){const key=Number(entry.ingredient_id || entry.product_id);if(selected.has(key))fail();selected.set(key,Number(entry.qty ?? entry.quantity));}
@@ -57,8 +89,8 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         if(!Number.isFinite(qty)||qty<0|| (Number(row.is_variable)!==1 && qty!==base)
           || (row.quantity_min!=null && qty<Number(row.quantity_min)) || (row.quantity_max!=null && qty>Number(row.quantity_max)))fail();
         const factor=await conversion(row.unit_id,row.ingredient_base_unit_id);if(factor==null && qty!==base)fail();
-        const perUnit=row.price_override!=null?Number(row.price_override):Number(row.ingredient_price || 0)/Number(row.ingredient_base_qty || 1);
-        if (usesProductPriceSource(p, "composition")) price+=perUnit*(qty-base)*(factor ?? 1);
+        const perUnit=costing?Number(row.ingredient_cost_price || 0)/Number(row.ingredient_base_qty || 1):row.price_override!=null?Number(row.price_override):Number(row.ingredient_price || 0)/Number(row.ingredient_base_qty || 1);
+        if ((costing && !respectSources) || usesProductPriceSource(p, "composition")) price+=perUnit*(qty-base)*(factor ?? 1);
         const originalPerUnit=row.price_override!=null?Number(row.price_override):Math.max(Number(row.ingredient_price || 0),Number(row.ingredient_old_price || 0))/Number(row.ingredient_base_qty || 1);
         if (usesProductPriceSource(p, "composition")) originalPrice+=originalPerUnit*(qty-base)*(factor ?? 1);
       }
@@ -66,17 +98,26 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
     const optionSelections=Array.isArray(selection.option_items)?selection.option_items:[];
     const options=new Map();for(const value of optionSelections){const key=Number(value.id);if(options.has(key))fail();options.set(key,value);}
     for(const id of selection.option_item_ids || [])if(!options.has(Number(id)))options.set(Number(id),{id:Number(id)});
-    const blocks=typeof p.blocks_config_json==='string'?JSON.parse(p.blocks_config_json):p.blocks_config_json;
-    const [lockedRows] = blocks?.options === false || blocks?.options === 0 ? [[]] : await db.query(`SELECT s.group_id,s.option_item_id FROM prod_option_item_product_settings s
-      JOIN prod_option_assignments a ON a.tenant_id=s.tenant_id AND a.group_id=s.group_id
-        AND a.assign_type='product' AND a.assign_id=s.product_id AND a.is_active=1
-      JOIN prod_option_groups g ON g.tenant_id=s.tenant_id AND g.id=s.group_id AND g.is_active=1
-      WHERE s.tenant_id=? AND s.product_id=? AND s.is_locked=1`, [tenantId,id]);
-    const lockedIds = new Set(lockedRows.map(row => Number(row.option_item_id)));
-    if (lockedRows.some(row => !options.has(Number(row.option_item_id)))) fail();
+    const [lockedRows] = await db.query(lockedOptionItemsSql, [tenantId,id]);
+    const effectiveLockedRows = lockedRows.filter(row => includePackaging || Number(row.is_packaging) !== 1);
+    for (const row of lockedRows) {
+      if (Number(row.is_packaging) !== 1) continue;
+      const optionId = Number(row.option_item_id);
+      if (!includePackaging) options.delete(optionId);
+      else if (!options.has(optionId)) options.set(optionId, {
+        id: optionId,
+        qty: Math.max(1, Number(row.qty_min || 1)),
+        variant_group_id: row.default_variant_group_id,
+        variant_value_index: row.default_variant_value_index,
+      });
+    }
+    const lockedIds = new Set(effectiveLockedRows.map(row => Number(row.option_item_id)));
+    const lockedGroupIds = new Set(effectiveLockedRows.map(row => Number(row.group_id)));
+    if (effectiveLockedRows.some(row => !options.has(Number(row.option_item_id)))) fail();
     const groupCounts=new Map();
     for(const [optionId,value] of options){
-      const [rows]=await db.query(`SELECT oi.*, COALESCE(s.configuration_json, oi.configuration_json) AS configuration_json FROM prod_option_items oi
+      const [rows]=await db.query(`SELECT oi.*, og.is_packaging, COALESCE(oa.is_component, og.is_component_default) AS is_component_default,
+        CASE WHEN og.is_packaging=1 THEN oi.configuration_json ELSE COALESCE(s.configuration_json, oi.configuration_json) END AS configuration_json FROM prod_option_items oi
         JOIN prod_option_groups og ON og.tenant_id=oi.tenant_id AND og.id=oi.group_id AND og.is_active=1
         JOIN prod_option_assignments oa ON oa.tenant_id=og.tenant_id AND oa.group_id=og.id AND oa.is_active=1
         LEFT JOIN prod_option_item_product_settings s ON s.tenant_id=oi.tenant_id AND s.option_item_id=oi.id AND s.product_id=oa.assign_id AND s.group_id=oi.group_id
@@ -84,7 +125,10 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       if(!rows.length)fail();const option=rows[0];let optionPrice=Number(option.price_value || 0), originalOptionPrice=optionPrice;
       if (!lockedIds.has(optionId)) groupCounts.set(Number(option.group_id),(groupCounts.get(Number(option.group_id)) || 0)+1);
       const [excluded]=await db.query("SELECT id FROM prod_option_item_exclusions WHERE tenant_id=? AND product_id=? AND group_id=? AND option_item_id=? LIMIT 1",[tenantId,id,option.group_id,optionId]);
-      if(excluded.length)fail();
+      if(excluded.length && !Number(option.is_packaging))fail();
+      if (Number(option.is_packaging) && option.default_variant_group_id != null
+          && (Number(value.variant_group_id) !== Number(option.default_variant_group_id)
+            || Number(value.variant_value_index ?? -1) !== Number(option.default_variant_value_index))) fail();
       const optionQty=quantity(value.qty ?? value.quantity);
       if (lockedIds.has(optionId) && optionQty !== Math.max(1, Number(option.qty_min || 1))) fail();
       if(optionQty<Number(option.qty_min || 0) || optionQty>Number(option.qty_max))fail();
@@ -95,34 +139,49 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         if(!assigned.length)fail();
       }
       if(targetId){
-        const target=await product(targetId);
+        const target=await product(targetId, Number(option.is_packaging) === 1);
         const configuration = typeof option.configuration_json === 'string' ? JSON.parse(option.configuration_json) : option.configuration_json;
         const selectedPricing=await configuredPrice(target.id, configuration ? { ...value,
           variant_group_id: value.variant_group_id ?? configuration.variant_group_id,
           variant_value_index: value.variant_value_index ?? configuration.variant_value_index,
           ingredients: configuration.ingredients, ingredients_display: configuration.ingredients,
           option_items: configuration.option_items || value.option_items,
-          option_item_ids: configuration.option_item_ids || value.option_item_ids } : value,depth+1);
+          option_item_ids: configuration.option_item_ids || value.option_item_ids } : value, depth+1,
+          Number(option.is_packaging) !== 1 && Number(option.is_component_default) !== 1, Number(option.is_packaging) === 1, costing);
         const selectedPrice=selectedPricing.price;
-        if(option.price_mode==='from_target')optionPrice=selectedPrice;
+        if(costing)optionPrice=selectedPrice;
+        else if(option.price_mode==='from_target')optionPrice=selectedPrice;
         else if(option.price_mode==='delta')optionPrice=selectedPrice+Number(option.price_value || 0);
         else if(option.price_mode==='fixed')optionPrice+=selectedPrice-Number(target.price || 0);
         else fail();
         originalOptionPrice=option.price_mode==='fixed'?Math.max(optionPrice,Number(option.price_value || 0)):selectedPricing.originalPrice+(option.price_mode==='delta'?Number(option.price_value || 0):0);
       } else if(option.price_mode!=='fixed')fail();
-      if (usesProductPriceSource(p, "options")) {
+      else if(costing)optionPrice=0;
+      if ((costing && !respectSources) || usesProductPriceSource(p, "options")) {
         price+=optionPrice*optionQty;
         originalPrice+=Math.max(optionPrice,originalOptionPrice)*optionQty;
       }
     }
-    if(blocks?.options || options.size) {
+    {
       const [groups]=await db.query(`SELECT g.id,g.is_required,COALESCE(a.min_select,g.min_select) AS minimum,
         COALESCE(a.max_select,g.max_select) AS maximum,COALESCE(a.selection_type,g.selection_type) AS selection_type
         FROM prod_option_assignments a JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id AND g.is_active=1
-        WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.is_active=1`,[tenantId,id]);
+        WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.is_active=1 AND g.is_packaging=0`,[tenantId,id]);
       for(const group of groups){const count=groupCounts.get(Number(group.id)) || 0;
-        const minimum=Math.max(Number(group.minimum || 0),Number(group.is_required)===1?1:0);
+        const minimum=Math.max(Number(group.minimum || 0),Number(group.is_required)===1 && !lockedGroupIds.has(Number(group.id))?1:0);
         if(count<minimum || (group.selection_type==='single' && count>1) || (group.maximum!=null && count>Number(group.maximum)))fail();}
+    }
+    if(costing) {
+      if(!Number.isFinite(price) || price < 0)fail();
+      return {price,originalPrice:price};
+    }
+    const config = typeof p.pricing_config_json === 'string' ? JSON.parse(p.pricing_config_json) : p.pricing_config_json;
+    if(config?.mode === 'auto' && config.target_margin != null) {
+      const margin = Number(config.target_margin);
+      if(!Number.isFinite(margin) || margin >= 100)fail();
+      const cost = await configuredPrice(id,selection,depth,includePackaging,allowHidden,true,true);
+      price = cost.price / (1 - margin / 100) * variantAdjustment;
+      originalPrice = price;
     }
     if(!Number.isFinite(price)||price<0||!Number.isFinite(originalPrice))fail();return {price:applyProductPromoPricing(p,price,originalPrice,roundPrice),originalPrice:roundPrice(Math.max(price,originalPrice))};
   }
@@ -144,7 +203,8 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
     } else {
       const autoGift = Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1;
       if (autoGift) await product(item.product_id);
-      let unitPrice=autoGift ? 0 : (await configuredPrice(item.product_id,item)).price,gift=false;
+      const configured = autoGift ? null : await configuredPrice(item.product_id,item);
+      let unitPrice=autoGift ? 0 : configured.price,gift=false;
       if(Number(item.is_gift_reward)===1){
         const [rows]=await db.query("SELECT reward_payload_json FROM mkt_discount_rewards WHERE tenant_id=? AND customer_id=? AND id=? AND reward_type='gift' AND status='available'",[tenantId,customerId,item.gift_reward_id]);
         if(!rows.length)fail();const payload=typeof rows[0].reward_payload_json==='string'?JSON.parse(rows[0].reward_payload_json || '{}'):rows[0].reward_payload_json || {};
@@ -154,13 +214,15 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         giftQuantities.set(giftKey,giftQty);
         gift=true;unitPrice=0;
       }
-      prices.set(item,{unitPrice,lineTotal:roundPrice(unitPrice*qty),gift});
+      prices.set(item,{unitPrice,originalPrice:gift ? 0 : configured?.originalPrice ?? 0,lineTotal:roundPrice(unitPrice*qty),gift});
     }
   }
-  const available=await availability(tenantId,storeId,[...products.keys()]);
+  if (!validateAvailability) return prices;
+  const available = await availability(tenantId, storeId, [...packagedIds]);
+  const unpackaged = await availability(tenantId, storeId, [...products.keys()].filter(id => !packagedIds.has(id)), false);
   const configuredGiftOnly = new Set(items.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1)
     .map(item => Number(item.product_id)).filter(id => !items.some(item => Number(item.product_id) === id && Number(item.auto_add) !== 1)));
-  if([...products.keys()].some(id=>!configuredGiftOnly.has(id) && available.get(id)!==true)){const error=new Error("OUT_OF_STOCK");error.code="OUT_OF_STOCK";error.status=409;throw error;}
+  if([...products.keys()].some(id=>!configuredGiftOnly.has(id) && (available.get(id) ?? unpackaged.get(id))!==true)){const error=new Error("OUT_OF_STOCK");error.code="OUT_OF_STOCK";error.status=409;throw error;}
   return prices;
 }
 function autoAddDate(group, { timezone = 0, scheduledAt = null, createdAt = null } = {}) {
@@ -372,29 +434,31 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
   if (configuration.option_items != null) {
     if (!Array.isArray(configuration.option_items) || configuration.option_items.length > 100) fail();
     result.option_items = [];
-    const [lockedRows] = await conn.query(`SELECT s.group_id,s.option_item_id FROM prod_option_item_product_settings s
-      JOIN prod_option_assignments a ON a.tenant_id=s.tenant_id AND a.group_id=s.group_id
-        AND a.assign_type='product' AND a.assign_id=s.product_id AND a.is_active=1
-      JOIN prod_option_groups g ON g.tenant_id=s.tenant_id AND g.id=s.group_id AND g.is_active=1
-      WHERE s.tenant_id=? AND s.product_id=? AND s.is_locked=1`, [tenantId,productId]);
+    const [lockedRows] = await conn.query(lockedOptionItemsSql, [tenantId,productId]);
     const lockedIds = new Set(lockedRows.map(row => Number(row.option_item_id)));
+    const lockedGroupIds = new Set(lockedRows.map(row => Number(row.group_id)));
     const selectedIds = new Set(), counts = new Map();
     for (const value of configuration.option_items) {
       const id = Number(value.id), qty = Number(value.qty ?? value.quantity ?? 1);
       if (!Number.isSafeInteger(id) || selectedIds.has(id) || !Number.isSafeInteger(qty) || qty < 1) fail();
       selectedIds.add(id);
-      const [options] = await conn.query(`SELECT oi.*,COALESCE(s.configuration_json,oi.configuration_json) AS configuration_json,p.name AS product_name FROM prod_option_items oi
+      const [options] = await conn.query(`SELECT oi.*,g.is_packaging,
+        CASE WHEN g.is_packaging=1 THEN oi.configuration_json ELSE COALESCE(s.configuration_json,oi.configuration_json) END AS configuration_json,
+        p.name AS product_name FROM prod_option_items oi
         JOIN prod_option_groups g ON g.tenant_id=oi.tenant_id AND g.id=oi.group_id AND g.is_active=1
         JOIN prod_option_assignments a ON a.tenant_id=g.tenant_id AND a.group_id=g.id AND a.is_active=1
         JOIN prod_products p ON p.tenant_id=oi.tenant_id AND p.id=oi.target_product_id AND p.is_active=1
         LEFT JOIN prod_option_item_product_settings s ON s.tenant_id=oi.tenant_id AND s.option_item_id=oi.id AND s.product_id=a.assign_id AND s.group_id=oi.group_id
         WHERE oi.tenant_id=? AND oi.id=? AND oi.is_active=1 AND oi.target_type='product'
           AND a.assign_type='product' AND a.assign_id=?
-          AND NOT EXISTS (SELECT 1 FROM prod_option_item_exclusions e WHERE e.tenant_id=oi.tenant_id
-            AND e.product_id=? AND e.group_id=oi.group_id AND e.option_item_id=oi.id)`, [tenantId, id, productId, productId]);
+          AND (g.is_packaging=1 OR NOT EXISTS (SELECT 1 FROM prod_option_item_exclusions e WHERE e.tenant_id=oi.tenant_id
+            AND e.product_id=? AND e.group_id=oi.group_id AND e.option_item_id=oi.id))`, [tenantId, id, productId, productId]);
       const option = options[0];
       if (!option || qty < Number(option.qty_min ?? 1) || qty > Number(option.qty_max ?? 1)) fail();
       if (lockedIds.has(id) && qty !== Math.max(1, Number(option.qty_min || 1))) fail();
+      if (Number(option.is_packaging) && option.default_variant_group_id != null
+          && ((value.variant_group_id != null && Number(value.variant_group_id) !== Number(option.default_variant_group_id))
+            || (value.variant_value_index != null && Number(value.variant_value_index) !== Number(option.default_variant_value_index)))) fail();
       const fixed = typeof option.configuration_json === 'string' ? JSON.parse(option.configuration_json) : option.configuration_json;
       const selected = await normalizeProductConfiguration(conn, tenantId, Number(option.target_product_id), {
         variant_group_id: value.variant_group_id ?? fixed?.variant_group_id ?? option.default_variant_group_id ?? null,
@@ -410,11 +474,11 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
     const [groups] = await conn.query(`SELECT g.id,g.is_required,COALESCE(a.min_select,g.min_select) AS minimum,
       COALESCE(a.max_select,g.max_select) AS maximum,COALESCE(a.selection_type,g.selection_type) AS selection_type
       FROM prod_option_assignments a JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id AND g.is_active=1
-      WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.is_active=1`, [tenantId, productId]);
-    if (lockedRows.some(row => !selectedIds.has(Number(row.option_item_id)))) fail();
+      WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.is_active=1 AND g.is_packaging=0`, [tenantId, productId]);
+    if (lockedRows.some(row => Number(row.is_packaging) !== 1 && !selectedIds.has(Number(row.option_item_id)))) fail();
     for (const group of groups) {
       const count = counts.get(Number(group.id)) || 0;
-      if (count < Math.max(Number(group.minimum || 0), Number(group.is_required) === 1 ? 1 : 0)
+      if (count < Math.max(Number(group.minimum || 0), Number(group.is_required) === 1 && !lockedGroupIds.has(Number(group.id)) ? 1 : 0)
         || (group.selection_type === 'single' && count > 1) || (group.maximum != null && count > Number(group.maximum))) fail();
     }
     result.option_item_ids = result.option_items.map(value => value.id);

@@ -14,6 +14,7 @@
   const SSE_RECONNECT_MAX_MS = 30000;
   const COMPLETENESS_RANK = Object.freeze({ summary: 1, "order-ready": 2, "editor-ready": 3 });
   const productsById = new Map();
+  const editorPriceSnapshots = new Map();
   const productIdsByCategoryId = new Map();
   const categoriesById = new Map();
   const passportsByProductId = new Map();
@@ -1511,12 +1512,14 @@
       const passport = passportsByProductId.get(id);
       return !(requiredEditorReady ? isEditorReadyPassport(passport) : isOrderReadyPassport(passport));
     });
-    const pendingIds = missing.filter((id) => pendingByProductId.has(id) && options.force !== true);
+    const bypassPending = id => priority && requested.length === 1 &&
+      (pendingByProductId.get(id)?.background === true || Number(pendingByProductId.get(id)?.productCount) > 1);
+    const pendingIds = missing.filter((id) => pendingByProductId.has(id) && options.force !== true && !bypassPending(id));
     const waits = pendingIds.map((id) => pendingByProductId.get(id).promise);
     const upgradeAfterWait = requiredOrderReady
       ? pendingIds.filter((id) => pendingByProductId.get(id).requiredCompleteness !== (requiredEditorReady ? "editor-ready" : "order-ready"))
       : [];
-    const fresh = missing.filter((id) => options.force === true || !pendingByProductId.has(id));
+    const fresh = missing.filter((id) => options.force === true || !pendingByProductId.has(id) || bypassPending(id));
     const loader = typeof options.loader === "function" ? options.loader : configuredLoader;
     if (fresh.length && typeof loader === "function") {
       const requestMutationVersions = new Map(fresh.map((id) => [id, mutationVersions.get(id) || 0]));
@@ -1528,6 +1531,7 @@
             loaderRows(passportPayload, fresh).forEach((rawPassport) => {
               const id = normalizeId(rawPassport?.product?.id ?? rawPassport?.product?.product_id);
               if (!id) return;
+              if (pendingByProductId.get(id)?.promise !== request) return;
               let passport = rawPassport;
               if ((mutationVersions.get(id) || 0) !== (requestMutationVersions.get(id) || 0)) {
                 const currentProduct = productsById.get(id);
@@ -1576,6 +1580,8 @@
       });
       fresh.forEach((id) => pendingByProductId.set(id, {
         promise: request,
+        background: options.background === true,
+        productCount: fresh.length,
         requiredCompleteness: requiredEditorReady ? "editor-ready" : (requiredOrderReady ? "order-ready" : "summary"),
       }));
       waits.push(request);
@@ -1934,9 +1940,15 @@
       const deleteCombos = [];
       const deleteComboBlocks = [];
       const inventoryChanges = [];
+      const optionGroupChanges = [];
+      let allOptionGroupsChanged = fullRecovery;
       let refreshAllCombos = fullRecovery;
       let metadataChanged = fullRecovery; let targetChanged = fullRecovery; let referenceChanged = fullRecovery;
       changes.forEach((change) => {
+        if (change.entity_type === "option-group") {
+          if (Number(change.entity_id) > 0) optionGroupChanges.push(Number(change.entity_id));
+          else allOptionGroupsChanged = true;
+        }
         if (change.entity_type === "category") metadataChanged = true;
         if (change.entity_type === "reference") referenceChanged = true;
         if (change.entity_type === "product" && change.operation !== "stock") targetChanged = true;
@@ -1970,6 +1982,7 @@
         const referenceSourceId = [...durableEditorReadyProductIds][0];
         if (referenceSourceId) refresh.push(referenceSourceId);
       }
+      if (allOptionGroupsChanged || optionGroupChanges.length) notify("option-groups", allOptionGroupsChanged ? [] : uniqueIds(optionGroupChanges));
       for (const productId of uniqueIds(deletes)) await removeProduct(productId);
       for (const comboId of uniqueIds(deleteCombos)) await removeCombo(comboId);
       for (const blockId of uniqueIds(deleteComboBlocks)) await removeComboBlock(blockId);
@@ -2368,6 +2381,7 @@
   }
 
   function clearRuntime() {
+    editorPriceSnapshots.clear();
     stopSync();
     cancelDownloadSchedule(false);
     downloadJobGeneration += 1;
@@ -2471,6 +2485,37 @@
     return function () { listeners.delete(listener); };
   }
 
+  function editorPriceSnapshotContext(productId, options = {}) {
+    return { namespace: scope?.namespace, revision: revision(manifest.durableRevision), rounding: JSON.stringify(options.rounding || null),
+      product: JSON.stringify(productsById.get(Number(productId)) || null) };
+  }
+  function editorPriceSnapshotMatches(left, right) {
+    return left?.namespace === right?.namespace && left?.revision === right?.revision && left?.product === right?.product && left?.rounding === right?.rounding;
+  }
+  async function readEditorPriceSnapshot(productId, options = {}) {
+    await init();
+    const id = normalizeId(productId);
+    if (!id || !scope?.complete) return null;
+    const context = editorPriceSnapshotContext(id, options);
+    const key = `${context.namespace}:${id}`;
+    const saved = editorPriceSnapshots.get(key) || await scope.get(`editor-price:${id}`);
+    if (saved?.version !== 2 || !editorPriceSnapshotMatches(saved.context, context)
+        || !editorPriceSnapshotMatches(context, editorPriceSnapshotContext(id, options))) return null;
+    editorPriceSnapshots.set(key, saved);
+    return saved.values;
+  }
+  async function writeEditorPriceSnapshot(productId, values, options = {}) {
+    await init();
+    const id = normalizeId(productId);
+    if (!id || !scope?.complete) return false;
+    const context = editorPriceSnapshotContext(id, options);
+    const saved = { version: 2, context, values };
+    const key = `${context.namespace}:${id}`;
+    editorPriceSnapshots.set(key, saved);
+    if (editorPriceSnapshots.size > 100) editorPriceSnapshots.delete(editorPriceSnapshots.keys().next().value);
+    return scope.set(`editor-price:${id}`, saved, { ttlMs: RECORD_TTL_MS });
+  }
+
   function getScope() {
     const active = scope || currentScope();
     return active ? {
@@ -2487,6 +2532,7 @@
     getTrackedCoverageCategoryIds, getCoverageTargetIds, startDownloadJob, resumeDownloadJob, getDownloadJob, cancelDownloadJob,
     beginForegroundWork, endForegroundWork, withForegroundWork,
     getRootCategoryId, getDescendantCategoryIds, subscribe, getScope, clearRuntime,
+    readEditorPriceSnapshot, writeEditorPriceSnapshot,
     effectiveStockConfigContext, readEffectiveStockConfigs, writeEffectiveStockConfigs, invalidateEffectiveStockConfigs,
     getCombo, getComboForOrder, getAllCombos, getAffectedComboIds, getAffectedComboIdsForBlocks, getComboBlock, getAllComboBlocks, upsertComboBlock, upsertComboBundle, upsertComboBundles, removeCombo, removeComboBlock, ensureComboBlocks,
     ensureCombos, ensureAllCombos, ensureCombosForCategoryCodes, isComboReady,

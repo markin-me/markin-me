@@ -2361,13 +2361,18 @@
     return tab;
   }
 
+  function needsOrderPackagingMetadata(order) {
+    return (order?.items || []).some(item => (item.options || item.option_items || [])
+      .some(option => option.is_packaging == null && Number(option.id || option.option_item_id) > 0));
+  }
+
   async function ensureFullOrderById(orderId, { strict = false } = {}) {
     const id = Number(orderId || 0);
     if (!(id > 0)) return null;
     const context = orderDetailsContext(id);
     const fromState = state.orders.find((order) => Number(order?.id) === id) || null;
     if (isFullOrder(fromState) && authoritativeFullOrderRuntimeKeys.has(context.runtimeKey)) {
-      if (orderDetailsDirty.has(context.runtimeKey) && navigator.onLine !== false) {
+      if ((orderDetailsDirty.has(context.runtimeKey) || needsOrderPackagingMetadata(fromState)) && navigator.onLine !== false) {
         revalidateCachedFullOrder(id, { context });
       }
       return fromState;
@@ -2385,7 +2390,7 @@
       const idx = state.orders.findIndex((order) => Number(order?.id) === id);
       if (idx >= 0) state.orders[idx] = { ...state.orders[idx], ...nextOrder };
       else if (shouldKeepOrderInState(nextOrder)) state.orders.unshift(nextOrder);
-      if ((cachedEntry.stale || orderDetailsDirty.has(context.runtimeKey)) && navigator.onLine !== false) {
+      if ((cachedEntry.stale || orderDetailsDirty.has(context.runtimeKey) || needsOrderPackagingMetadata(nextOrder)) && navigator.onLine !== false) {
         revalidateCachedFullOrder(id, { context });
       }
       return nextOrder;
@@ -9099,7 +9104,7 @@
       });
 
       const options = (Array.isArray(item?.options) ? item.options : [])
-        .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
+        .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0 && Number(opt.is_packaging) !== 1);
       options.forEach((opt) => {
         const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
         const title = String(opt?.title || "Опция").trim();

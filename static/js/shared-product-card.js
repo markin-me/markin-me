@@ -245,10 +245,10 @@ function getCatalogMediaPillLabel(product, availableForAdd = true, qty = 0) {
     if (!availableForAdd) return Number(qty || 0) > 0 ? "Больше нет" : "Раскупили";
     if (preorder) return preorder.label;
     if (!runtime.isCatalogProductConfigurable(product)) return "";
-    const hasOptions = Boolean(product?.blocks_config?.options || Number(product?.has_options || 0) === 1
+    const hasOptions = isCatalogProductBlockVisible(product, "options") && Boolean(Number(product?.has_options || 0) === 1
       || (Array.isArray(product?.options) && product.options.length));
-    const hasVariants = Boolean(product?.blocks_config?.variants || (Array.isArray(product?.variants) && product.variants.length));
-    const hasIngredients = Boolean(product?.blocks_config?.ingredients || (Array.isArray(product?.ingredients) && product.ingredients.length));
+    const hasVariants = isCatalogProductBlockVisible(product, "variants") && Boolean(Number(product?.has_variants) === 1 || product?.default_variant || product?.variants?.length);
+    const hasIngredients = hasConfigurableCatalogIngredients(product);
     if (hasVariants && hasIngredients && hasOptions) return "Настроить товар";
     if (hasVariants && hasOptions) return "Варианты и опции";
     if (hasIngredients && hasOptions) return "Состав и опции";
@@ -264,6 +264,10 @@ function getProductPreorderInfo(product) {
     catch (error) { console.error('Invalid preorder settings',product.id,error); }
     const today = runtime.getPreorderToday?.();
     const acceptance = settings?.acceptance;
+    if (!today && acceptance?.mode === 'any') return { settings, status:'open', isOpen:true, label:'По предзаказу' };
+    if (!today && acceptance?.mode === 'period' && acceptance.start && acceptance.end) {
+      return { settings, status:'loading', isOpen:false, label:'Проверка предзаказа…' };
+    }
     if (!today || !['any','period'].includes(acceptance?.mode)) return { settings, status:'invalid', isOpen:false, label:'Предзаказ недоступен' };
     if (acceptance.mode === 'period') {
       if (!acceptance.start || !acceptance.end) return { settings, status:'invalid', isOpen:false, label:'Предзаказ недоступен' };
@@ -313,17 +317,24 @@ function getProductPreorderDescription(product) {
     return lines;
   }
 
+function isCatalogProductBlockVisible(product, key) {
+    return !document.body?.matches(".page-shop:not(.page-kso)") || product?.blocks_config?.[key] === true;
+  }
+
+function hasConfigurableCatalogIngredients(product) {
+    if (document.body?.matches(".page-shop:not(.page-kso)")) return false;
+    if (!isCatalogProductBlockVisible(product, "ingredients")) return false;
+    return Number(product?.has_ingredients) === 1 ||
+      runtime.getConfigurableIngredients(product, product?.ingredients).length > 0;
+  }
+
 function isCatalogProductConfigurable(product) {
-    const cfg = product?.blocks_config && typeof product.blocks_config === "object"
-      ? product.blocks_config
-      : null;
     return Boolean(
-      cfg?.variants ||
-      cfg?.options ||
-      cfg?.ingredients ||
-      (Array.isArray(product?.variants) && product.variants.length) ||
-      (Array.isArray(product?.options) && product.options.length) ||
-      (Array.isArray(product?.ingredients) && product.ingredients.length)
+      (isCatalogProductBlockVisible(product, "options") && (Number(product?.has_options) === 1 ||
+        (Array.isArray(product?.options) && product.options.length))) ||
+      (isCatalogProductBlockVisible(product, "variants") && (Number(product?.has_variants) === 1 ||
+        product?.default_variant || (Array.isArray(product?.variants) && product.variants.length))) ||
+      hasConfigurableCatalogIngredients(product)
     );
   }
 
@@ -822,6 +833,23 @@ function createCatalogProductCard(p, overrides = {}) {
   }
 
 function getCatalogProductDefaultLines(product) {
+    const passport = runtime.getProductPassport?.(product?.id);
+    const groups = passport?.optionGroups || passport?.options || [];
+    const packagingIds = new Set(groups.filter(group => Number(group.is_packaging ?? group.group?.is_packaging) === 1)
+      .flatMap(group => (group.items || []).map(item => Number(item.id))));
+    const configuration = passport?.defaultConfig;
+    if (packagingIds.size && Array.isArray(configuration?.option_items)) {
+      return [
+        ...(configuration.ingredients || []).map(runtime.formatIngredientLineForOrder),
+        ...configuration.option_items.filter(item => !packagingIds.has(Number(item.id)) && Number(item.is_packaging) !== 1)
+          .filter(item => Number(item.qty ?? item.quantity ?? 1) > 0)
+          .map(item => {
+            const name = runtime.str(item.title || item.name || '').trim();
+            const label = runtime.str(item.variant_label || '').trim();
+            return label ? `${label} ${name}` : `${Number(item.qty ?? item.quantity ?? 1)} шт ${name}`;
+          }),
+      ].filter(Boolean).slice(0, 2);
+    }
     return (Array.isArray(product?.catalog_default_lines) ? product.catalog_default_lines : [])
       .map((line) => runtime.str(line || "").trim())
       .filter(Boolean)

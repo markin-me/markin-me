@@ -50,6 +50,7 @@
   window.__adminSidebarApi = {
     open: openMobileSidebar,
     close: closeMobileSidebar,
+    ownsTouch: (identifier) => Boolean(sidebarGesture && (identifier == null || sidebarGesture.id === identifier)),
   };
 
   function closeMobileSidebar() {
@@ -135,7 +136,7 @@
     if (document.body.classList.contains('modal-open') || document.body.classList.contains('sheet-open')) return;
     const touch = event.touches[0];
     const opened = sidebar.classList.contains('is-open');
-    if (!opened && (touch.clientX > 28 || window.__adminMobilePages?.canGoBack?.())) return;
+    if (!opened && touch.clientX > 28) return;
     if (opened && !sidebar.contains(event.target)) return;
     if (event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
     sidebarGesture = { x: touch.clientX, y: touch.clientY, id: touch.identifier, opened, time: event.timeStamp };

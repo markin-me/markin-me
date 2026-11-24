@@ -306,8 +306,10 @@ function computeItemPricing(item, totals) {
       const optionPricing = runtime.getSelectedOptionItemsPricingTotals(item.option_items || [], item.product);
       const originalBase = Math.max(parts.baseProductUnit, runtime.scaleProductBasePriceForCurrentUnit(
         item.product, parts.baseProductUnit, Number(item.product.old_price || 0)));
+      const config = typeof item.product.pricing_config_json === 'string' ? JSON.parse(item.product.pricing_config_json) : item.product.pricing_config_json;
       unitPrice = applyProductPromoPricing(item.product, unitPrice,
-        originalBase + Number(optionPricing.originalComparableTotal || 0) + parts.ingredientDiff);
+        config?.mode === 'auto' && config.target_margin != null ? unitPrice
+          : originalBase + Number(optionPricing.originalComparableTotal || 0) + parts.ingredientDiff);
     }
     unitPrice = runtime.roundPrice(unitPrice);
     let lineTotal = runtime.roundPrice(unitPrice * paidQty);
@@ -457,6 +459,12 @@ function parseRuleAmount(val) {
   }
 
 function getItemUnitParts(item) {
+    const rawConfig = item?.product?.pricing_config_json;
+    const config = typeof rawConfig === 'string' ? JSON.parse(rawConfig) : rawConfig;
+    if (config?.mode === 'auto' && config.target_margin != null && item.unit_price_override == null) {
+      const price = window.SharedProductDetails.getTargetMarginPrice(item.product_id || item.product.id, item);
+      return { baseProductUnit: price, optionTotal: 0, ingredientDiff: 0, baseUnit: price };
+    }
     // ????? ????: unit_price_override ??? ????????? variant_unit_price; ????? ? ???? ???????? (????? ??? ?????????????? ? variant_unit_price: 0)
     const ov = item?.unit_price_override != null ? Number(item.unit_price_override) : null;
     const vp = item?.variant_unit_price != null ? Number(item.variant_unit_price) : null;
@@ -472,7 +480,9 @@ function getItemUnitParts(item) {
 function optionItemsTotal(optionItems) {
     return (Array.isArray(optionItems) ? optionItems : []).reduce((sum, opt) => {
       const qty = Math.max(0, Number(opt?.qty || opt?.quantity || 1)) || 1;
-      return sum + Number(opt?.price || 0) * qty;
+      const packagingPrice = (opt.packaging_items || []).reduce((total, row) =>
+        total + (row.include_price ? Number(row.price || 0) * Number(row.qty || 1) : 0), 0);
+      return sum + (Number(opt?.price || 0) + packagingPrice) * qty;
     }, 0);
   }
 
@@ -529,6 +539,9 @@ function computeNonAutoTotal(items) {
   }
 
 function getOptionItemDisplayPricing(item, variantData = null) {
+    if (Number(item?.is_component ?? item?.is_component_default) === 1 && item.price_mode !== "fixed") {
+      return window.SharedProductDetails.getOptionItemDisplayPricing(item, variantData, false);
+    }
     const product = runtime.getOptionItemTargetProduct(item);
     const configuration = typeof item?.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item?.configuration_json;
     const ingredientDiff = Number(configuration?.ingredient_price_diff || 0);
@@ -663,6 +676,16 @@ function toStockVariantValue(rawLabel) {
     return text;
   }
 
+function getVariantPriceFactor(product, group, index) {
+    if (!group || !runtime.usesProductPriceSource(product, "variants")) return 1;
+    const value = runtime.parseVariantValueNumber(group.values?.[index]);
+    const factor = runtime.getConversionFactor(Number(group.unit_id), Number(product.base_unit_id || product.unit_id || group.unit_id));
+    const quantity = value * (factor != null ? Number(factor) : 1);
+    if (!Number.isFinite(quantity) || quantity <= 0 || Math.abs(quantity - Number(product.base_qty || 1)) <= 0.000001) return 1;
+    const tier = (group.discount_tiers || []).find(row => Number(row.sort_order) === Number(index));
+    return 1 - Number(tier?.discount_percent || 0) / 100;
+  }
+
 function getVariantUnitPrice(product, variants, variantState) {
     if (!product) return 0;
     const basePrice = Number(product.price || 0);
@@ -698,16 +721,28 @@ function getVariantUnitPrice(product, variants, variantState) {
     return unitPrice;
   }
 
+function getOptionPackagingPricing(item) {
+  const totals = { current: 0, original: 0 };
+  if (Number(item?.is_component ?? item?.is_component_default) === 1) return totals;
+  for (const row of item.packaging_items || []) {
+    if (!row.include_price) continue;
+    totals.current += Number(row.price || 0) * Number(row.qty || 1);
+    totals.original += Number(row.old_price ?? row.price ?? 0) * Number(row.qty || 1);
+  }
+  return totals;
+}
+
 function getSelectedOptionItemsPricingTotals(optionItems, product = null) {
     if (!runtime.usesProductPriceSource(product, "options")) return { currentTotal: 0, originalComparableTotal: 0 };
     return (Array.isArray(optionItems) ? optionItems : []).reduce((totals, item) => {
       const qty = Math.max(0, Number(item?.qty || item?.quantity || 1)) || 1;
       const pricing = runtime.getOptionItemDisplayPricing(item, runtime.getSelectedOptionItemVariantData(item));
-      const currentLine = runtime.roundPrice(Number(pricing.currentPrice || 0) * qty);
+      const { current: packagingCurrent, original: packagingOriginal } = getOptionPackagingPricing(item);
+      const currentLine = runtime.roundPrice((Number(pricing.currentPrice || 0) + packagingCurrent) * qty);
       const originalComparableUnit = pricing.showOld
         ? Number(pricing.originalPrice || 0)
         : Number(pricing.currentPrice || 0);
-      const originalComparableLine = runtime.roundPrice(originalComparableUnit * qty);
+      const originalComparableLine = runtime.roundPrice((originalComparableUnit + packagingOriginal) * qty);
       totals.currentTotal = runtime.roundPrice(Number(totals.currentTotal || 0) + currentLine);
       totals.originalComparableTotal = runtime.roundPrice(Number(totals.originalComparableTotal || 0) + originalComparableLine);
       return totals;
@@ -737,20 +772,39 @@ function getSelectedOptionItemVariantData(item) {
   }
 
 function getQtyInBase(ing, qty) {
-    const baseUnitId = ing.ingredient_base_unit_id || ing.ingredient_unit_id;
+    const baseUnitId = Number(ing.ingredient_base_unit_id || ing.ingredient_unit_id || 0);
     const fromUnitId = Number(ing.unit_id || 0);
     if (!baseUnitId || !fromUnitId) return null;
-    if (Number(fromUnitId) === Number(baseUnitId)) return Number(qty || 0);
-    
-    // ??? ????????? ????? pcs ?????????? ingredient_pcs_factor ???? ????
-    // ????????? ????? ??? ???????, ??? ??? ??? ??????? ? ?????? ?????? ? ??????
-    // ?????? ????? ?????????? ????? ????????? ????? getConversionFactor
-    
-    const factor = runtime.getConversionFactor(fromUnitId, baseUnitId);
-    return factor != null ? Number(qty || 0) * factor : null;
+    if (fromUnitId === baseUnitId) return Number(qty || 0);
+    const links = ing.ingredient_unit_links || [];
+    for (const link of links) {
+      if (link.is_active != null && Number(link.is_active) !== 1) continue;
+      const from = Number(link.unit_id ?? link.from_unit_id);
+      const to = Number(link.base_unit_id ?? link.to_unit_id);
+      const factor = Number(link.factor);
+      if (!(factor > 0)) continue;
+      if (from === fromUnitId && to === baseUnitId) return Number(qty || 0) * factor;
+      if (to === fromUnitId && from === baseUnitId) return Number(qty || 0) / factor;
+    }
+    const common = runtime.getConversionFactor(fromUnitId, baseUnitId);
+    if (common != null) return Number(qty || 0) * common;
+    for (const link of links) {
+      if (link.is_active != null && Number(link.is_active) !== 1) continue;
+      const from = Number(link.unit_id ?? link.from_unit_id);
+      const to = Number(link.base_unit_id ?? link.to_unit_id);
+      const factor = Number(link.factor);
+      if (!(factor > 0)) continue;
+      const directStart = runtime.getConversionFactor(fromUnitId, from);
+      const directEnd = runtime.getConversionFactor(to, baseUnitId);
+      if (directStart != null && directEnd != null) return Number(qty || 0) * directStart * factor * directEnd;
+      const inverseStart = runtime.getConversionFactor(fromUnitId, to);
+      const inverseEnd = runtime.getConversionFactor(from, baseUnitId);
+      if (inverseStart != null && inverseEnd != null) return Number(qty || 0) * inverseStart / factor * inverseEnd;
+    }
+    return null;
   }
 
-  return { usesProductPriceSource, applyProductPromoPricing, calculateIngredientPricing, calculateProductDiscountAmount, getOptionItemPrice, getOptionItemResolvedDisplayBasePrice, getOptionItemVariantUnitPrice, parseVariantValueNumber, getOptionItemDefaultVariantMeta, roundPrice, getPriceRoundingSettings, getOptionItemTargetProduct, scaleProductBasePriceForCurrentUnit, computeItemPricing, calculateCatalogBuyXGetYApplication, getCatalogBuyXGetYRule, calcAutoFreeQty, parseRuleAmount, getItemUnitParts, optionItemsTotal, getAutoRuleByProductId, computeAutoEligibleTotal, computeNonAutoTotal, getOptionItemDisplayPricing, getDiscountBadgeTextForPricePair, getOptionItemPriceScaleRatio, getOptionItemResolvedOriginalBasePrice, getOptionItemCurrentDisplayPrice, calcConsumedPerUnit, toStockVariantValue, getVariantUnitPrice, getSelectedOptionItemsPricingTotals, getSelectedOptionItemVariantData, getQtyInBase };
+  return { getOptionPackagingPricing, usesProductPriceSource, applyProductPromoPricing, calculateIngredientPricing, calculateProductDiscountAmount, getOptionItemPrice, getOptionItemResolvedDisplayBasePrice, getOptionItemVariantUnitPrice, parseVariantValueNumber, getOptionItemDefaultVariantMeta, roundPrice, getPriceRoundingSettings, getOptionItemTargetProduct, scaleProductBasePriceForCurrentUnit, computeItemPricing, calculateCatalogBuyXGetYApplication, getCatalogBuyXGetYRule, calcAutoFreeQty, parseRuleAmount, getItemUnitParts, optionItemsTotal, getAutoRuleByProductId, computeAutoEligibleTotal, computeNonAutoTotal, getOptionItemDisplayPricing, getDiscountBadgeTextForPricePair, getOptionItemPriceScaleRatio, getOptionItemResolvedOriginalBasePrice, getOptionItemCurrentDisplayPrice, calcConsumedPerUnit, toStockVariantValue, getVariantUnitPrice, getVariantPriceFactor, getSelectedOptionItemsPricingTotals, getSelectedOptionItemVariantData, getQtyInBase };
 });
 
 SharedProductRuntime.register(function (runtime) {
@@ -783,6 +837,29 @@ function formatQtyUnitNameForOrder(qtyRaw, unitRaw, nameRaw) {
 
 async function calculateDefaultPrice(product) {
     const productId = product.id;
+    const config = typeof product.pricing_config_json === 'string' ? JSON.parse(product.pricing_config_json) : product.pricing_config_json;
+    if (config?.mode === 'auto' || (config?.mode !== 'manual' && product.price_source === 'auto')) {
+      if (!runtime.getProductPassport(productId)?.defaultConfig) {
+        await runtime.resolveProductDetailsConfig(productId);
+      }
+      await window.SharedProductDetails.prepareSelections([productId]);
+      const presentation = window.SharedProductDetails.getSelectionPresentation(productId);
+      if (!presentation) throw new Error(`PRODUCT_PASSPORT_UNAVAILABLE:${productId}`);
+      const cachedProduct = runtime.state.productCache.get(Number(productId));
+      product.display_price = presentation.price;
+      product.catalog_original_price = presentation.oldPrice || null;
+      if (cachedProduct && cachedProduct !== product) {
+        cachedProduct.display_price = presentation.price;
+        cachedProduct.catalog_original_price = presentation.oldPrice || null;
+      }
+      const defaults = runtime.getProductPassport(productId)?.defaultConfig;
+      if (defaults) {
+        defaults.display_price = presentation.price;
+        defaults.original_price = presentation.oldPrice || presentation.price;
+      }
+      runtime.defaultPriceCache.set(productId, presentation.price);
+      return presentation.price;
+    }
 
     if (product.display_price != null && Number.isFinite(Number(product.display_price))) {
       return Number(product.display_price);

@@ -1,5 +1,6 @@
 ﻿const express = require("express");
 const { buildOrderRefundState } = require("./helpers/orderRefunds");
+const { annotateOrderPackaging, collectOrderPackagingItems } = require("./helpers/orderStock");
 
 function createOrderPrintTemplateBuilder({ db, helpers }) {
   async function getStoreTimezone(tenantId, storeId) {
@@ -210,6 +211,7 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
     } catch {}
 
     order.items = items;
+    await annotateOrderPackaging(db, tenantId, order.items);
     order.discounts_json = discountsJson;
     order.created_at = helpers.utcToStoreDateTime(order.created_at, storeTimezone) || order.created_at;
     order.scheduled_at = normalizeScheduledAtForPrint(order, storeTimezone) || order.scheduled_at;
@@ -900,9 +902,9 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
       });
 
-      const options = (Array.isArray(item?.options) ? item.options : [])
-        .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0);
-      options.forEach((opt) => {
+      const selectedOptions = (Array.isArray(item?.options) ? item.options : [])
+        .filter((opt) => Number(opt?.qty ?? opt?.quantity ?? 0) > 0 && Number(opt.is_packaging) !== 1);
+      selectedOptions.forEach((opt) => {
         const variant = mergeVariantUnit(opt?.variant_label || opt?.variantLabel, opt?.variant_unit || opt?.variantUnit);
         const title = String(opt?.title || "Опция").trim();
         const line = variant
@@ -911,6 +913,13 @@ function createOrderPrintTemplateBuilder({ db, helpers }) {
         if (line) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(line)}</div>`);
       });
 
+      if (assembly && ['assembly', 'assembly_batch'].includes(options.documentType)) {
+        const packaging = collectOrderPackagingItems(item);
+        if (packaging.length) {
+          compositionLines.push('<div class="receipt-composition-item receipt-composition-item--sub"><strong>УПАКОВКА</strong></div>');
+          for (const entry of packaging) compositionLines.push(`<div class="receipt-composition-item receipt-composition-item--sub">&bull; ${escapeHtml(entry.qty + ' ' + entry.title)}</div>`);
+        }
+      }
       const compositionHtml = compositionLines.length
         ? `<div class="receipt-composition">${compositionLines.join("")}</div>`
         : "";

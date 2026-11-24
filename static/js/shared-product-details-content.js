@@ -24,6 +24,8 @@ function buildProductDetailsContent(
     onQtyCenterClick,
     setDefaultVariantForOptionItem = () => {},
     guardDraftMutation = null,
+    getQuantity = () => 1,
+    groupPackaging = false,
   } = {}
 ) {
   const wrap = document.createElement("div");
@@ -35,6 +37,11 @@ function buildProductDetailsContent(
   const productBlocksConfig = product?.blocks_config && typeof product.blocks_config === "object"
     ? product.blocks_config
     : {};
+  const isStorefront = document.body?.matches(".page-shop:not(.page-kso)");
+  const usePackagingAccordion = isStorefront || groupPackaging;
+  const canShowProductBlock = (key) => !isStorefront || productBlocksConfig[key] === true;
+  const canShowProductField = (key) => !isStorefront || product?.[key] == null || Number(product[key]) === 1;
+  let refreshPackaging = () => {};
 
   function formatProductNutritionValue(value) {
     const num = Number(value);
@@ -163,7 +170,7 @@ function buildProductDetailsContent(
     const activeIngredients = Array.isArray(ingredients) ? ingredients : [];
     const hasCompleteNutrition = source => !source?.nutrition_incomplete
       && ["protein", "fat", "carbs"].every(key => readProductNutritionNumber(source?.nutrition_per_100g?.[key]) != null);
-    const selectedOptions = runtime.collectSelectedOptionItems(optionGroups, selectionState);
+    const selectedOptions = runtime.collectSelectedOptionItems(optionGroups, selectionState).filter(item => !item.is_packaging);
     const hasOwnPortion = !selectedOptions.length || activeIngredients.length > 0
       || (runtime.getProductPassport?.(Number(product?.id))?.ingredients?.length > 0)
       || getProductBaseNutritionGrams(product) > 0 || variants?.length > 0
@@ -219,6 +226,7 @@ function buildProductDetailsContent(
   let refreshNutritionCard = () => {};
 
   function appendProductNutritionCard() {
+    if (!canShowProductBlock("nutrition")) return;
     const nutrition = product?.nutrition_per_100g && typeof product.nutrition_per_100g === "object"
       ? product.nutrition_per_100g
       : {};
@@ -284,6 +292,7 @@ function buildProductDetailsContent(
   }
 
   function appendProductDescriptionCard() {
+    if (!canShowProductBlock("description") || !canShowProductField("show_description")) return;
     const text = runtime.str(product?.description || "").trim();
     if (!text) return;
 
@@ -301,7 +310,8 @@ function buildProductDetailsContent(
   }
 
   function appendProductClientCompositionCard() {
-    if (!document.body?.matches(".page-shop:not(.page-kso)") && productBlocksConfig.ingredients !== true) return;
+    if (isStorefront) return;
+    if (productBlocksConfig.ingredients !== true || !canShowProductField("show_client_composition")) return;
     const text = runtime.str(product?.client_composition || "").trim();
     if (!text) return;
 
@@ -837,7 +847,7 @@ function buildProductDetailsContent(
   if (shortDescText) shortDesc.textContent = shortDescText;
 
   meta.appendChild(title);
-  if (shortDescText) meta.appendChild(shortDesc);
+  if (shortDescText && canShowProductBlock("description") && canShowProductField("show_description_short")) meta.appendChild(shortDesc);
   const preorderLines = runtime.getProductPreorderDescription(product);
   if (preorderLines.length) {
     const conditions = document.createElement('div');
@@ -853,7 +863,7 @@ function buildProductDetailsContent(
   scroll.appendChild(meta);
 
   /* ================= VARIANTS (SHOP) ================= */
-  if (Array.isArray(variants) && variants.length) {
+  if (canShowProductBlock("variants") && Array.isArray(variants) && variants.length) {
     const variantGroup = variants[0];
     const values = Array.isArray(variantGroup.values) ? variantGroup.values : [];
     const unitLabel =
@@ -1035,7 +1045,7 @@ function buildProductDetailsContent(
   /* ================= OPTIONS (БЕЗ ИЗМЕНЕНИЙ) ================= */
 
   let optionsWrap = null;
-  if (optionGroups.length) {
+  if (canShowProductBlock("options") && optionGroups.length) {
     optionsWrap = document.createElement("div");
     optionsWrap.className = "shop-pd-options";
 
@@ -1085,7 +1095,7 @@ function buildProductDetailsContent(
 
     const getOptionGroupHint = (group, groupState, groupType) => {
       const maxCount = getOptionGroupMaxCount(group, groupState, groupType);
-      if (group?.is_required) {
+      if (group?.is_required || Number(groupState?.minSelect) > 0) {
         const selectedCount = getOptionGroupSelectedCount(groupState, groupType);
         return `Выбрано ${selectedCount} из ${maxCount} ${getOptionWord(maxCount)}`;
       }
@@ -1160,8 +1170,15 @@ function buildProductDetailsContent(
       return btn;
     };
 
-    const renderOptionProductSpinCenter = (center, item, variantData, variantLabel, qtyMultiplier = 1) => {
+    const renderOptionProductSpinCenter = (center, item, variantData, variantLabel, qtyMultiplier = 1, hidePrice = false) => {
       if (!center) return;
+      if (hidePrice) {
+        const value = document.createElement("div");
+        value.className = "shop-pd-option-product-value";
+        value.textContent = variantLabel || `${qtyMultiplier} шт`;
+        center.replaceChildren(value);
+        return;
+      }
       const pricing = runtime.getOptionItemDisplayPricing(item, variantData);
       const qty = Math.max(1, Number(qtyMultiplier || 1));
       const currentTotal = runtime.roundPrice(Number(pricing.currentPrice || 0) * qty);
@@ -1203,6 +1220,8 @@ function buildProductDetailsContent(
       canQtyPlus = false,
       onQtyMinus,
       onQtyPlus,
+      readOnly = false,
+      hidePrice = false,
     }) => {
       const itemId = Number(item.id);
       const variantCtx = getOptionVariantContext(item, groupState, allowVariants);
@@ -1214,20 +1233,24 @@ function buildProductDetailsContent(
       const pricing = runtime.getOptionItemDisplayPricing(item, currentVariant);
 
       const card = document.createElement("div");
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
       card.className = "shop-pd-option-product-card";
       card.classList.toggle("is-selected", !!isSelected);
       card.classList.toggle("is-unavailable", !!isUnavailable);
-      card.addEventListener("click", (e) => {
-        e.preventDefault();
-        if (typeof onCardClick === "function") onCardClick(e);
-      });
-      card.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter" && e.key !== " ") return;
-        e.preventDefault();
-        if (typeof onCardClick === "function") onCardClick(e);
-      });
+      if (!readOnly) {
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.addEventListener("click", (e) => {
+          e.preventDefault();
+          if (typeof onCardClick === "function") onCardClick(e);
+        });
+        card.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          if (typeof onCardClick === "function") onCardClick(e);
+        });
+      } else {
+        card.setAttribute("aria-label", `${item.title || item.name}, включено в комплект упаковки`);
+      }
 
       const photoWrap = document.createElement("div");
       photoWrap.className = "shop-pd-option-product-photo";
@@ -1251,14 +1274,14 @@ function buildProductDetailsContent(
       }
       card.appendChild(photoWrap);
 
-      if (pricing.badgeText) {
+      if (!hidePrice && pricing.badgeText) {
         const badge = document.createElement("span");
         badge.className = "shop-pd-option-product-discount";
         badge.textContent = pricing.badgeText;
         card.appendChild(badge);
       }
 
-      if (groupType === "multiple_item" && isSelected && typeof resetQty === "function") {
+      if (!readOnly && groupType === "multiple_item" && isSelected && typeof resetQty === "function") {
         const reset = document.createElement("button");
         reset.type = "button";
         reset.className = "shop-pd-option-product-reset";
@@ -1281,9 +1304,10 @@ function buildProductDetailsContent(
       spin.className = "shop-pd-option-product-spin";
       const center = document.createElement("div");
       center.className = "shop-pd-option-product-spin-center";
+      if (readOnly) center.style.gridColumn = "2";
 
       const canSwitchVariant = (nextIdx) => {
-        if (!variantCtx.hasVariants) return false;
+        if (readOnly || !variantCtx.hasVariants) return false;
         if (!Number.isFinite(nextIdx) || nextIdx < 0 || nextIdx >= variantCtx.values.length) return false;
         if (!isSelected) return true;
         return canApplyDraftMutation(() => {
@@ -1321,16 +1345,17 @@ function buildProductDetailsContent(
       const leftAction = variantCtx.hasVariants ? () => applyVariantIdx(prevIdx) : onQtyMinus;
       const rightAction = variantCtx.hasVariants ? () => applyVariantIdx(nextIdx) : onQtyPlus;
 
-      spin.appendChild(createOptionProductSpinSide("minus", leftEnabled, leftAction));
+      if (!readOnly) spin.appendChild(createOptionProductSpinSide("minus", leftEnabled, leftAction));
       renderOptionProductSpinCenter(
         center,
         item,
         currentVariant,
         variantLabel,
-        groupType === "multiple_item" ? selectedQty : 1
+        groupType === "multiple_item" ? selectedQty : 1,
+        hidePrice
       );
       spin.appendChild(center);
-      spin.appendChild(createOptionProductSpinSide("plus", rightEnabled, rightAction));
+      if (!readOnly) spin.appendChild(createOptionProductSpinSide("plus", rightEnabled, rightAction));
       card.appendChild(spin);
 
       return card;
@@ -1383,7 +1408,7 @@ function buildProductDetailsContent(
       }
 
       const groupKey = Number(group?.id || 0) || titleText;
-      const isExpanded = expandedOptionGroups.get(groupKey) === true;
+      const isExpanded = isStorefront || expandedOptionGroups.get(groupKey) === true;
       let availableCardCount = 0;
 
       (group.items || []).forEach((item) => {
@@ -1470,11 +1495,12 @@ function buildProductDetailsContent(
           canQtyPlus,
           onQtyMinus,
           onQtyPlus,
-          resetQty: () => {
+          resetQty: groupType === "multiple_item" && groupState.qtyById.size > minSelect ? () => {
+            if (item.is_locked || groupState.qtyById.size <= minSelect) return;
             groupState.qtyById.delete(itemId);
             rerender();
             notifyChanged();
-          },
+          } : null,
           selectForSpin: () => {
             if (selected) return true;
             if (groupType === "single") {
@@ -1500,7 +1526,8 @@ function buildProductDetailsContent(
           },
           onCardClick: () => {
             if (groupType === "single") {
-              if (selected && !group?.is_required) {
+              if (selected && (item.is_locked || group?.is_required || minSelect > 0)) return;
+              if (selected) {
                 groupState.selectedId = 0;
               } else if (!selected) {
                 const applied = runGuardedMutation(() => {
@@ -1547,7 +1574,7 @@ function buildProductDetailsContent(
         itemsWrap.appendChild(card);
       });
 
-      if (availableCardCount > 3) {
+      if (!isStorefront && availableCardCount > 3) {
         const toggle = document.createElement("button");
         toggle.type = "button";
         toggle.className = "shop-pd-option-product-more";
@@ -1561,12 +1588,135 @@ function buildProductDetailsContent(
         block.appendChild(toggle);
       }
 
+      for (const selected of usePackagingAccordion ? [] : runtime.collectSelectedOptionItems([group], selectionState)) {
+        if (!selected.packaging_items?.length) continue;
+        const title = document.createElement("div");
+        title.className = "shop-pd-section-title shop-pd-option-product-title";
+        title.textContent = `\u0423\u043f\u0430\u043a\u043e\u0432\u043a\u0430 \u00b7 ${selected.title}`;
+        const cards = document.createElement("div");
+        cards.className = "shop-pd-option-product-cards";
+        for (const item of selected.packaging_items) {
+          cards.appendChild(createOptionProductCard({
+            item, groupState, groupType: "multiple_item", allowVariants: false,
+            isSelected: true, selectedQty: item.qty * selected.qty,
+            readOnly: true, hidePrice: item.hide_price,
+          }));
+        }
+        block.append(title, cards);
+      }
       if (append) optionsWrap.appendChild(block);
       return block;
     };
 
+    const packagingBlocks = new Map();
+    const packagingAccordion = document.createElement("details");
+    packagingAccordion.className = "shop-packaging-accordion";
+    packagingAccordion.open = Boolean(isStorefront);
+    const packagingSummary = document.createElement("summary");
+    packagingSummary.textContent = "\u0423\u043f\u0430\u043a\u043e\u0432\u043a\u0430";
+    if (isStorefront) {
+      const label = document.createElement("span");
+      label.className = "shop-packaging-heading";
+      label.textContent = packagingSummary.textContent;
+      packagingSummary.replaceChildren(label);
+    }
+    const packagingCards = document.createElement("div");
+    packagingCards.className = "shop-pd-option-product-cards shop-packaging-cards";
+    if (isStorefront) {
+      let drag = null;
+      let dragged = false;
+      packagingCards.addEventListener("dragstart", event => event.preventDefault());
+      packagingCards.addEventListener("pointerdown", event => {
+        if (event.pointerType !== "mouse" || event.button !== 0) return;
+        dragged = false;
+        drag = { x: event.clientX, scrollLeft: packagingCards.scrollLeft };
+        packagingCards.setPointerCapture(event.pointerId);
+        packagingCards.classList.add("is-dragging");
+      });
+      packagingCards.addEventListener("pointermove", event => {
+        if (!drag) return;
+        const distance = event.clientX - drag.x;
+        if (Math.abs(distance) > 4) dragged = true;
+        if (dragged) {
+          event.preventDefault();
+          packagingCards.scrollLeft = drag.scrollLeft - distance;
+        }
+      });
+      const endDrag = () => {
+        drag = null;
+        packagingCards.classList.remove("is-dragging");
+      };
+      packagingCards.addEventListener("pointerup", endDrag);
+      packagingCards.addEventListener("pointercancel", endDrag);
+      packagingCards.addEventListener("lostpointercapture", endDrag);
+      packagingCards.addEventListener("click", event => {
+        if (!dragged) return;
+        event.preventDefault();
+        event.stopPropagation();
+        dragged = false;
+      }, true);
+      packagingCards.addEventListener("wheel", event => {
+        if (event.ctrlKey) return;
+        const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+        const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? packagingCards.clientWidth : 1;
+        const previous = packagingCards.scrollLeft;
+        packagingCards.scrollLeft += delta * scale;
+        if (packagingCards.scrollLeft !== previous) event.preventDefault();
+      }, { passive: false });
+    }
+    packagingAccordion.append(packagingSummary, packagingCards);
+    let packagingSignature = "";
+    if (usePackagingAccordion) refreshPackaging = () => {
+      const itemsById = new Map(optionGroups.flatMap(group => group.items || []).map(item => [Number(item.id), item]));
+      const selected = runtime.collectSelectedOptionItems(optionGroups, selectionState)
+        .map(item => ({ ...itemsById.get(Number(item.id)), ...item }));
+      const items = runtime.collectPackagingItems(selected, getQuantity());
+      const signature = JSON.stringify(items);
+      if (signature === packagingSignature) return;
+      packagingSignature = signature;
+      packagingAccordion.hidden = !items.length;
+      packagingCards.replaceChildren(...items.map(item => {
+        const card = createOptionProductCard({
+          item, groupState: { variantByItemId: new Map() }, groupType: "multiple_item", allowVariants: false,
+          isSelected: true, selectedQty: item.qty, readOnly: true, hidePrice: true,
+        });
+        if (item.qty > 1) card.classList.add("shop-packaging-stack");
+        return card;
+      }));
+    };
     optionGroups.forEach((group) => {
       const groupState = selectionState.get(group.id);
+      if (group.is_packaging) {
+        if (usePackagingAccordion) return;
+        const key = group.packaging_group_id ?? group.id;
+        let cards = packagingBlocks.get(key);
+        if (!cards) {
+          const block = document.createElement("div");
+          block.className = "shop-pd-option-block shop-pd-option-product-block";
+          const title = document.createElement("div");
+          title.className = "shop-pd-section-title shop-pd-option-product-title";
+          title.textContent = group.title && group.title !== "Упаковка" ? `Упаковка · ${group.title}` : "Упаковка";
+          cards = document.createElement("div");
+          cards.className = "shop-pd-option-product-cards";
+          block.append(title, cards);
+          optionsWrap.appendChild(block);
+          packagingBlocks.set(key, cards);
+        }
+        const item = group.items[0];
+        if (item && groupState) {
+          cards.appendChild(createOptionProductCard({
+            item,
+            groupState,
+            groupType: "multiple_item",
+            allowVariants: true,
+            isSelected: true,
+            selectedQty: Math.max(1, Number(item.qty_min || 1)),
+            readOnly: true,
+            hidePrice: Number(group.hide_packaging_price) === 1,
+          }));
+        }
+        return;
+      }
       const groupType = groupState?.type || runtime.getOptionGroupUiType(group);
       const titleText = group.title || "Опция";
       if (renderProductOptionCardsGroup(group, groupState, groupType, titleText)) return;
@@ -2477,6 +2627,7 @@ function buildProductDetailsContent(
             }
 
             if (currentlySelected) {
+              if (item.is_locked || count <= minSelect) return;
               groupState.selectedIds.delete(itemId);
             } else {
               if (isOptionUnavailableNow()) {
@@ -2583,6 +2734,7 @@ function buildProductDetailsContent(
               groupState.qtyById.set(itemId, newQty);
               if (hasVariants && typeof setDefaultVariantForOptionItem === "function") setDefaultVariantForOptionItem(item, groupState.variantByItemId);
             } else {
+              if (item.is_locked || groupState.qtyById.size <= Number(groupState.minSelect || 0)) return;
               groupState.qtyById.delete(itemId);
             }
             updateItemCard();
@@ -2933,10 +3085,14 @@ function buildProductDetailsContent(
       }
     });
 
+    if (usePackagingAccordion) {
+      optionsWrap.appendChild(packagingAccordion);
+      refreshPackaging();
+    }
   }
 
   /* ================= INGREDIENTS ================= */
-  if (ingredients && ingredients.length > 0) {
+  if (canShowProductBlock("ingredients") && ingredients && ingredients.length > 0) {
     const ingredientsWrap = document.createElement("div");
     ingredientsWrap.className = "shop-pd-ingredients";
 
@@ -3228,7 +3384,7 @@ function buildProductDetailsContent(
   appendProductNutritionCard();
   appendProductClientCompositionCard();
 
-  const actionCard = runtime.createProductBuyXGetYActionCard(product);
+  const actionCard = canShowProductBlock("promotions") ? runtime.createProductBuyXGetYActionCard(product) : null;
   if (actionCard) scroll.appendChild(actionCard);
 
   wrap.appendChild(scroll);
@@ -3274,7 +3430,7 @@ function buildProductDetailsContent(
   footer.appendChild(actionBtn);
   wrap.appendChild(footer);
 
-  return { wrap, actionBtn, qtyWrap, basePriceEl: null, refreshVariantAvailability, refreshNutritionCard, heroMedia: media };
+  return { wrap, actionBtn, qtyWrap, basePriceEl: null, refreshVariantAvailability, refreshNutritionCard, refreshPackaging, heroMedia: media };
 }
 
   return { buildProductDetailsContent };

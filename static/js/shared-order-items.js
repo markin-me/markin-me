@@ -497,6 +497,29 @@
     return '<div class="cart-sub-container cart-combo-details">' + blocks + "</div>";
   }
 
+  function renderPackagingDetails(item) {
+    var grouped = new Map();
+    var add = function (packaging, multiplier) {
+      var qty = Number(packaging.qty != null ? packaging.qty : packaging.quantity || 1) * multiplier;
+      if (!(qty > 0)) return;
+      var key = JSON.stringify([packaging.target_product_id || packaging.product_id || packaging.id, packaging.variant_label || ""]);
+      var existing = grouped.get(key);
+      if (existing) existing.qty += qty;
+      else grouped.set(key, { qty: qty, title: packaging.title || packaging.name || "" });
+    };
+    (item.options || item.option_items || []).forEach(function (option) {
+      if (Number(option.is_packaging) === 1) add(option, getItemQty(item));
+      else (option.packaging_items || []).forEach(function (packaging) {
+        add(packaging, Number(option.qty != null ? option.qty : option.quantity || 1) * getItemQty(item));
+      });
+    });
+    if (!grouped.size) return "";
+    return '<details class="shop-packaging-accordion cart-packaging-accordion"><summary><i class="fas fa-chevron-right order-packaging-chevron" aria-hidden="true"></i> Упаковка</summary>' +
+      '<div class="cart-sub-details">' + Array.from(grouped.values()).map(function (entry) {
+        return '<div class="cart-sub-detail-item">&bull; ' + escapeHtml(entry.qty + " " + entry.title) + '</div>';
+      }).join("") + '</div></details>';
+  }
+
   function renderProductDetails(item) {
     var variants = Array.isArray(item && item.variants) ? item.variants : [];
     var variantLines = [];
@@ -527,6 +550,7 @@
     });
 
     (Array.isArray(item && item.options) ? item.options : []).forEach(function (option) {
+      if (Number(option.is_packaging) === 1) return;
       var line = formatOptionLine(option);
       if (line) detailLines.push(line);
     });
@@ -538,7 +562,7 @@
     }
     return {
       primaryVariantLine: variantLines[0] || "",
-      detailsHtml: renderDetailLines(detailLines)
+      detailsHtml: renderDetailLines(detailLines) + renderPackagingDetails(item)
     };
   }
 
@@ -584,7 +608,7 @@
       var details = renderProductDetails(item);
       var productName = str(item.product_name || item.name || "\u0422\u043e\u0432\u0430\u0440").trim() || "\u0422\u043e\u0432\u0430\u0440";
       var titleBase = [details.primaryVariantLine, productName].filter(Boolean).join(" ").trim() || productName;
-      titleText = isGiftRewardItem(item) ? (titleBase + " (\u041f\u043e\u0434\u0430\u0440\u043e\u043a)") : titleBase;
+      titleText = titleBase;
       detailsHtml = details.detailsHtml;
     }
 
@@ -592,11 +616,13 @@
       '<div class="' + rowClasses.join(" ") + '">' +
         thumbHtml +
         '<div class="cart-mid">' +
-          '<div class="cart-title">' + (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1 ? '<i class="fas fa-gift" aria-label="Подарок"></i> ' : '') + escapeHtml(String(qty) + " x " + titleText) + "</div>" +
+          '<div class="cart-title">' + escapeHtml(String(qty) + " x " + titleText) + "</div>" +
           detailsHtml +
         "</div>" +
         '<div class="cart-footer">' +
-          '<div class="cart-footer-left">' + quickPrintHtml + "</div>" +
+          '<div class="cart-footer-left">' + quickPrintHtml +
+            (isGiftRewardItem(item) || (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1)
+              ? '<span class="sp-card-bogo-badge cart-bogo-badge" aria-label="Подарок" title="Подарок"><i class="fas fa-gift" aria-hidden="true"></i></span>' : '') + "</div>" +
           '<div class="cart-footer-right">' + priceHtml + "</div>" +
         "</div>" +
       "</div>"
@@ -614,6 +640,15 @@
       return renderReadonlyOrderItem(item, itemOpts);
     }).join("");
   }
+
+  document.addEventListener("click", function (event) {
+    var summary = event.target && event.target.closest ? event.target.closest(".cart-row--readonly-order .cart-packaging-accordion > summary") : null;
+    if (!summary) return;
+    event.preventDefault();
+    event.stopPropagation();
+    var accordion = summary.parentElement;
+    accordion.open = !accordion.open;
+  }, true);
 
   window.SharedOrderItems = Object.assign({}, window.SharedOrderItems, {
     getOrderItemDisplayPricing: getOrderItemDisplayPricing,

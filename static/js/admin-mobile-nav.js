@@ -750,7 +750,8 @@
   document.addEventListener('touchstart', function (event) {
     if (backGesture?.settling) return;
     clearSwipe();
-    if (!isMobile() || restoringView || event.touches.length !== 1 || sidebar.classList.contains('is-open')) return;
+    if (!isMobile() || restoringView || event.touches.length !== 1 || sidebar.classList.contains('is-open')
+      || window.__adminSidebarApi?.ownsTouch?.(event.touches[0].identifier)) return;
     if (!mobileSubview && (body.classList.contains('modal-open') || body.classList.contains('sheet-open'))) return;
     const target = event.target;
     const fromCenter = !mobileSubview && centerColumn.contains(target)
@@ -773,6 +774,7 @@
   document.addEventListener('touchmove', function (event) {
     const gesture = backGesture;
     if (!gesture || gesture.settling) return;
+    if (window.__adminSidebarApi?.ownsTouch?.(gesture.id)) { clearSwipe(); return; }
     const touch = event.touches[0];
     if (event.touches.length !== 1 || touch.identifier !== gesture.id) { finishSwipe(false); return; }
     const dx = touch.clientX - gesture.x;
@@ -793,6 +795,7 @@
   document.addEventListener('touchend', function (event) {
     const gesture = backGesture;
     if (!gesture || gesture.settling) return;
+    if (window.__adminSidebarApi?.ownsTouch?.(gesture.id)) { clearSwipe(); return; }
     if (!gesture.source) { clearSwipe(); return; }
     const touch = Array.from(event.changedTouches).find((item) => item.identifier === gesture.id);
     if (!touch) { finishSwipe(false); return; }
@@ -819,6 +822,7 @@
     }
     // Keep the browser on this document and reuse its existing Back actions.
     history.pushState({ ...history.state, adminMobileBack: true }, '', location.href);
+    if (window.__adminSidebarApi?.ownsTouch?.()) return;
     goBack();
   });
   loadAccordionState();

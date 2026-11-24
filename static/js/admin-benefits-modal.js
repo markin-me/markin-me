@@ -898,6 +898,50 @@
     return card;
   }
 
+  function renderAutoAddGiftCard(item, options = {}) {
+    const money = options.money;
+    const card = renderGiftCard({ ...item, action_mode: 'receive', product_count: 1 }, {
+      titleText: item.title, photoUrl: item.photo_url, canExecute: true,
+      onOpen: options.onOpen, onAction: options.onAction,
+    });
+    card.classList.add('shop-auto-add-gift-card');
+    card.dataset.autoAddRule = item.rule_id;
+    card.dataset.autoAddGroup = item.group_id;
+    const details = document.createElement('div');
+    details.className = 'shop-auto-add-gift-details';
+    details.innerHTML = `<div><span data-auto-gift-campaign></span></div>
+      <div class="shop-auto-add-gift-progress-label"><span data-auto-gift-label></span><span data-auto-gift-value></span></div>
+      <div class="shop-checkout-benefit-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="shop-checkout-benefit-progress-fill"></div></div>`;
+    details.querySelector('[data-auto-gift-campaign]').textContent = item.campaign_title || '';
+    card.insertBefore(details, card.querySelector('button'));
+    const update = value => {
+      const title = card.querySelector('.shop-checkout-benefit-gift-title');
+      title.textContent = `${Number(value?.available_qty || 0)} \u00d7 ${item.title}`;
+      const percent = value?.finished ? 100 : Math.round(Number(value?.progress_ratio || 0) * 100);
+      card.querySelector('.shop-checkout-benefit-progress-fill').style.width = `${percent}%`;
+      card.querySelector('[role="progressbar"]').setAttribute('aria-valuenow', percent);
+      card.querySelector('[data-auto-gift-label]').textContent = value?.amount_step > 0
+        ? '\u0417\u0430 \u043a\u0430\u0436\u0434\u044b\u0435' : '\u041f\u0435\u0440\u0432\u044b\u0439 \u043f\u043e\u0434\u0430\u0440\u043e\u043a';
+      const target = value?.progress_target || value?.amount_step || 0;
+      const progress = value?.finished ? target : Math.min(target, value?.progress_value || 0);
+      card.querySelector('[data-auto-gift-value]').textContent = target > 0 ? `${progress} / ${money(target)}` : '';
+      if (value?.max_claim_qty != null && Number(value.in_cart || 0) >= Number(value.max_claim_qty)) {
+        card.querySelector('[data-auto-gift-label]').textContent = `Лимит на заказ достигнут — максимум ${value.max_claim_qty} шт.`;
+        card.querySelector('[data-auto-gift-value]').textContent = '';
+      }
+      const button = card.querySelector('button');
+      button.disabled = !value?.auth_required && !(value?.available_qty > 0);
+      button.classList.toggle('is-ready', !button.disabled);
+      button.textContent = value?.auth_required ? '\u041d\u0443\u0436\u043d\u0430 \u0430\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u044f'
+        : value?.available_qty > 0 ? '\u0417\u0430\u0431\u0440\u0430\u0442\u044c'
+        : value?.in_cart > 0 ? (value.finished ? '\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u043e' : '\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e')
+        : value?.finished ? '\u041f\u043e\u0434\u0430\u0440\u043a\u0438 \u0437\u0430\u043a\u043e\u043d\u0447\u0438\u043b\u0438\u0441\u044c' : '\u0415\u0449\u0451 \u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e';
+    };
+    update(item);
+    card.updateAutoGift = update;
+    return card;
+  }
+
   function renderProgressCard(item, options = {}) {
     const ratio = Math.max(0, Math.min(1, Number(options.ratio ?? item?.progress_ratio ?? 0)));
     const canAction = options.canAction === true;
@@ -1519,6 +1563,7 @@
     renderDiscountCard,
     renderPromoCard,
     renderGiftCard,
+    renderAutoAddGiftCard,
     renderProgressCard,
     renderDisplayCard,
   };

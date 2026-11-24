@@ -164,6 +164,10 @@
   <script src="<%= assetUrl('/static/js/auth-card.js') %>"></script>
   <script>
     window.__shopLateUrl = "<%= assetUrl('/static/js/shop-late.js?v=20260930-option-defaults-card-v3') %>";
+    window.__PRODUCT_DETAIL_ASSET_URLS__ = {
+      sharedProductConfigurator: <%- JSON.stringify(assetUrl('/static/js/shared-product-configurator.js')) %>,
+      sharedProductDetailsContent: <%- JSON.stringify(assetUrl('/static/js/shared-product-details-content.js')) %>
+    };
     <% if (!isKsoPage) { %>
       window.__shopChatUrl = "<%= assetUrl('/static/js/shop-company-chat.js') %>";
     <% } else { %>
@@ -174,6 +178,7 @@
   <script src="<%= assetUrl('/static/js/appModal.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/shop-pwa-presence.js?v=20260407a') %>" defer></script>
 
+  <script src="<%= assetUrl('/static/js/admin-benefits-modal.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/shared-bonus-accrual.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/shared-product-runtime.js') %>" defer></script>
   <script src="<%= assetUrl('/static/js/shared-product-pricing.js') %>" defer></script>

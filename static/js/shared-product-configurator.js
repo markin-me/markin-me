@@ -2,7 +2,7 @@
 SharedProductRuntime.register(function (runtime) {
   "use strict";
 
-async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton, mode, onSave, cartContext, configurationOnly = false, giftQuantity = null, catalogRefresh = false } = {}) {
+async function renderProductDetailsInto(container, product, { onBack, cartKey, prefillItem, readOnly, favoriteButton, mode, onSave, cartContext, configurationOnly = false, giftQuantity = null } = {}) {
   if (!container) return;
   const renderGeneration = Number(container.__shopProductRenderGeneration || 0) + 1;
   container.__shopProductRenderGeneration = renderGeneration;
@@ -50,7 +50,9 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     .map((ing) => Number(ing?.ingredient_id || 0))
     .filter((id) => id > 0 && !runtime.state.productCache.has(id));
   const optionTargetProductIds = optionGroups
-    .flatMap((group) => Array.isArray(group?.items) ? group.items : [])
+    .flatMap((group) => !group.is_packaging && Array.isArray(group.items) ? group.items : [])
+    .filter((item) => !document.body?.matches(".page-shop:not(.page-kso)") ||
+      !['order', 'preorder'].includes(item.product_sale_mode))
     .map((item) => Number(item?.target_product_id || item?.product_id || 0))
     .filter((id) => id > 0 && !['order', 'preorder'].includes(runtime.state.productCache.get(id)?.sale_mode));
   if (ingredientProductIds.length > 0) {
@@ -61,26 +63,72 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     optionGroups = runtime.normalizeProductOptionGroups(optionGroups);
   }
   if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
+  const separateTargets = [...new Set(optionGroups
+    .filter(group => !group.is_packaging && Number(group.is_component ?? group.is_component_default) !== 1)
+    .flatMap(group => group.items.filter(item => !Array.isArray(item.packaging_groups))
+      .map(item => Number(item.target_product_id || item.product_id)))
+    .filter(id => id > 0 && id !== Number(product.id)))];
+  const componentTargets = document.body?.matches(".page-shop:not(.page-kso)") ? [...new Set(optionGroups
+    .filter(group => !group.is_packaging && Number(group.is_component ?? group.is_component_default) === 1)
+    .flatMap(group => group.items.map(item => Number(item.target_product_id || item.product_id)))
+    .filter(id => id > 0 && id !== Number(product.id)))] : [];
+  if (typeof window.preloadProductPassportsBatch === "function") {
+    const targets = [...new Set([...separateTargets, ...componentTargets])];
+    if (targets.length) await window.preloadProductPassportsBatch(targets, { details: true });
+  }
+  if (componentTargets.length) {
+    await window.SharedProductDetails.prepareSelections(componentTargets, { pricingOnly: true });
+  }
+  if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
+  const packagingByProduct = new Map(await Promise.all(separateTargets.map(async id => {
+    const details = await runtime.resolveProductDetailsConfig(id);
+    return [id, runtime.getStandaloneOptionPackaging(details?.optionGroups, runtime.state.productCache.get(id))];
+  })));
+  if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration) return;
   optionGroups = optionGroups.flatMap(group => {
+    if (!group.is_packaging && Number(group.is_component ?? group.is_component_default) !== 1) {
+      group = { ...group, items: group.items.map(item => ({
+        ...item, packaging_items: Array.isArray(item.packaging_groups)
+          ? runtime.getStandaloneOptionPackaging(item.packaging_groups, item.packaging_product)
+          : packagingByProduct.get(Number(item.target_product_id || item.product_id)),
+      })) };
+    }
+    if (Number(group.is_packaging) === 1) {
+      return group.items
+        .map(item => ({
+          ...group,
+          id: `locked:${group.id}:${item.id}`,
+          packaging_group_id: group.id,
+          title: group.title,
+          selection_type: "single",
+          is_required: true,
+          min_select: 1,
+          max_select: 1,
+          items: [{ ...item, is_locked: true, effective_default_selected: true }],
+        }));
+    }
     const locked = group.items.filter(item => item.is_locked);
-    if (!locked.length) return [group];
+    const required = Number(group.is_required) === 1 || (group.selection_type === "single" && Number(group.min_select) > 0);
+    if (!locked.length) return [{ ...group, is_required: required }];
+    const choices = group.items.filter(item => !item.is_locked);
     return [
       ...locked.map(item => ({
         ...group,
         id: `locked:${group.id}:${item.id}`,
-        title: group.title + " · Закреплено",
+        title: document.body?.matches(".page-shop:not(.page-kso)") ? group.title : group.title + " · Закреплено",
         selection_type: "single",
         is_required: true,
         min_select: 1,
         max_select: 1,
         items: [item],
       })),
-      { ...group, items: group.items.filter(item => !item.is_locked) },
+      ...(choices.length || Number(group.min_select) > 0 ? [{ ...group, is_required: false, items: choices }] : []),
     ];
   });
   optionGroups = optionGroups.map(group => ({
     ...group,
     items: group.items.filter(item => {
+      if (group.is_packaging) return true;
       const mode = item.product_sale_mode ?? runtime.state.productCache.get(Number(item.target_product_id || item.product_id))?.sale_mode;
       if (!['order', 'preorder'].includes(mode)) throw new Error('PREORDER_SETTINGS_INVALID');
       return product.sale_mode === 'preorder' || mode === 'order';
@@ -88,10 +136,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
   }));
   const unavailableRequiredOption = optionGroups.some(group => {
     if (!group.is_required && !(Number(group.min_select) > 0)) return false;
-    const capacity = runtime.getOptionGroupUiType(group) === 'multiple_item'
-      ? group.items.reduce((sum, item) => sum + Number(item.qty_max ?? 1), 0)
-      : group.items.length;
-    return capacity < Math.max(1, Number(group.min_select) || 1);
+    return group.items.length < Math.max(1, Number(group.min_select) || 1);
   });
   optionGroups = optionGroups.filter(group => group.items.length || group.is_required || Number(group.min_select) > 0);
   const selectionState = new Map();
@@ -153,8 +198,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     }
   }
   const seedItem =
-    catalogRefresh && prefillItem ? prefillItem
-      : editingItem && typeof editingItem === "object"
+    editingItem && typeof editingItem === "object"
       ? editingItem
       : (prefillItem && typeof prefillItem === "object"
         ? prefillItem
@@ -298,8 +342,7 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
 
 optionGroups.forEach((group) => {
   const type = runtime.getOptionGroupUiType(group);
-  const minSelect = Math.max(0, Number(group?.min_select ?? 0));
-  const isEditingSeed = !!seedItem;
+  const minSelect = Math.max(group.is_required ? 1 : 0, Number(group.min_select) || 0);
 
   const stateEntry = {
     type,
@@ -308,28 +351,25 @@ optionGroups.forEach((group) => {
     qtyById: new Map(),
     // NEW: Варианты для каждого item (itemId -> { variant_group_id, variant_value_index, label, price_diff })
     variantByItemId: new Map(),
-    minSelect: group.min_select ?? 0,
+    minSelect,
     maxSelect: group.max_select ?? null,
   };
 
   if (type === "single") {
-    const preselected = (seedItem?.option_item_ids || []).find((id) =>
-      group.items.some((item) => Number(item.id) === Number(id))
-    );
+    const preselected = group.items.find(item => editOptionIds.has(Number(item.id)))?.id;
 
     const required = !!group.is_required; // NEW
-    const fallback = required ? (group.items[0]?.id ?? null) : null;
+    const fallback = required ? (group.items.find(item => item.effective_default_selected)?.id ?? group.items[0]?.id) : null;
 
     stateEntry.selectedId = preselected || fallback || null;
   } else if (type === "multiple_group") {
     group.items.forEach((item) => {
       if (editOptionIds.has(Number(item.id))) stateEntry.selectedIds.add(Number(item.id));
     });
-    if (!isEditingSeed && stateEntry.selectedIds.size === 0 && minSelect > 0) {
-      const toSelect = Math.min(minSelect, group.items.length);
-      for (let i = 0; i < toSelect; i += 1) {
-        const id = Number(group.items[i]?.id);
-        if (Number.isFinite(id) && id > 0) stateEntry.selectedIds.add(id);
+    if (stateEntry.selectedIds.size < minSelect) {
+      for (const item of group.items) {
+        if (stateEntry.selectedIds.size >= minSelect) break;
+        stateEntry.selectedIds.add(Number(item.id));
       }
     }
   } else if (type === "multiple_item") {
@@ -341,12 +381,11 @@ optionGroups.forEach((group) => {
       const q = savedQty > 0 ? savedQty : 0;
       if (q > 0) stateEntry.qtyById.set(id, q);
     });
-    if (!isEditingSeed && stateEntry.qtyById.size === 0 && minSelect > 0) {
-      const toSelect = Math.min(minSelect, group.items.length);
-      for (let i = 0; i < toSelect; i += 1) {
-        const item = group.items[i];
+    if (stateEntry.qtyById.size < minSelect) {
+      for (const item of group.items) {
+        if (stateEntry.qtyById.size >= minSelect) break;
         const id = Number(item?.id);
-        if (!Number.isFinite(id) || id <= 0) continue;
+        if (!Number.isFinite(id) || id <= 0 || stateEntry.qtyById.has(id)) continue;
         const itemMin = Number(item?.qty_min ?? 0);
         const q = itemMin > 0 ? itemMin : 1;
         stateEntry.qtyById.set(id, q);
@@ -357,7 +396,7 @@ optionGroups.forEach((group) => {
   // Восстанавливаем варианты из корзины для всех items
   group.items.forEach((item) => {
     const itemId = Number(item.id);
-    const savedVariant = editOptionVariants.get(itemId);
+    const savedVariant = group.is_packaging ? null : editOptionVariants.get(itemId);
     if (savedVariant) {
       stateEntry.variantByItemId.set(itemId, savedVariant);
     }
@@ -446,7 +485,9 @@ optionGroups.forEach((group) => {
   // 3) округляем скидку до 2 знаков
   const calculateProductDiscountAmount = runtime.calculateProductDiscountAmount;
 
+  let refreshPackagingUi = () => {};
   let updateActionText = () => {
+    refreshPackagingUi();
     if (!actionBtnRef) return;
     if (isReadOnlyView) {
       actionBtnRef.textContent = '\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c';
@@ -1096,7 +1137,7 @@ optionGroups.forEach((group) => {
     refreshVariantAvailabilityUi();
   };
 
-  const { wrap, actionBtn, basePriceEl, refreshVariantAvailability, refreshNutritionCard, heroMedia } = runtime.buildProductDetailsContent(
+  const { wrap, actionBtn, basePriceEl, refreshVariantAvailability, refreshNutritionCard, refreshPackaging, heroMedia } = runtime.buildProductDetailsContent(
     product,
     optionGroups,
     selectionState,
@@ -1125,9 +1166,12 @@ optionGroups.forEach((group) => {
       onQtyPlus,
       setDefaultVariantForOptionItem,
       guardDraftMutation,
+      getQuantity: () => qty,
+      groupPackaging: isAdminOrderMode,
     }
   );
 
+  refreshPackagingUi = refreshPackaging;
   actionBtnRef = actionBtn;
   basePriceElRef = basePriceEl;
   heroMediaRef = heroMedia || null;
@@ -1413,6 +1457,17 @@ optionGroups.forEach((group) => {
       return;
     }
     if (!available) return;
+    const missingRequiredGroup = optionGroups.find(group => {
+      const selection = selectionState.get(group.id);
+      if (!selection?.minSelect) return false;
+      if (selection.type === "single") return !selection.selectedId;
+      const count = selection.type === "multiple_group" ? selection.selectedIds.size : selection.qtyById.size;
+      return count < selection.minSelect;
+    });
+    if (missingRequiredGroup) {
+      runtime.showToast(`Выберите обязательные опции: ${missingRequiredGroup.title}`);
+      return;
+    }
     const previousCartSnapshot = runtime.cloneCartState(runtime.state.cart);
     const wasEmpty = runtime.cartCountTotal() === 0;
     const selectedItems = runtime.collectSelectedOptionItems(optionGroups, selectionState);
@@ -1568,6 +1623,8 @@ optionGroups.forEach((group) => {
       if (sameItem && sameItem.key !== editingItem.key) {
         // merge: прибавляем qty текущей редактируемой строки в найденную
         sameItem.qty = Number(sameItem.qty || 0) + safeQty;
+        sameItem.option_item_ids = optionItemIds;
+        sameItem.option_items = selectedItems;
         sameItem.ingredients = ingredientQuantities; // Обновляем ингредиенты с названиями
         sameItem.ingredient_price_diff = ingredientsPriceDiff || 0;
         sameItem.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
@@ -1607,6 +1664,8 @@ optionGroups.forEach((group) => {
       const existing = runtime.getCartItemByKey(nextKey);
       if (existing) {
         existing.qty = Number(existing.qty || 0) + safeQty;
+        existing.option_item_ids = optionItemIds;
+        existing.option_items = selectedItems;
         existing.ingredients = ingredientQuantities; // Уже содержит названия и единицы
         existing.ingredient_price_diff = ingredientsPriceDiff || 0;
         existing.variant_group_id = hasVariantSelection ? selectedVariantGroupId : null;
@@ -1761,18 +1820,6 @@ optionGroups.forEach((group) => {
     product,
     stockSelectionMode: container.dataset.stockSelectionMode || "auto",
     refreshAvailability: refreshVariantAvailability,
-    refreshCatalogProduct(nextProduct) {
-      const items = runtime.collectSelectedOptionItems(optionGroups, selectionState);
-      return renderProductDetailsInto(container, nextProduct, {
-        onBack, cartKey, readOnly, favoriteButton, mode, onSave, cartContext, configurationOnly, giftQuantity, catalogRefresh: true,
-        prefillItem: {
-          product_id: product.id, qty,
-          variant_group_id: variantState.groupId, variant_value_index: variantState.selectedIndex,
-          ingredients: buildCurrentIngredientQuantities(),
-          option_item_ids: items.map(item => Number(item.id)), option_items: items,
-        },
-      });
-    },
   };
   if (!container.dataset.stockSelectionMode) container.dataset.stockSelectionMode = "auto";
   if (container.dataset.stockSelectionBound !== "1") {

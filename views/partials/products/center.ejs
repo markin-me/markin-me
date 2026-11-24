@@ -173,15 +173,8 @@
 
       <div class="content-view" data-view-content="products">
         <div class="product-list-header" id="productListHeader" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span>Активен</span>
-          <span>Видимость</span>
-          <span>Учёт и списание</span>
-          <span>Остаток</span>
-          <span>Себестоимость</span>
-          <span>Цена</span>
-          <span></span>
+          <span></span><span>Товар</span><span>Учёт и списание</span><span>Остаток</span>
+          <span>Цена</span><span>Старая цена</span><span>Себест.</span><span>Маржа, %</span><span>Скидка, %</span><span></span>
         </div>
         <div class="orders-list" id="productsList"></div>
         <div class="empty-hint" id="productsEmptyHint">Пока нет товаров...</div>
@@ -516,6 +509,18 @@
             <button class="btn btn-icon product-composition-norm-recalc hidden" type="button" data-composition-norm-recalc="pe_base_qty" aria-label="Пересчитать состав" title="Пересчитать состав" aria-expanded="false" aria-controls="peCompositionNormMenu">
               <i class="fas fa-sync-alt" aria-hidden="true"></i>
             </button>
+          </div>
+          <div class="field-wrap product-composition-cost-field">
+            <label class="field-label" for="pe_norm_cost">Себест.</label>
+            <input class="control" id="pe_norm_cost" type="text" readonly aria-label="Себестоимость за норму" />
+          </div>
+          <div class="field-wrap product-composition-margin-field">
+            <label class="field-label" for="pe_norm_margin">Маржа, %</label>
+            <input class="control" id="pe_norm_margin" type="text" inputmode="decimal" autocomplete="off" />
+          </div>
+          <div class="field-wrap product-composition-price-field">
+            <label class="field-label" for="pe_norm_price">Цена за норму</label>
+            <input class="control" id="pe_norm_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
           </div>
           <div class="form-row-pcs-converter hidden" id="pePcsToUnitWrap">
             <div class="field-wrap product-composition-norm-field">

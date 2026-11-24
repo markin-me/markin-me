@@ -268,6 +268,13 @@ const comboBlockPreviewResolvedCache = new Map();
 const productDetailsBatchInflight = new Map();
 const productPassportBatchInflight = new Map();
 const productPassportInflightById = new Map();
+const productPassportRequestVersions = new Map();
+const relatedProductData = new Map();
+let relatedProductScope = "";
+let storefrontPassportWarmTask = null;
+const storefrontPassportWarmIds = new Set();
+let storefrontPassportWarmScope = "";
+let storefrontPassportWarmRevision = null;
 let productDetailsPrefetchTimer = null;
 let comboDetailsPrefetchTimer = null;
 const COMBO_DETAILS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -292,6 +299,8 @@ window.addEventListener('shop:kso-catalog-invalidated', event => {
 
 window.addEventListener("shop:storefront-catalog-changed", event => {
   const { ids, reset } = event.detail;
+  if (reset) relatedProductData.clear();
+  else ids.forEach(id => relatedProductData.delete(Number(id)));
   const changed = new Set(ids);
   const relevant = new Set([...(collectVisibleProductIdsForStock() || []), ...state.productPassports.keys()]);
   if (openProductCtx?.productId) relevant.add(Number(openProductCtx.productId));
@@ -310,6 +319,7 @@ window.addEventListener("shop:storefront-catalog-changed", event => {
   }
   void (async () => {
     await preloadProductPassportsBatch(refresh, { details: true, force: true });
+    if (refresh.length) await warmupCartProducts();
     const refreshed = new Set(refresh);
     for (const [categoryId, products] of state.productsByCategory) {
       state.productsByCategory.set(categoryId, products.flatMap(product => {
@@ -325,7 +335,7 @@ window.addEventListener("shop:storefront-catalog-changed", event => {
     const ctx = openProductCtx;
     if (ctx?.container?.isConnected && refreshed.has(Number(ctx.productId))) {
       const product = state.productCache.get(Number(ctx.productId));
-      if (product) await ctx.refreshCatalogProduct?.(product);
+      if (product) await ctx.refreshAvailability?.({ forceNow: true, showToastOnOut: false });
       else {
         showToast("Товар больше недоступен");
         ctx.onBack?.();
@@ -354,6 +364,8 @@ function productPassportHasDetails(productId) {
   return Boolean(
     passport &&
     passport.product &&
+    (isKsoCatalogCache || (hasScopedProductOptionGroups(passport) &&
+      (passport.dependency_ids || []).every(id => relatedProductData.has(Number(id))))) &&
     (!String(passport.product.client_composition || "").trim() || passport.nestedIngredients != null) &&
     Array.isArray(passport.ingredients) &&
     Array.isArray(passport.variants) &&
@@ -365,15 +377,37 @@ function productPassportHasDetails(productId) {
   );
 }
 
+function hasScopedProductOptionGroups(passport) {
+  return passport?.dependencies_included === true && passport?.component_assignments_included === true && passport.packaging_assignments_included === true && Array.isArray(passport?.optionGroups) && passport.optionGroups.every(group =>
+    typeof group.is_packaging === "boolean" && typeof group.is_component_default === "boolean" &&
+    (group.is_component === null || typeof group.is_component === "boolean") &&
+    (!group.is_packaging || (typeof group.hide_packaging_price === "boolean" && group.packaging_item_count === group.items?.length)) &&
+    (group.is_packaging || Number(group.is_component ?? group.is_component_default) === 1 ||
+      group.items?.every(item => Array.isArray(item.packaging_groups) && item.packaging_product)) &&
+    Array.isArray(group.items) && group.items.every(item => typeof item.is_locked === "boolean")
+  );
+}
+
 function applyProductPassportPayload(productId, payload) {
   const pid = Number(productId || 0);
   if (!Number.isFinite(pid) || pid <= 0 || !payload || typeof payload !== "object") return;
+  const currentScope = storefrontCatalogScope();
+  if (relatedProductScope !== currentScope) {
+    relatedProductData.clear();
+    relatedProductScope = currentScope;
+  }
+  for (const [id, product] of Object.entries(payload.relatedProducts || {})) {
+    relatedProductData.set(Number(id), product);
+    if (typeof mergeProductIntoCache === "function") mergeProductIntoCache(product, "passport_dependency");
+    else state.productCache.set(Number(id), product);
+  }
   productDetailsConfigCache.delete(pid);
   defaultPriceCache.delete(pid);
   if (Array.isArray(payload.unitConversions)) state.unitConversions = payload.unitConversions;
 
   const product = payload.product && typeof payload.product === "object" ? payload.product : null;
   if (product) {
+    relatedProductData.set(pid, product);
     if (!Array.isArray(product.photos)) product.photos = safePhotos(product);
     if (typeof cacheStockFromProductPayload === "function") {
       cacheStockFromProductPayload(product, "product_passport_batch");
@@ -386,7 +420,9 @@ function applyProductPassportPayload(productId, payload) {
     }
   }
 
-  const patch = { product };
+  const patch = { product, packaging_assignments_included: payload.packaging_assignments_included,
+    component_assignments_included: payload.component_assignments_included,
+    dependencies_included: payload.dependencies_included, dependency_ids: payload.dependency_ids };
   if (Array.isArray(payload.ingredients)) patch.ingredients = payload.ingredients;
   if (payload.nestedIngredients && typeof payload.nestedIngredients === "object") patch.nestedIngredients = payload.nestedIngredients;
   if (Array.isArray(payload.variants)) patch.variants = normalizeComboVariantList(payload.variants);
@@ -430,6 +466,9 @@ function applyProductPassportPayload(productId, payload) {
               id: groupId,
               title: str(group?.title || ""),
               selection_type: group?.selection_type || "single",
+              is_packaging: Number(group?.is_packaging) === 1,
+              hide_packaging_price: Number(group?.hide_packaging_price) === 1,
+              is_component_default: Number(group?.is_component_default) === 1,
               min_select: group?.min_select ?? 0,
               max_select: group?.max_select ?? null,
               is_required: Boolean(group?.is_required),
@@ -469,7 +508,8 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
     });
   if (!ids.length) return;
 
-  const existingTasks = Array.from(new Set(ids.map((id) => productPassportInflightById.get(id)).filter(Boolean)));
+  const existingTasks = Array.from(new Set(ids.map((id) => productPassportInflightById.get(id))
+    .filter(task => task && (opts.background || (!task.background && (ids.length !== 1 || task.productCount === 1))))));
   if (existingTasks.length) await Promise.all(existingTasks);
   ids = ids.filter((id) => {
     if (opts.force) return true;
@@ -479,32 +519,52 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
   });
   if (!ids.length) return;
 
-  const batchKey = productDetailsBatchKey(ids);
+  const batchKey = (opts.background ? "background:" : "foreground:") + productDetailsBatchKey(ids);
   if (batchKey && productPassportBatchInflight.has(batchKey)) {
     await productPassportBatchInflight.get(batchKey);
     return;
   }
 
+  const requestVersions = new Map(ids.map(id => {
+    const version = (productPassportRequestVersions.get(id) || 0) + 1;
+    productPassportRequestVersions.set(id, version);
+    return [id, version];
+  }));
   const task = (async () => {
     if (!isKsoCatalogCache) syncStorefrontCatalogScope();
     const scope = storefrontCatalogScope();
+    if (relatedProductScope !== scope) {
+      relatedProductData.clear();
+      relatedProductScope = scope;
+    }
     let generation;
     do {
       generation = storefrontCatalogGeneration;
       const revision = storefrontCatalogRevision;
       const cached = !isKsoCatalogCache && !opts.force
         ? await storefrontPassportStorage(ids, null, scope, revision).catch(() => ({})) : {};
-      const missing = ids.filter(id => !cached[id]);
+      if (generation !== storefrontCatalogGeneration) continue;
+      for (const id of ids) {
+        if (cached[id] && productPassportRequestVersions.get(id) === requestVersions.get(id)) {
+          applyProductPassportPayload(id, cached[id]);
+        }
+      }
+      const missing = ids.filter(id => opts.force || !productPassportHasDetails(id));
       const chunks = Array.from({ length: Math.ceil(missing.length / 100) }, (_, index) => missing.slice(index * 100, (index + 1) * 100));
       const endpoint = isKsoCatalogCache ? '/api/public/products/batch/passports' : '/api/public/products/batch/full-passports';
       const responses = await Promise.all(chunks.map(chunk => apiJson(endpoint, {
-        method: 'POST', body: { ids: chunk, fresh: !isKsoCatalogCache && Boolean(opts.force) },
+        method: 'POST', body: { ids: chunk, fresh: !isKsoCatalogCache && Boolean(opts.force),
+          known_related_ids: isKsoCatalogCache ? [] : [...relatedProductData.keys()] },
       })));
       if (!isKsoCatalogCache && scope !== storefrontCatalogScope()) return;
       if (generation !== storefrontCatalogGeneration) continue;
       const data = Object.assign({}, ...responses.map(response => response.data || {}));
       for (const id of ids) {
-        const payload = data[id] || cached[id];
+        if (productPassportRequestVersions.get(id) !== requestVersions.get(id)) {
+          delete data[id];
+          continue;
+        }
+        const payload = data[id];
         if (payload) applyProductPassportPayload(id, payload);
         else if (!isKsoCatalogCache && opts.force) {
           state.productPassports.delete(id);
@@ -512,7 +572,14 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
         }
       }
       if (!isKsoCatalogCache && missing.length) {
-        await storefrontPassportStorage(missing, data, scope, revision).catch(error => console.warn("Could not persist storefront passports", error));
+        for (const payload of Object.values(data)) {
+          payload.relatedProducts = Object.fromEntries((payload.dependency_ids || [])
+            .filter(id => relatedProductData.has(Number(id)))
+            .map(id => [id, relatedProductData.get(Number(id))]));
+        }
+        const persistIds = missing.filter(id => productPassportRequestVersions.get(id) === requestVersions.get(id));
+        if (persistIds.length) void storefrontPassportStorage(persistIds, data, scope, revision)
+          .catch(error => console.warn("Could not persist storefront passports", error));
       }
     } while (generation !== storefrontCatalogGeneration);
   })().finally(() => {
@@ -523,11 +590,66 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
   });
 
   if (batchKey) productPassportBatchInflight.set(batchKey, task);
+  task.background = Boolean(opts.background);
+  task.productCount = ids.length;
   ids.forEach((id) => productPassportInflightById.set(id, task));
   await task;
+  if (!isKsoCatalogCache) {
+    const componentIds = normalizeProductDetailIds(ids.flatMap(id => (getProductPassport(id)?.optionGroups || [])
+      .filter(group => !group.is_packaging && Number(group.is_component ?? group.is_component_default) === 1)
+      .flatMap(group => (group.items || []).map(item => item.target_product_id || item.product_id))))
+      .filter(id => !productPassportHasDetails(id));
+    if (componentIds.length) void warmStorefrontCatalogPassports(componentIds)
+      .catch(error => console.error("Component passport warmup failed", error));
+  }
 }
 
 window.preloadProductPassportsBatch = preloadProductPassportsBatch;
+
+function warmStorefrontCatalogPassports(priorityIds = []) {
+  if (isKsoCatalogCache) return Promise.resolve();
+  const scope = storefrontCatalogScope();
+  if (storefrontPassportWarmScope !== scope) {
+    storefrontPassportWarmIds.clear();
+    storefrontPassportWarmRevision = null;
+    storefrontPassportWarmScope = scope;
+  }
+  // Put the current category ahead of the remaining catalog without another queue.
+  const pending = [...storefrontPassportWarmIds];
+  storefrontPassportWarmIds.clear();
+  [...priorityIds, ...pending].forEach(id => {
+    if (Number(id) > 0 && !productPassportHasDetails(id)) storefrontPassportWarmIds.add(Number(id));
+  });
+  if (storefrontPassportWarmTask) return storefrontPassportWarmTask;
+  const task = (async () => {
+    if (storefrontPassportWarmRevision !== storefrontCatalogRevision) {
+      const manifest = await apiJson('/api/public/products/passports-manifest');
+      if (scope !== storefrontCatalogScope()) return;
+      storefrontPassportWarmRevision = storefrontCatalogRevision;
+      for (const product of manifest.products || []) {
+        if (!productPassportHasDetails(product.id)) storefrontPassportWarmIds.add(Number(product.id));
+      }
+    }
+    while (storefrontPassportWarmIds.size && scope === storefrontCatalogScope()) {
+      const batch = [...storefrontPassportWarmIds].slice(0, 6);
+      batch.forEach(id => storefrontPassportWarmIds.delete(id));
+      try {
+        await preloadProductPassportsBatch(batch, { details: true, background: true });
+      } catch (error) {
+        batch.forEach(id => storefrontPassportWarmIds.add(id));
+        throw error;
+      }
+    }
+  })().finally(() => {
+    if (storefrontPassportWarmTask === task) {
+      storefrontPassportWarmTask = null;
+      if (scope !== storefrontCatalogScope()) void warmStorefrontCatalogPassports()
+        .catch(error => console.error("Storefront passport warmup failed:", error));
+    }
+  });
+  storefrontPassportWarmTask = task;
+  return task;
+}
 
 async function preloadProductsByIdsToCache(productIds) {
   const ids = normalizeProductDetailIds(productIds).filter((id) => !state.productCache.has(id));
@@ -1209,6 +1331,10 @@ async function resolveProductOptionGroups(productId) {
     groups.push({
       id: Number(assignment.group_id),
       title: str(assignment.title || details?.group?.title || ""),
+      is_packaging: Number(details?.group?.is_packaging) === 1,
+      hide_packaging_price: Number(details?.group?.hide_packaging_price) === 1,
+      is_component_default: Number(details?.group?.is_component_default) === 1,
+      is_component: assignment.is_component ?? null,
       selection_type: groupSelectionType,
       min_select: groupMinSelect,
       max_select: groupMaxSelect,
@@ -1293,12 +1419,14 @@ async function resolveProductDetailsConfig(productId) {
     return { optionGroups: [], ingredients: [], variants: [] };
   }
   const cached = productDetailsConfigCache.get(pid);
-  if (cached && cached.promise) return cached.promise;
+  const storefront = document.body.matches(".page-shop:not(.page-kso)");
   const passport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
+  if (cached?.promise && (!storefront || hasScopedProductOptionGroups(passport))) return cached.promise;
   if (
     Array.isArray(passport?.optionGroups) &&
     Array.isArray(passport?.ingredients) &&
-    Array.isArray(passport?.variants)
+    Array.isArray(passport?.variants) &&
+    (!storefront || hasScopedProductOptionGroups(passport))
   ) {
     const details = {
       optionGroups: normalizeProductOptionGroups(passport.optionGroups),
@@ -1308,12 +1436,21 @@ async function resolveProductDetailsConfig(productId) {
     productDetailsConfigCache.set(pid, { promise: Promise.resolve(details), ts: Date.now() });
     return details;
   }
-  await preloadProductPassportsBatch([pid], { details: true }).catch(() => {});
+  if (storefront) {
+    const force = Array.isArray(passport?.optionGroups) && !hasScopedProductOptionGroups(passport);
+    await preloadProductPassportsBatch([pid], { details: true, force });
+    if (!force && !hasScopedProductOptionGroups(getProductPassport(pid))) {
+      await preloadProductPassportsBatch([pid], { details: true, force: true });
+    }
+  } else {
+    await preloadProductPassportsBatch([pid], { details: true }).catch(() => {});
+  }
   const warmedPassport = typeof getProductPassport === "function" ? getProductPassport(pid) : null;
   if (
     Array.isArray(warmedPassport?.optionGroups) &&
     Array.isArray(warmedPassport?.ingredients) &&
-    Array.isArray(warmedPassport?.variants)
+    Array.isArray(warmedPassport?.variants) &&
+    (!storefront || hasScopedProductOptionGroups(warmedPassport))
   ) {
     const details = {
       optionGroups: normalizeProductOptionGroups(warmedPassport.optionGroups),
@@ -1323,6 +1460,7 @@ async function resolveProductDetailsConfig(productId) {
     productDetailsConfigCache.set(pid, { promise: Promise.resolve(details), ts: Date.now() });
     return details;
   }
+  if (storefront) throw new Error("PRODUCT_OPTION_CONFIGURATION_UNAVAILABLE");
 
   const promise = (async () => {
     const [optionGroups, ingredients, variants] = await Promise.all([
@@ -1479,8 +1617,7 @@ async function warmInitialCatalogPayload(opts = {}) {
   if (!productIds.length && !comboIds.length) return;
 
   const productTask = (async () => {
-    if (!productIds.length) return;
-    await preloadProductDetailsConfigBatch(productIds);
+    await warmStorefrontCatalogPassports(productIds);
   })();
 
   const comboTask = (async () => {
@@ -1746,6 +1883,10 @@ window.applyEffectiveStockConfigToOpenProduct = function applyEffectiveStockConf
   const pid = Number(productId || 0);
   if (!ctx || Number(ctx.productId || 0) !== pid || !ctx.container) return false;
   if (ctx.readOnly) return false;
+  if (!isKsoCatalogCache) {
+    void ctx.refreshAvailability?.({ forceNow: true, showToastOnOut: false });
+    return false;
+  }
   if (ctx.stockSelectionMode === "manual" || ctx.container.dataset.stockSelectionMode === "manual") {
     void ctx.refreshAvailability?.({ forceNow: true, showToastOnOut: false });
     return false;
@@ -1776,10 +1917,17 @@ window.applyEffectiveStockConfigToOpenProduct = function applyEffectiveStockConf
 
 async function mountProductDetails(options = {}) {
   const productId = Number(options.productId || options.product?.id || 0);
+  if (document.body.matches(".page-shop:not(.page-kso)") && productId > 0) {
+    await preloadProductPassportsBatch([productId], { details: true });
+    if (!productPassportHasDetails(productId)) throw new Error('PRODUCT_PASSPORT_INCOMPLETE');
+    options = { ...options, product: getProductPassport(productId).product };
+  }
   let initialValue = options.initialValue || options.prefillItem || null;
   const isNewCatalogSelection = !options.cartKey && !initialValue && options.mode !== 'readonly' && options.readOnly !== true;
   if (isNewCatalogSelection && productId > 0 && typeof window.ensureFreshEffectiveStockConfig === 'function') {
-    initialValue = await window.ensureFreshEffectiveStockConfig(productId).catch(() => null);
+    initialValue = document.body.matches(".page-shop:not(.page-kso)")
+      ? getProductPassport(productId).defaultConfig
+      : await window.ensureFreshEffectiveStockConfig(productId).catch(() => null);
     if (initialValue) {
       const details = await resolveProductDetailsConfig(productId);
       const availableIds = new Set((details.optionGroups || []).flatMap(group =>
@@ -15198,7 +15346,8 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
 
   const autoAddGiftBenefitCards = new Set();
   function renderAutoAddGiftBenefitCard(item) {
-    const card = renderCheckoutBenefitGiftCard({ ...item, action_mode: 'receive', reward_id: item.rule_id, is_receivable: true }, {
+    const card = window.AdminBenefitsModal.renderAutoAddGiftCard(item, {
+      money,
       onOpen: () => {
         const current = getAutoAddGiftBenefits().find(value => value.rule_id === item.rule_id && value.group_id === item.group_id);
         if (!current) return;
@@ -15206,7 +15355,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
           giftQuantity: getAutoAddGiftQuantityContext(current.product_id, current.group_id),
           onBack: () => openCartBenefitsInitialSection('gifts') });
       },
-      onReceive: () => {
+      onAction: () => {
         const current = getAutoAddGiftBenefits().find(value => value.rule_id === item.rule_id && value.group_id === item.group_id);
         if (current?.auth_required) {
           openLoginSheet({ onSuccess: () => {
@@ -15220,43 +15369,10 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         syncAutoAddGiftBenefitCards();
       },
     });
-    card.classList.add('shop-auto-add-gift-card');
-    card.dataset.autoAddRule = item.rule_id;
-    card.dataset.autoAddGroup = item.group_id;
-    const details = document.createElement('div');
-    details.className = 'shop-auto-add-gift-details';
-    details.innerHTML = `<div>${escapeHtml(item.campaign_title || '')}</div>
-      <div class="shop-auto-add-gift-progress-label"><span data-auto-gift-label></span><span data-auto-gift-value></span></div>
-      <div class="shop-checkout-benefit-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="shop-checkout-benefit-progress-fill"></div></div>`;
-    card.insertBefore(details, card.querySelector('button'));
-    const update = value => {
-      const title = card.querySelector('.shop-checkout-benefit-gift-title');
-      title.textContent = `${Number(value?.available_qty || 0)} \u00d7 ${item.title}`;
-      const percent = value?.finished ? 100 : Math.round(Number(value?.progress_ratio || 0) * 100);
-      card.querySelector('.shop-checkout-benefit-progress-fill').style.width = `${percent}%`;
-      card.querySelector('[role="progressbar"]').setAttribute('aria-valuenow', percent);
-      card.querySelector('[data-auto-gift-label]').textContent = value?.amount_step > 0
-        ? '\u0417\u0430 \u043a\u0430\u0436\u0434\u044b\u0435' : '\u041f\u0435\u0440\u0432\u044b\u0439 \u043f\u043e\u0434\u0430\u0440\u043e\u043a';
-      const target = value?.progress_target || value?.amount_step || 0;
-      const progress = value?.finished ? target : Math.min(target, value?.progress_value || 0);
-      card.querySelector('[data-auto-gift-value]').textContent = target > 0 ? `${progress} / ${money(target)}` : '';
-      if (value?.max_claim_qty != null && Number(value.in_cart || 0) >= Number(value.max_claim_qty)) {
-        card.querySelector('[data-auto-gift-label]').textContent = `Лимит на заказ достигнут — максимум ${value.max_claim_qty} шт.`;
-        card.querySelector('[data-auto-gift-value]').textContent = '';
-      }
-      const button = card.querySelector('button');
-      button.disabled = !value?.auth_required && !(value?.available_qty > 0);
-      button.classList.toggle('is-ready', !button.disabled);
-      button.textContent = value?.auth_required ? '\u041d\u0443\u0436\u043d\u0430 \u0430\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u044f'
-        : value?.available_qty > 0 ? '\u0417\u0430\u0431\u0440\u0430\u0442\u044c'
-        : value?.in_cart > 0 ? (value.finished ? '\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u043e' : '\u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e')
-        : value?.finished ? '\u041f\u043e\u0434\u0430\u0440\u043a\u0438 \u0437\u0430\u043a\u043e\u043d\u0447\u0438\u043b\u0438\u0441\u044c' : '\u0415\u0449\u0451 \u043d\u0435 \u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e';
-    };
-    update(item);
-    card.updateAutoGift = update;
     autoAddGiftBenefitCards.add(card);
     return card;
   }
+
   function syncAutoAddGiftBenefitCards() {
     if (!autoAddGiftBenefitCards.size) return;
     const items = getAutoAddGiftBenefits();

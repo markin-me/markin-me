@@ -263,6 +263,93 @@ function createStockAvailabilityContext({ db, tenantId, storeId }) {
   };
 }
 
+async function resolveOrderPackaging(db, tenantId, items) {
+  const groupsByProduct = new Map();
+
+  async function resolveOptions(productId, selection, includePackaging, depth = 0) {
+    if (!productId || depth > 4) return [];
+    if (!groupsByProduct.has(productId)) {
+      const [rows] = await db.query(
+        `SELECT oi.id, oi.group_id, oi.target_product_id, oi.qty_min, oi.default_variant_group_id,
+                oi.default_variant_value_index,
+                CASE WHEN g.is_packaging=1 THEN oi.configuration_json ELSE COALESCE(s.configuration_json, oi.configuration_json) END AS configuration_json,
+                vg.unit_id, vg.values,
+                target.name AS target_name,
+                g.is_packaging, COALESCE(a.is_component, g.is_component_default) AS is_component_default
+         FROM prod_option_assignments a
+         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id AND g.is_active=1
+         JOIN prod_option_items oi ON oi.tenant_id=g.tenant_id AND oi.group_id=g.id AND oi.is_active=1
+         LEFT JOIN prod_option_item_product_settings s ON s.tenant_id=oi.tenant_id AND s.group_id=oi.group_id AND s.option_item_id=oi.id AND s.product_id=a.assign_id
+         LEFT JOIN prod_products target ON target.tenant_id=oi.tenant_id AND target.id=oi.target_product_id
+         LEFT JOIN prod_variant_groups vg ON vg.tenant_id=oi.tenant_id AND vg.id=oi.default_variant_group_id
+         WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.is_active=1
+         ORDER BY a.created_at DESC, a.id DESC`,
+        [tenantId, productId]
+      );
+      const packagingGroup = rows.find(row => Number(row.is_packaging) === 1);
+      groupsByProduct.set(productId, new Map(rows.filter(row => Number(row.is_packaging) !== 1 ||
+        row.group_id === packagingGroup?.group_id).map(row => [Number(row.id), row])));
+    }
+    const catalog = groupsByProduct.get(productId);
+    const selected = selection.options || selection.option_items || [];
+    const optionsById = new Map(selected.map((option, index) => [
+      Number(option.id || option.option_item_id) || -(index + 1), option,
+    ]));
+    for (const id of selection.option_item_ids || []) {
+      if (!optionsById.has(Number(id))) optionsById.set(Number(id), { id, qty: 1 });
+    }
+    const resolved = [];
+    for (const [id, option] of optionsById) {
+      const row = catalog.get(id);
+      if (Number(row?.is_packaging) === 1) continue;
+      const targetId = Number(row?.target_product_id || option.target_product_id || option.product_id || 0);
+      const qty = toRequestedQty(option.qty ?? option.quantity, 1);
+      resolved.push({ ...option, qty });
+      if (!targetId || qty <= 0 || !row) continue;
+      const fixed = typeof row.configuration_json === 'string' ? JSON.parse(row.configuration_json) : row.configuration_json;
+      const nested = await resolveOptions(targetId, fixed?.option_items ? fixed : option,
+        Number(row.is_component_default) !== 1, depth + 1);
+      nested.forEach(entry => resolved.push({ ...entry, qty: entry.qty * qty, packaging_for_option_id: id }));
+    }
+    if (includePackaging) {
+      for (const row of catalog.values()) {
+        if (Number(row.is_packaging) !== 1) continue;
+        const values = typeof row.values === 'string' ? JSON.parse(row.values) : row.values;
+        const fixed = typeof row.configuration_json === 'string' ? JSON.parse(row.configuration_json) : row.configuration_json;
+        const variant = values?.[row.default_variant_value_index];
+        resolved.push({
+          id: row.id,
+          is_packaging: true,
+          title: row.target_name,
+          target_product_id: row.target_product_id,
+          qty: Math.max(1, Number(row.qty_min || 1)),
+          variant_group_id: row.default_variant_group_id,
+          variant_value: typeof variant === 'object' ? variant?.value ?? variant?.label : variant,
+          unit_id: row.unit_id,
+          ingredients: fixed?.ingredients,
+        });
+      }
+    }
+    return resolved;
+  }
+
+  const resolvedItems = [];
+  for (const item of items) {
+    if (!item) continue;
+    if (item.type === 'combo') {
+      resolvedItems.push(item);
+      for (const selection of item.selections || []) {
+        const options = await resolveOptions(Number(selection.product_id), selection, true);
+        if (options.length) resolvedItems.push({ qty: item.qty ?? item.quantity, options });
+      }
+    } else {
+      const options = await resolveOptions(Number(item.product_id), item, true);
+      resolvedItems.push({ ...item, options, option_item_ids: [] });
+    }
+  }
+  return resolvedItems;
+}
+
 async function buildDeductions({ db, tenantId, items, context = null }) {
   const productIdsSet = new Set();
   const variantGroupIdsSet = new Set();
@@ -271,7 +358,7 @@ async function buildDeductions({ db, tenantId, items, context = null }) {
   const optionItemIdsSet = new Set();
   const parentProductIdsNeedingDefaultIngredientsSet = new Set();
 
-  const normalizedItems = Array.isArray(items) ? items : [];
+  const normalizedItems = await resolveOrderPackaging(db, tenantId, Array.isArray(items) ? items : []);
 
   for (const item of normalizedItems) {
     if (!item) continue;
@@ -978,7 +1065,50 @@ async function applyStockDeductionForOrderItems({
   };
 }
 
+function collectOrderPackagingItems(item) {
+  const grouped = new Map();
+  const add = (packaging, multiplier) => {
+    const qty = Number(packaging.qty ?? packaging.quantity ?? 1) * multiplier;
+    if (!(qty > 0)) return;
+    const key = JSON.stringify([packaging.target_product_id || packaging.product_id || packaging.id, packaging.variant_label || '']);
+    const existing = grouped.get(key);
+    if (existing) existing.qty += qty;
+    else grouped.set(key, { qty, title: packaging.title || packaging.name || '' });
+  };
+  const quantity = Number(item.qty ?? item.quantity ?? 1);
+  for (const option of item.options || item.option_items || []) {
+    if (Number(option.is_packaging) === 1) add(option, quantity);
+    else for (const packaging of option.packaging_items || []) add(packaging, quantity * Number(option.qty ?? option.quantity ?? 1));
+  }
+  return [...grouped.values()];
+}
+
+async function annotateOrderPackaging(db, tenantId, items) {
+  const options = [];
+  const visit = item => {
+    options.push(...(Array.isArray(item.options) ? item.options : item.option_items || []));
+    for (const selection of item.selections || []) visit(selection);
+  };
+  (items || []).forEach(visit);
+  const ids = [...new Set(options.filter(option => option.is_packaging == null)
+    .map(option => Number(option.id || option.option_item_id)).filter(id => id > 0))];
+  if (!ids.length) return;
+  const [rows] = await db.query(
+    `SELECT i.id, g.is_packaging FROM prod_option_items i
+     JOIN prod_option_groups g ON g.tenant_id=i.tenant_id AND g.id=i.group_id
+     WHERE i.tenant_id=? AND i.id IN (?)`, [tenantId, ids]
+  );
+  const flags = new Map(rows.map(row => [Number(row.id), Number(row.is_packaging) === 1]));
+  for (const option of options) {
+    const id = Number(option.id || option.option_item_id);
+    if (option.is_packaging == null && flags.has(id)) option.is_packaging = flags.get(id);
+  }
+}
+
 module.exports = {
+  annotateOrderPackaging,
+  collectOrderPackagingItems,
+  resolveOrderPackaging,
   createStockAvailabilityContext,
   applyStockDeductionForOrderItems,
   buildStockAvailabilityForOrderItems,

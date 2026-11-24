@@ -190,6 +190,7 @@
                   <option value="single">Один</option>
                   <option value="multiple_group">Несколько (лимит группы)</option>
                   <option value="multiple_item">Несколько (лимит на товар)</option>
+                  <option value="packaging">Упаковка</option>
                 </select>
                 <div class="new-order-right-select-wrap product-fulfillment-select" id="optionGroupTypeSelect">
                   <button type="button" class="new-order-right-select-trigger" aria-label="Тип выбора" aria-haspopup="listbox" aria-expanded="false">
@@ -234,6 +235,20 @@
                 <input class="products-bulk-toggle-all-input" type="checkbox" id="optionGroupAllowVariants" />
                 <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
                 <span>Варианты у пунктов</span>
+              </label>
+
+              <label class="auto-add-condition-check" id="optionGroupComponentDefaultWrap"
+                title="Выбранные товары этой группы по умолчанию идут в упаковку блюда. В карточке блюда это правило можно изменить.">
+                <input class="products-bulk-toggle-all-input" type="checkbox" id="optionGroupComponentDefault" />
+                <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+                <span>Считать компонентом</span>
+              </label>
+
+              <label class="auto-add-condition-check hidden" id="optionGroupHidePackagingPriceWrap"
+                title="Цена упаковки не отображается отдельно на витрине. Итог заказа считается по настройкам цены товара.">
+                <input class="products-bulk-toggle-all-input" type="checkbox" id="optionGroupHidePackagingPrice" />
+                <span class="products-bulk-toggle-all-box" aria-hidden="true"></span>
+                <span>Не показывать цену клиенту</span>
               </label>
 
               <label class="auto-add-condition-check" id="optionGroupOutOfStockActionWrap">

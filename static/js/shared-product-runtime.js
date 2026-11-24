@@ -2,6 +2,51 @@
   "use strict";
   const factories = [];
   const instances = new Set();
+  function getAutoAddGiftBenefits({ groups, rules, cart, totals, getProduct, isAvailable, authenticated, money, issuedByGroup = {} }) {
+    const hasBase = cart.some(item => Number(item.qty) > 0 && Number(item.auto_add) !== 1 && Number(item.is_gift_reward) !== 1
+      && (item.type === 'combo' || !rules.some(rule => Number(rule.group?.rule_version) === 1 && Number(rule.product_id) === Number(item.product_id || item.id))));
+    const budget = new Map(groups.map(group => {
+      const reserved = cart.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_group_id) === Number(group.id))
+        .reduce((sum, item) => sum + Math.max(0, Number(item.qty || 0)), 0);
+      return [Number(group.id), group.remaining_qty == null ? Infinity : Math.max(0, Number(group.remaining_qty) + Number(issuedByGroup[Number(group.id)] || 0) - reserved)];
+    }));
+    return rules.filter(rule => Number(rule.group?.rule_version) === 1).map(rule => {
+      const group = rule.group, pid = Number(rule.product_id), gid = Number(group.id);
+      if (Number(group.first_free) !== 1 && !(Number(rule.free_per_amount) > 0)) return null;
+      const product = getProduct(pid) || rule.product;
+      if (!product || (rule.configuration_json ? rule.configuration_available !== true : !isAvailable(product))) return null;
+      const base = Number(group.include_auto_in_total) === 1 ? totals.autoEligibleTotal : totals.nonAutoTotal;
+      const maxAmount = group.max_cart_amount == null ? Infinity : Number(group.max_cart_amount);
+      if (base > maxAmount) return null;
+      const uncapped = { ...rule, current_free_limit: null };
+      const inCart = cart.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_group_id) === gid && Number(item.product_id) === pid)
+        .reduce((sum, item) => sum + Math.max(0, Number(item.qty || 0)), 0);
+      const entitled = hasBase ? Math.min(window.SharedProductRuntime.autoAddFreeQty(uncapped, base), inCart + budget.get(gid)) : 0;
+      const authRequired = Number(group.available_to_guests ?? 1) === 0 && !authenticated;
+      const available = authRequired ? 0 : Math.max(0, entitled - inCart);
+      budget.set(gid, Math.max(0, budget.get(gid) - available));
+      const step = Number(rule.free_per_amount || 0);
+      const minimum = Number(group.min_cart_amount || 0);
+      const next = base < minimum && Number(group.first_free) === 1 ? minimum
+        : Math.max(minimum, step > 0 ? (Math.floor(Math.round(base * 100) / Math.round(step * 100)) + 1) * step : minimum);
+      const limit = Math.min(rule.max_free_qty == null ? Infinity : Number(rule.max_free_qty), inCart + available + budget.get(gid));
+      const finished = entitled >= limit || next > maxAmount || (step <= 0 && entitled > 0);
+      const remaining = finished ? 0 : Math.max(0, next - base);
+      const span = base < Number(group.min_cart_amount || 0) ? next : step;
+      const ratio = finished ? 1 : span > 0 ? Math.max(0, Math.min(1, 1 - remaining / span)) : 0;
+      const conditions = [Number(group.first_free) === 1 ? '\u041f\u0435\u0440\u0432\u0430\u044f \u0448\u0442\u0443\u043a\u0430 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e' : '', step > 0 ? `\u0417\u0430 \u043a\u0430\u0436\u0434\u044b\u0435 ${money(step)} \u2014 1 \u0448\u0442.` : '',
+        group.min_cart_amount != null ? `\u041e\u0442 ${money(group.min_cart_amount)}` : '', group.max_cart_amount != null ? `\u0414\u043e ${money(group.max_cart_amount)}` : '',
+        rule.max_free_qty != null ? `\u041c\u0430\u043a\u0441\u0438\u043c\u0443\u043c ${rule.max_free_qty} \u0448\u0442.` : ''].filter(Boolean).join(' \u00b7 ');
+      return { action_mode: 'auto_add', rule_id: Number(rule.id), group_id: gid, product_id: pid,
+        title: product.name, max_claim_qty: rule.max_free_qty == null ? null : Number(rule.max_free_qty), photo_url: product.photos?.[0] || '', product_count: 1,
+        auth_required: authRequired, finished, amount_step: step, progress_value: step > 0 ? Math.max(0, Math.round((span - remaining) * 100) / 100) : Math.min(base, minimum), progress_target: step > 0 ? span : minimum,
+        products: [{ id: pid, title: product.name }], configuration: typeof rule.configuration_json === 'string' ? JSON.parse(rule.configuration_json) : rule.configuration_json,
+        available_qty: available, entitled, in_cart: inCart,
+        is_receivable: available > 0, campaign_title: group.title, conditions,
+        progress_ratio: ratio, progress_text: finished ? '\u041b\u0438\u043c\u0438\u0442 \u043f\u043e\u0434\u0430\u0440\u043a\u043e\u0432 \u0434\u043e\u0441\u0442\u0438\u0433\u043d\u0443\u0442' : `\u0414\u043e \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0433\u043e \u043f\u043e\u0434\u0430\u0440\u043a\u0430 \u2014 ${money(remaining)}` };
+    }).filter(Boolean);
+  }
+
   window.SharedProductRuntime = Object.freeze({
     resolveAutoAddRules(groups, items, { timezone = 0, scheduledAt = null, createdAt = null } = {}) {
       const today = new Date(Date.now() + Number(timezone) * 3600000).toISOString().slice(0, 10);
@@ -38,6 +83,7 @@
       if (rule.current_free_limit != null) qty = Math.min(qty, rule.current_free_limit);
       return Math.max(0, qty);
     },
+    getAutoAddGiftBenefits,
     register(factory) { factories.push(factory); instances.forEach(runtime => Object.assign(runtime, factory(runtime))); },
     create(services) {
       const runtime = Object.create(null);
@@ -54,10 +100,9 @@ SharedProductRuntime.register(function (runtime) {
   "use strict";
 
   function getConfigurableIngredients(product, ingredients) {
-    if (document.body?.matches(".page-shop:not(.page-kso)")) return [];
-    let config = product?.blocks_config ?? product?.blocks_config_json;
-    if (typeof config === "string") config = JSON.parse(config);
-    if (config && (config.ingredients === false || config.ingredients === 0)) return [];
+    if (document.body?.matches(".page-shop:not(.page-kso)")) {
+      return [];
+    }
     return (Array.isArray(ingredients) ? ingredients : []).filter(row => row.is_variable == null || row.is_variable === true || Number(row.is_variable) === 1);
   }
 
@@ -285,6 +330,10 @@ function buildProductOptionGroupsFromBatch(productId, assignments, optionGroupsB
     groups.push({
       id: groupId,
       title: runtime.str(assignment.title || details?.group?.title || ""),
+      is_packaging: Number(details?.group?.is_packaging) === 1,
+      hide_packaging_price: Number(details?.group?.hide_packaging_price) === 1,
+      is_component_default: Number(details?.group?.is_component_default) === 1,
+      is_component: assignment.is_component ?? null,
       selection_type: groupSelectionType,
       min_select: groupMinSelect,
       max_select: groupMaxSelect,
@@ -915,18 +964,64 @@ function buildOptionItemVariantState(item, variantGroup, valueIndex, valueRaw = 
     };
   }
 
+function getStandaloneOptionPackaging(groups, product) {
+  return runtime.normalizeProductOptionGroups(groups).filter(group => Number(group.is_packaging) === 1)
+    .flatMap(group => group.items.map(item => {
+      const meta = runtime.getOptionItemDefaultVariantMeta(item);
+      const variant = meta ? runtime.buildOptionItemVariantState(item, meta.group, meta.index) : null;
+      const pricing = runtime.getOptionItemDisplayPricing(item, variant);
+      return {
+        id: item.id, title: item.title, target_product_id: item.target_product_id,
+        photo: item.photo, product_photos_json: item.product_photos_json,
+        qty: Math.max(1, Number(item.qty_min || 1)),
+        price: pricing.currentPrice, old_price: pricing.originalPrice,
+        include_price: runtime.usesProductPriceSource(product, "options"),
+        hide_price: Number(group.hide_packaging_price) === 1,
+        variant_label: variant?.variant_label,
+      };
+    }));
+  }
+
+function collectPackagingItems(options, quantity = 1) {
+  const grouped = new Map();
+  const add = (item, multiplier) => {
+    const qty = Number(item.qty ?? item.quantity ?? 1) * multiplier;
+    if (!(qty > 0)) return;
+    const key = JSON.stringify([Number(item.target_product_id || item.product_id || item.id), item.variant_label || ""]);
+    const existing = grouped.get(key);
+    if (existing) existing.qty += qty;
+    else grouped.set(key, { ...item, qty });
+  };
+  for (const option of options || []) {
+    const qty = Number(option.qty ?? option.quantity ?? 1);
+    if (!(qty > 0)) continue;
+    if (Number(option.is_packaging) === 1) add(option, quantity);
+    else for (const item of option.packaging_items || []) add(item, qty * quantity);
+  }
+  return [...grouped.values()];
+}
+
 function collectSelectedOptionItems(optionGroups, selectionState) {
     const selectedItems = [];
+    const packagingByOption = new Map();
+    const componentByOption = new Map();
     optionGroups.forEach((group) => {
       const state = selectionState.get(group.id);
       if (!state) return;
       const itemsById = new Map((group.items || []).map((item) => [Number(item.id), item]));
+      itemsById.forEach((item, id) => componentByOption.set(id, !group.is_packaging && Number(group.is_component ?? group.is_component_default) === 1));
+      if (!group.is_packaging && Number(group.is_component ?? group.is_component_default) !== 1) {
+        itemsById.forEach((item, id) => { if (item.packaging_items?.length) packagingByOption.set(id, item.packaging_items); });
+      }
       
       // Функция для получения цены с учётом варианта
       const getPriceWithVariant = (item, itemId) => {
         const configuration = typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json;
         const basePrice = Number(item.price || 0) + Number(configuration?.ingredient_price_diff || 0);
         const variantData = state.variantByItemId?.get(itemId);
+        if (componentByOption.get(itemId) === true) {
+          return runtime.getOptionItemDisplayPricing({ ...item, is_component: true }, variantData).currentPrice;
+        }
         if (variantData && Number.isFinite(variantData.variant_price_diff)) {
           return basePrice + variantData.variant_price_diff;
         }
@@ -961,6 +1056,7 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
           const entry = {
             id: item.id,
             title: item.title,
+            ...(group.is_packaging && { is_packaging: true }),
             price: getPriceWithVariant(item, itemId),
             qty: item.is_locked ? Math.max(1, Number(item.qty_min || 1)) : 1,
             target_product_id: Number.isFinite(targetProductId) && targetProductId > 0 ? targetProductId : null,
@@ -1067,6 +1163,11 @@ function collectSelectedOptionItems(optionGroups, selectionState) {
           }
         });
       }
+    });
+    selectedItems.forEach(item => {
+      item.is_component = componentByOption.get(Number(item.id)) === true;
+      const packaging = packagingByOption.get(Number(item.id));
+      if (packaging) item.packaging_items = packaging;
     });
     return selectedItems;
   }
@@ -1218,7 +1319,10 @@ function createQtyPill({
 function normalizeProductOptionGroups(optionGroups) {
     return (Array.isArray(optionGroups) ? optionGroups : []).map((group) => ({
       ...group,
-      items: (Array.isArray(group?.items) ? group.items : []).map((item) => runtime.normalizeOptionItemForDisplay(item)),
+      items: (Array.isArray(group?.items) ? group.items : []).map((item) => runtime.normalizeOptionItemForDisplay({
+        ...item,
+        is_component: !group.is_packaging && Number(group.is_component ?? group.is_component_default) === 1,
+      })),
     }));
   }
 
@@ -1243,5 +1347,5 @@ function preloadImageOnce(url, opts = {}) {
     }
   }
 
-  return { getConfigurableIngredients, createOptimizedImage, setOptimizedImageTemplate, getOptimizedImageTemplate, waitForComboGridImage, preloadComboGridImage, rememberComboGridImageReady, str, preloadComboGridImagesInBackground, normalizeComboGridPhotoUrls, normalizeComboVariantList, buildProductOptionGroupsFromBatch, normalizeOptionItemForDisplay, getOptionItemPhotos, safePhotos, makeCartKey, cloneCartState, buildFavoriteSnapshotFromResolvedItem, extractVariantValueForOrder, normalizeFavoriteIngredientsFromCart, toFiniteNumberOrNull, normalizeFavoriteOptionItemsFromCart, createProductBuyXGetYActionCard, renderOptionItemPrice, escapeHtml, money, moneyNoSign, decorateOptionItemThumb, createCatalogBuyXGetYBadge, getCatalogBuyXGetYBadgeText, getOptionGroupUiType, buildOptionItemVariantState, collectSelectedOptionItems, buildStockCheckItemsPayloadFromResolved, syncProductHeroBadges, createCatalogDiscountBadge, createQtyPill, normalizeProductOptionGroups, preloadImageOnce };
+  return { collectPackagingItems, getConfigurableIngredients, createOptimizedImage, setOptimizedImageTemplate, getOptimizedImageTemplate, waitForComboGridImage, preloadComboGridImage, rememberComboGridImageReady, str, preloadComboGridImagesInBackground, normalizeComboGridPhotoUrls, normalizeComboVariantList, buildProductOptionGroupsFromBatch, normalizeOptionItemForDisplay, getOptionItemPhotos, safePhotos, makeCartKey, cloneCartState, buildFavoriteSnapshotFromResolvedItem, extractVariantValueForOrder, normalizeFavoriteIngredientsFromCart, toFiniteNumberOrNull, normalizeFavoriteOptionItemsFromCart, createProductBuyXGetYActionCard, renderOptionItemPrice, escapeHtml, money, moneyNoSign, decorateOptionItemThumb, createCatalogBuyXGetYBadge, getCatalogBuyXGetYBadgeText, getOptionGroupUiType, buildOptionItemVariantState, getStandaloneOptionPackaging, collectSelectedOptionItems, buildStockCheckItemsPayloadFromResolved, syncProductHeroBadges, createCatalogDiscountBadge, createQtyPill, normalizeProductOptionGroups, preloadImageOnce };
 });

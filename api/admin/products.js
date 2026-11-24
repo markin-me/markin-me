@@ -187,6 +187,24 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     const tenantId = helpers.getTenantId(req);
     const storeId = helpers.getStoreId(req);
     const directMatch = requestPath.match(/(?:prod_products|admin\/products)\/(\d+)/);
+    if (directMatch) {
+      const [optionGroups] = await db.query(
+        `SELECT DISTINCT group_id FROM prod_option_items WHERE tenant_id=? AND target_product_id=?
+         UNION SELECT group_id FROM prod_option_assignments WHERE tenant_id=? AND assign_type='product' AND assign_id=?`,
+        [tenantId, Number(directMatch[1]), tenantId, Number(directMatch[1])]
+      );
+      if (optionGroups.length) await catalogSync.recordTenantChanges(
+        { db, tenantId, entityType: 'option-group', operation: 'upsert' }, optionGroups.map(row => row.group_id)
+      );
+    }
+    if (/^\/admin\/options\//.test(requestPath)) {
+      let groupId = Number(requestPath.match(/^\/admin\/options\/groups\/(\d+)/)?.[1] || 0);
+      if (!groupId && requestPath === '/admin/options/groups') groupId = Number(req.__catalogResponseId || 0);
+      await catalogSync.recordTenantChange({
+        db, tenantId, entityType: 'option-group', entityId: groupId || null,
+        operation: method === 'DELETE' && /^\/admin\/options\/groups\/\d+$/.test(requestPath) ? 'delete' : 'upsert',
+      });
+    }
     let productIds = directMatch ? [Number(directMatch[1])] : [];
     const bodyIds = [
       ...(Array.isArray(req.body?.product_ids) ? req.body.product_ids : []),
@@ -654,7 +672,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     if (config.sources.some(source => !allowed.includes(source))) return null;
     const sources = allowed.filter(source => config.sources.includes(source));
     if (!sources.includes("composition") && !sources.includes("options")) return null;
-    return { mode: "auto", sources };
+    if (config.composition_price != null && (typeof config.composition_price !== "number" || !Number.isFinite(config.composition_price) || config.composition_price < 0)) return null;
+    if (config.target_margin != null && (typeof config.target_margin !== "number" || !Number.isFinite(config.target_margin) || config.target_margin >= 100)) return null;
+    return { mode: "auto", sources, ...(config.composition_price != null ? { composition_price: config.composition_price } : {}),
+      ...(config.target_margin != null ? { target_margin: config.target_margin } : {}) };
   }
 
   function calcProductMarginPercent(costPrice, price) {
@@ -3649,6 +3670,26 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         };
   }
 
+  async function lockOptionAssignmentProducts(conn, tenantId, ids) {
+    if (!ids.length) return;
+    await conn.query(
+      `SELECT id FROM prod_products WHERE tenant_id=? AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id FOR UPDATE`,
+      [tenantId, ...ids]
+    );
+  }
+
+  async function replaceProductPackaging(conn, tenantId, groupId, ids) {
+    if (!ids.length) return [];
+    const params = [tenantId, groupId, ...ids];
+    const scope = `FROM prod_option_assignments a
+      JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id AND g.is_packaging=1
+      WHERE a.tenant_id=? AND a.group_id<>? AND a.assign_type='product'
+        AND a.assign_id IN (${ids.map(() => '?').join(',')})`;
+    const [replaced] = await conn.query(`SELECT a.group_id, a.assign_id ${scope} AND a.is_active=1 FOR UPDATE`, params);
+    if (replaced.length) await conn.query(`DELETE a ${scope} AND a.is_active=1`, params);
+    return replaced;
+  }
+
   router.get('/admin/options/groups/:id', async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -3670,7 +3711,10 @@ router.post('/admin/options/group-bundle', async (req, res) => {
   const title = helpers.strOrNull(group.title);
   if (!title) return res.status(400).json({ ok: false, error: 'TITLE_REQUIRED' });
 
-  const selectionType = group.selection_type === 'multiple' ? 'multiple' : 'single';
+  const isPackaging = helpers.toBool(group.is_packaging, false);
+  const componentDefault = !isPackaging && helpers.toBool(group.is_component_default, true);
+  const hidePackagingPrice = isPackaging && helpers.toBool(group.hide_packaging_price, false);
+  const selectionType = isPackaging || group.selection_type === 'multiple' ? 'multiple' : 'single';
 
   const minSelect = helpers.numOrNull(group.min_select) ?? 0;
   const maxSelect = helpers.numOrNull(group.max_select);
@@ -3682,7 +3726,7 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
   // ✅ is_required только для single
   const isRequired =
-    selectionType === 'single'
+    isPackaging ? 1 : selectionType === 'single'
       ? (helpers.toBool(group.is_required, true) ? 1 : 0)
       : 0;
 
@@ -3710,7 +3754,13 @@ router.post('/admin/options/group-bundle', async (req, res) => {
       );
       if (productRows.length !== allProductIds.length) throw new Error('INVALID_PRODUCT_IDS');
     }
+    if (isPackaging) items.forEach(item => { item.default_selected = 1; });
     const selectedCount = items.filter((item) => helpers.toBool(item.default_selected, false)).length;
+    if (isPackaging && (targetIds.some(id => assignIds.includes(id)) ||
+        (isActive && assignments.length && !selectedCount) ||
+        items.some(item => Number(item.qty_min ?? 1) !== Number(item.qty_max ?? 1)))) {
+      throw new Error('INVALID_PACKAGING_CONFIGURATION');
+    }
     if ((selectionType === 'single' && selectedCount > 1) ||
         (selectionType === 'multiple' && maxSelect != null && selectedCount > maxSelect)) {
       throw new Error('INVALID_DEFAULT_COUNT');
@@ -3751,9 +3801,10 @@ router.post('/admin/options/group-bundle', async (req, res) => {
 
     const [result] = await conn.query(
       `INSERT INTO prod_option_groups
-       (tenant_id, title, selection_type, min_select, max_select, is_active, is_required, allow_variants, out_of_stock_action, sort_order)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [tenantId, title, selectionType, minSelect, maxSelect, isActive, isRequired, allowVariants, outOfStockAction, sortOrder]
+       (tenant_id, title, selection_type, min_select, max_select, is_active, is_required, allow_variants, out_of_stock_action, sort_order, is_packaging, is_component_default, hide_packaging_price)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [tenantId, title, selectionType, minSelect, maxSelect, isActive, isRequired, allowVariants, outOfStockAction,
+        sortOrder, Number(isPackaging), Number(componentDefault), Number(hidePackagingPrice)]
     );
     const groupId = result.insertId;
 
@@ -3798,6 +3849,12 @@ router.post('/admin/options/group-bundle', async (req, res) => {
       );
     }
 
+    const assignedProductIds = assignments.map(assignment => Number(assignment.assign_id));
+    let replaced = [];
+    if (isPackaging) {
+      await lockOptionAssignmentProducts(conn, tenantId, assignedProductIds);
+      replaced = await replaceProductPackaging(conn, tenantId, groupId, assignedProductIds);
+    }
     if (assignments.length) {
       const values = assignments.map((assignment, idx) => ([
         tenantId,
@@ -3822,7 +3879,8 @@ router.post('/admin/options/group-bundle', async (req, res) => {
     }
 
     await conn.commit();
-    res.json({ ok: true, id: groupId });
+    req.__catalogAffectedProductIds = assignedProductIds;
+    res.json({ ok: true, id: groupId, replaced });
   } catch (e) {
     await conn.rollback();
     console.error(e);
@@ -3964,7 +4022,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     try {
       await conn.beginTransaction();
       const [[currentGroup]] = await conn.query(
-        'SELECT id FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
+        'SELECT id, is_packaging, is_component_default, hide_packaging_price FROM prod_option_groups WHERE tenant_id=? AND id=? LIMIT 1 FOR UPDATE',
         [tenantId, groupId]
       );
       if (!currentGroup) {
@@ -3972,7 +4030,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
       }
       const title = helpers.strOrNull(groupInput.title);
-      const selectionType = groupInput.selection_type === 'multiple' ? 'multiple' : 'single';
+      const isPackaging = helpers.toBool(groupInput.is_packaging, Number(currentGroup.is_packaging) === 1);
+      const componentDefault = !isPackaging && helpers.toBool(groupInput.is_component_default, Number(currentGroup.is_component_default) === 1);
+      const hidePackagingPrice = isPackaging && helpers.toBool(groupInput.hide_packaging_price, Number(currentGroup.hide_packaging_price) === 1);
+      const selectionType = isPackaging || groupInput.selection_type === 'multiple' ? 'multiple' : 'single';
       const minSelect = helpers.numOrNull(groupInput.min_select) ?? 0;
       const maxSelect = helpers.numOrNull(groupInput.max_select);
       const allowVariants = helpers.toBool(groupInput.allow_variants, false) ? 1 : 0;
@@ -3995,7 +4056,13 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         );
         if (productRows.length !== allProductIds.length) throw new Error('INVALID_PRODUCT_IDS');
       }
+      if (isPackaging) items.forEach(item => { item.default_selected = 1; });
       const selectedCount = items.filter((item) => helpers.toBool(item.default_selected, false)).length;
+      if (isPackaging && (targetIds.some(id => assignedIds.includes(id)) ||
+          (helpers.toBool(groupInput.is_active, true) && assignments.length && !selectedCount) ||
+          items.some(item => Number(item.qty_min ?? 1) !== Number(item.qty_max ?? 1)))) {
+        throw new Error('INVALID_PACKAGING_CONFIGURATION');
+      }
       if ((selectionType === 'single' && selectedCount > 1) ||
           (selectionType === 'multiple' && maxSelect != null && selectedCount > maxSelect)) {
         throw new Error('INVALID_DEFAULT_COUNT');
@@ -4041,13 +4108,14 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       await conn.query(
         `UPDATE prod_option_groups
          SET title=?, selection_type=?, min_select=?, max_select=?, is_active=?, is_required=?,
-             allow_variants=?, out_of_stock_action=?, sort_order=?
+             allow_variants=?, out_of_stock_action=?, sort_order=?, is_packaging=?, is_component_default=?, hide_packaging_price=?
          WHERE tenant_id=? AND id=?`,
         [title, selectionType, minSelect, maxSelect,
           helpers.toBool(groupInput.is_active, true) ? 1 : 0,
-          selectionType === 'single' && helpers.toBool(groupInput.is_required, true) ? 1 : 0,
+          isPackaging || (selectionType === 'single' && helpers.toBool(groupInput.is_required, true)) ? 1 : 0,
           allowVariants, helpers.numOrNull(groupInput.out_of_stock_action) ?? 1,
-          helpers.numOrNull(groupInput.sort_order) ?? 0, tenantId, groupId]
+          helpers.numOrNull(groupInput.sort_order) ?? 0, Number(isPackaging), Number(componentDefault),
+          Number(hidePackagingPrice), tenantId, groupId]
       );
       const [oldItems] = await conn.query(
         "SELECT id, target_product_id FROM prod_option_items WHERE tenant_id=? AND group_id=? AND target_type='product' FOR UPDATE",
@@ -4091,17 +4159,20 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           [tenantId, groupId, ...removedIds]
         );
       }
+      if (isPackaging) await lockOptionAssignmentProducts(conn, tenantId, assignedIds);
       const [oldAssignments] = await conn.query(
-        "SELECT id, assign_id FROM prod_option_assignments WHERE tenant_id=? AND group_id=? AND assign_type='product' FOR UPDATE",
+        "SELECT id, assign_id, is_active FROM prod_option_assignments WHERE tenant_id=? AND group_id=? AND assign_type='product' FOR UPDATE",
         [tenantId, groupId]
       );
-      const oldAssignmentByProduct = new Map(oldAssignments.map((row) => [Number(row.assign_id), Number(row.id)]));
+      const oldAssignmentByProduct = new Map(oldAssignments.map(row => [Number(row.assign_id), row]));
+      const replaced = isPackaging ? await replaceProductPackaging(conn, tenantId, groupId,
+        assignedIds.filter(id => Number(currentGroup.is_packaging) !== 1 || Number(oldAssignmentByProduct.get(id)?.is_active) !== 1)) : [];
       for (const [index, assignment] of assignments.entries()) {
         const productId = Number(assignment.assign_id);
         const values = [helpers.numOrNull(assignment.priority) ?? 0,
           helpers.numOrNull(assignment.sort_order) ?? index * 10,
           helpers.numOrNull(assignment.out_of_stock_action) ?? 1];
-        const oldId = oldAssignmentByProduct.get(productId);
+        const oldId = oldAssignmentByProduct.get(productId)?.id;
         if (oldId) {
           await conn.query(
             'UPDATE prod_option_assignments SET priority=?, sort_order=?, out_of_stock_action=?, is_active=1 WHERE tenant_id=? AND id=?',
@@ -4118,14 +4189,21 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         }
       }
       if (oldAssignmentByProduct.size) {
-        const removedIds = [...oldAssignmentByProduct.values()];
+        const removedIds = [...oldAssignmentByProduct.values()].map(row => row.id);
         await conn.query(
           `DELETE FROM prod_option_assignments WHERE tenant_id=? AND group_id=? AND id IN (${removedIds.map(() => '?').join(',')})`,
           [tenantId, groupId, ...removedIds]
         );
       }
+      if (!isPackaging && Number(componentDefault) !== Number(currentGroup.is_component_default)) {
+        await conn.query(
+          "UPDATE prod_option_assignments SET is_component=NULL WHERE tenant_id=? AND group_id=? AND assign_type='product'",
+          [tenantId, groupId]
+        );
+      }
       await conn.commit();
-      return res.json({ ok: true });
+      req.__catalogAffectedProductIds = [...assignedIds, ...oldAssignmentByProduct.keys()];
+      return res.json({ ok: true, replaced });
     } catch (error) {
       await conn.rollback();
       if (/^(INVALID_|PRICE_VALUE_REQUIRED)/.test(String(error?.message))) {
@@ -4384,8 +4462,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const conn = await db.getConnection();
       try {
         await conn.beginTransaction();
+        const [[group]] = await conn.query("SELECT is_packaging FROM prod_option_groups WHERE tenant_id=? AND id=? FOR UPDATE", [tenantId, groupId]);
+        if (Number(group?.is_packaging) === 1) await lockOptionAssignmentProducts(conn, tenantId, norm);
         const [existing] = await conn.query(
-        `SELECT id, assign_id
+        `SELECT id, assign_id, is_active
          FROM prod_option_assignments
          WHERE tenant_id=? AND group_id=? AND assign_type='product'
            AND assign_id IN (${norm.map(() => '?').join(',')})`,
@@ -4409,11 +4489,18 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           added.push(id);
           continue;
         }
-        skipped.push(id);
+        if (Number(group?.is_packaging) === 1 && Number(row.is_active) !== 1) {
+          await conn.query('UPDATE prod_option_assignments SET is_active=1 WHERE tenant_id=? AND id=?', [tenantId, row.id]);
+          added.push(id);
+        } else {
+          skipped.push(id);
+        }
       }
 
+      const replaced = Number(group?.is_packaging) === 1 ? await replaceProductPackaging(conn, tenantId, groupId, added) : [];
       await conn.commit();
-      res.json({ ok: true, added, skipped });
+      req.__catalogAffectedProductIds = added;
+      res.json({ ok: true, added, skipped, replaced });
     } catch (e) {
       await conn.rollback();
       console.error(e);
@@ -6119,7 +6206,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       if (!Number.isFinite(productId) || productId <= 0) return res.status(400).json({ ok: false, error: 'BAD_ID' });
 
       const [rows] = await db.query(
-        `SELECT a.id AS assignment_id, a.group_id, a.priority, a.sort_order, a.product_display_order, a.is_active, a.out_of_stock_action,
+        `SELECT a.id AS assignment_id, a.group_id, a.priority, a.sort_order, a.product_display_order, a.is_component, a.is_active, a.out_of_stock_action,
                 g.title, g.selection_type, g.min_select, g.max_select, g.sort_order AS group_sort_order
          FROM prod_option_assignments a
          JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id
@@ -6190,6 +6277,13 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     const conn = await db.getConnection();
     try {
       await conn.beginTransaction();
+      await lockOptionAssignmentProducts(conn, tenantId, [productId]);
+      const [packagingGroups] = await conn.query(
+        `SELECT id FROM prod_option_groups WHERE tenant_id=? AND is_packaging=1 AND id IN (${norm.map(() => '?').join(',')})`,
+        [tenantId, ...norm]);
+      const packagingIds = new Set(packagingGroups.map(row => Number(row.id)));
+      const lastPackaging = norm.filter(id => packagingIds.has(id)).at(-1);
+      const selectedIds = norm.filter(id => !packagingIds.has(id) || id === lastPackaging);
       const [existing] = await conn.query(
         `SELECT id, group_id, is_active
          FROM prod_option_assignments
@@ -6202,7 +6296,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       const reenabled = [];
       const skipped = [];
 
-      for (const groupId of norm) {
+      for (const groupId of selectedIds) {
         const row = map.get(groupId);
         if (!row) {
           await conn.query(
@@ -6227,8 +6321,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         reenabled.push(groupId);
       }
 
+      const replaced = lastPackaging ? await replaceProductPackaging(conn, tenantId, lastPackaging, [productId]) : [];
       await conn.commit();
-      res.json({ ok: true, added, reenabled, skipped });
+      res.json({ ok: true, added, reenabled, skipped, replaced });
     } catch (e) {
       await conn.rollback();
       console.error(e);
@@ -6309,7 +6404,33 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     }
   }
 
-  router.patch('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
+  router.patch('/admin/products/:id/option-assignments/:groupId', async (req, res) => {
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'is_component')) {
+      return disableProductAssignment(req, res);
+    }
+    const tenantId = helpers.getTenantId(req);
+    const productId = Number(req.params.id);
+    const groupId = Number(req.params.groupId);
+    const value = req.body.is_component;
+    if (![productId, groupId].every(id => Number.isSafeInteger(id) && id > 0) ||
+        (value !== null && typeof value !== 'boolean')) {
+      return res.status(400).json({ ok: false, error: 'INVALID_COMPONENT_OVERRIDE' });
+    }
+    try {
+      const [result] = await db.query(
+        `UPDATE prod_option_assignments a
+         JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id AND g.is_packaging=0
+         SET a.is_component=?
+         WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.group_id=? AND a.is_active=1`,
+        [value === null ? null : Number(value), tenantId, productId, groupId]
+      );
+      if (!result.affectedRows) return res.status(404).json({ ok: false, error: 'OPTION_ASSIGNMENT_NOT_FOUND' });
+      return res.json({ ok: true });
+    } catch (error) {
+      console.error(error);
+      return res.status(500).json({ ok: false, error: 'DB_ERROR' });
+    }
+  });
   router.delete('/admin/products/:id/option-assignments/:groupId', disableProductAssignment);
 
   router.put('/admin/products/:id/option-assignments/:groupId/item-exclusions', async (req, res) => {

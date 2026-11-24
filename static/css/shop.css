@@ -28315,3 +28315,38 @@ body.page-shop .shop-products-grid > .sp-card .sp-cart-total-stack{
 .shop-auto-add-gift-card>.shop-checkout-benefit-gift-action{width:100%}
 .shop-auto-add-gift-card>.shop-checkout-benefit-gift-action:disabled{background:var(--color-surface-2);color:var(--color-text-muted);box-shadow:none;cursor:default;opacity:1}
 @media(max-width:380px){.shop-checkout-benefits-list--gift-stack>.shop-auto-add-gift-card{grid-template-columns:76px minmax(0,1fr);gap:8px}.shop-auto-add-gift-card>.shop-checkout-benefit-gift-media{height:76px}}
+
+body.page-shop .shop-packaging-accordion{min-width:0;margin-top:12px}
+body.page-shop .shop-packaging-accordion[hidden]{display:none}
+body.page-shop .shop-packaging-accordion>summary{cursor:pointer;font-size:12px;font-weight:600;padding:8px 0}
+body.page-shop .shop-packaging-cards{display:flex;flex-wrap:nowrap;gap:16px;overflow-x:auto;padding:10px 8px 12px 0;margin:0}
+body.page-shop .shop-packaging-cards>.shop-pd-option-product-card{flex:0 0 150px;min-width:0}
+body.page-shop .shop-packaging-stack{box-shadow:3px -3px 0 var(--color-surface-2,#f3f4f6),6px -6px 0 var(--color-border,#e0e2e5)}
+body.page-shop .cart-packaging-accordion{margin-top:4px}
+body.page-shop .cart-packaging-accordion>.cart-sub-details{padding-left:8px;font-size:12px}
+.cart-row--readonly-order .cart-packaging-accordion:not([open])>.cart-sub-details{display:none}
+.cart-row--readonly-order .cart-packaging-accordion[open]>.cart-sub-details{display:block}
+.cart-row--readonly-order .cart-packaging-accordion>summary{display:flex;align-items:center;gap:5px;list-style:none}
+.cart-row--readonly-order .cart-packaging-accordion>summary::-webkit-details-marker{display:none}
+.cart-row--readonly-order .order-packaging-chevron{font-size:9px;transition:transform .15s}
+.cart-row--readonly-order .cart-packaging-accordion[open]>summary>.order-packaging-chevron{transform:rotate(90deg)}
+.cart-row--readonly-order .cart-footer-left>.cart-bogo-badge{position:static;display:inline-flex;align-items:center;justify-content:center;min-height:24px;padding:5px 9px;border-radius:999px;background:linear-gradient(135deg,var(--shop-buy,#ff7a1a),#ffb15a);color:#fff;font-size:11px;line-height:1}
+
+body.page-shop:not(.page-kso) .shop-pd-option-product-head>.shop-pd-option-product-title,
+body.page-shop:not(.page-kso) .shop-packaging-accordion>summary{font-size:16px;font-weight:700}
+body.page-shop:not(.page-kso) .shop-packaging-cards{scrollbar-width:none;cursor:grab;user-select:none}
+body.page-shop:not(.page-kso) .shop-packaging-cards::-webkit-scrollbar{display:none}
+body.page-shop:not(.page-kso) .shop-packaging-cards.is-dragging{cursor:grabbing}
+
+body.page-shop:not(.page-kso) .shop-pd-option-product-head{text-align:center;margin:18px 0 10px}
+body.page-shop:not(.page-kso) .shop-pd-option-product-head>.shop-pd-option-product-title,
+body.page-shop:not(.page-kso) .shop-packaging-accordion>summary{display:flex;align-items:center;justify-content:center;gap:12px;text-align:center;line-height:1.35;list-style:none}
+body.page-shop:not(.page-kso) .shop-pd-option-product-head>.shop-pd-option-product-title::before,
+body.page-shop:not(.page-kso) .shop-pd-option-product-head>.shop-pd-option-product-title::after,
+body.page-shop:not(.page-kso) .shop-packaging-accordion>summary::before,
+body.page-shop:not(.page-kso) .shop-packaging-accordion>summary::after{content:"";flex:1 1 0;min-width:16px;border-top:1px solid var(--color-border,#e0e2e5)}
+body.page-shop:not(.page-kso) .shop-pd-option-product-hint{text-align:center;margin-top:4px}
+body.page-shop:not(.page-kso) .shop-packaging-accordion>summary::-webkit-details-marker{display:none}
+body.page-shop:not(.page-kso) .shop-packaging-heading{display:inline-flex;align-items:center;justify-content:center;gap:7px}
+body.page-shop:not(.page-kso) .shop-packaging-heading::before{content:"";width:6px;height:6px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg)}
+body.page-shop:not(.page-kso) .shop-packaging-accordion[open]>summary>.shop-packaging-heading::before{transform:rotate(45deg)}
