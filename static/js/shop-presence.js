@@ -103,8 +103,12 @@
     else { stopTimer(); sendLeave(); }
   });
   window.addEventListener('online', heartbeat);
+  window.addEventListener('shop:customer-profile-changed',heartbeat);
+  window.addEventListener('storage',function(event){
+    if([`shop_customer_token_t${tenantId}`,'shop_customer_token'].includes(event.key))heartbeat();
+  });
   window.addEventListener('pagehide', function () { stopTimer(); sendLeave(); });
 
-  window.ShopPresence = Object.freeze({ setMode });
+  window.ShopPresence = Object.freeze({ setMode,refresh:heartbeat });
   if (document.visibilityState === 'visible') { startTimer(); heartbeat(); }
 }());

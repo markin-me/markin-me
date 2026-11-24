@@ -13108,6 +13108,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         category_ids:item.product?.category_ids,combo_category_id:item.combo_category_id,
         line_total:lineTotals.get(str(item.key))||0,is_gift_reward:item.is_gift_reward,
       }))}});
+      summaryState.bonusAccrualRestricted=preview.data.restricted === true;
       summaryState.bonusAccrualAmount=Number(preview.data.amount);
     }
     if (str(methodCode || "").trim() !== "delivery") {
@@ -13198,6 +13199,8 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
 
   function updateCartBonusRedeemSections(summaryState = null) {
     const safeState = summaryState && typeof summaryState === "object" ? summaryState : buildCartPricingSnapshot();
+    const restricted=state.homeBonusConfig?.account?.is_guest===true;
+    const maskedAmount='<span class="shop-private-value">••••</span> '+getShopBonusCoinIconHtml();
     let amount = Math.floor(Math.max(0, Number(safeState?.bonusRedeemAvailableAmount || 0)));
     if (amount > 0) {
       state.cartBonusRedeemAvailableAmount = amount;
@@ -13212,17 +13215,22 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         state.cartBonusRedeemEnabled = false;
       }
       const redeemActive = !!state.cartBonusRedeemEnabled && hasBalance && canRedeemAmount;
+      const balanceNode=section.querySelector('.shop-bonus-level-balance-value');
+      const balanceHtml=restricted ? maskedAmount : formatShopBonusMoney(balance);
+      if(balanceNode && balanceNode.innerHTML!==balanceHtml)balanceNode.innerHTML=balanceHtml;
       section.querySelectorAll("[data-cart-bonus-redeem-available]").forEach((node) => {
-        node.textContent = money(amount);
+        if(restricted)node.innerHTML=maskedAmount;
+        else node.textContent = money(amount);
       });
       section.querySelectorAll("[data-cart-bonus-accrual-amount]").forEach((node) => {
-        node.innerHTML = `+${formatShopBonusMoney(accrualAmount)}`;
+        node.innerHTML = restricted || safeState?.bonusAccrualRestricted ? maskedAmount : `+${formatShopBonusMoney(accrualAmount)}`;
+        node.classList.remove("shop-private-value");
       });
       section.querySelectorAll("[data-cart-bonus-redeem-button-amount]").forEach((node) => {
         const accrualHtml = allowRedeemAndAccrue && accrualAmount > 0
           ? ` <span class="shop-cart-bonus-action-pill__delta">+${formatShopBonusMoney(accrualAmount)}</span>`
           : "";
-        node.innerHTML = `-${formatShopBonusMoney(amount)}${accrualHtml}`;
+        node.innerHTML = restricted ? maskedAmount : `-${formatShopBonusMoney(amount)}${accrualHtml}`;
       });
       section.querySelectorAll("[data-cart-bonus-redeem-label]").forEach((node) => {
         node.textContent = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
@@ -23151,27 +23159,6 @@ function renderSheetAddressList() {
 
   let fetchMeSafeVerifiedToken = "";
 
-  function syncHeaderProfilePhoto(customer) {
-    const photoUrl = str(customer?.photo || "").trim();
-    const image = document.getElementById("shopHeaderProfileImg");
-    const fallback = document.querySelector("#shopProfileBtn .shop-header-profile-fallback");
-    const navImage = document.getElementById("shopNavProfileImg");
-    const navFallback = document.querySelector("#shopNavProfile .shop-nav-profile-fallback");
-    const pairs = [[image, fallback], [navImage, navFallback]];
-    pairs.forEach(([targetImage, targetFallback]) => {
-      if (!targetImage || !targetFallback) return;
-      if (photoUrl) {
-        targetImage.src = photoUrl;
-        targetImage.classList.remove("hidden");
-        targetFallback.classList.add("hidden");
-        return;
-      }
-      targetImage.src = "";
-      targetImage.classList.add("hidden");
-      targetFallback.classList.remove("hidden");
-    });
-  }
-
   async function fetchMeSafe(opts = {}) {
     const force = !!opts?.force;
     const token = getCustomerToken();
@@ -23185,6 +23172,7 @@ function renderSheetAddressList() {
       const payload = sharedBoot
         ? { customer: sharedBoot.customer, addresses: sharedBoot.addresses }
         : ((await apiJson("/api/public/me/bootstrap"))?.data || {});
+      if (token !== getCustomerToken()) return null;
       if (payload.customer) {
         setCustomerCache(payload.customer);
         if (Array.isArray(payload.addresses)) {
@@ -23197,7 +23185,7 @@ function renderSheetAddressList() {
         return payload.customer;
       }
       const json = await apiJson("/api/public/me");
-      if (!json.customer) return null;
+      if (token !== getCustomerToken() || !json.customer) return null;
       setCustomerCache(json.customer);
       fetchMeSafeVerifiedToken = token;
       if (typeof handleShopBenefitsOrderStateChange === "function") {
@@ -23205,6 +23193,7 @@ function renderSheetAddressList() {
       }
       return json.customer;
     } catch (e) {
+      if (token !== getCustomerToken()) return null;
       if (String(e.message || "").includes("UNAUTHORIZED")) {
         fetchMeSafeVerifiedToken = "";
         clearCustomer();
@@ -23756,6 +23745,7 @@ function renderSheetAddressList() {
     shopOrderOnlineAvailable = false;
     root.querySelectorAll('[data-shop-order-payment]').forEach(button => button.remove());
     const initialOrder = shopOrderSnapshots.get(Number(root.dataset.orderDetailsId));
+    if (initialOrder?.privacy_restricted) return;
     if (initialOrder) updateShopOrderPaymentFooter(initialOrder);
     try {
       const response = await apiJson(`/api/public/checkout/payment-availability?store_id=${encodeURIComponent(getActiveStoreId())}`);
@@ -23806,7 +23796,7 @@ function renderSheetAddressList() {
     shopOrderSnapshots.set(view.id, order);
     shopOrderDetailsLoaded.add(view.id);
     renderShopOrderAccordion.orderId = `${view.id}-${++renderShopOrderDetails.sequence}`;
-    return `<div class="shop-order-details shop-order-details--variant-a" data-order-details-id="${view.id}"><section class="shop-order-progress" data-order-progress><div class="shop-order-progress__head"><strong data-order-method>${escapeHtml(view.method)}</strong><span data-order-timing>${escapeHtml(view.timing)}</span></div><div class="shop-order-progress__route">${view.steps.map(renderShopOrderStep).join("")}</div><span class="shop-order-progress__announcement" role="status" data-order-status-announcement>${escapeHtml(view.statusLabel)}</span></section>${view.comment ? `<section class="shop-order-comment" data-order-comment>${renderShopOrderComment(view.comment)}</section>` : ""}${renderShopOrderAccordion("products", "Товары", "fa-bag-shopping", `${view.items.length} позиций`, money(view.summary.subtotalBeforeDiscounts - view.summary.discountAmount), `<div class="shop-cart-items">${renderSharedReadonlyOrderItemsHtml(view.items, order)}</div>`, true)}${renderShopOrderAccordion("delivery", "Детали получения", "fa-location-dot", view.method, "", renderShopOrderPairs(view.deliveryRows))}<section class="shop-order-customer" data-order-customer>${renderShopOrderCustomer(view)}</section>${renderShopOrderAccordion("payment", view.paymentPresentation.title, "fa-wallet", view.payment, money(view.summary.orderTotal), renderShopOrderPayment(view), false, view.paymentPresentation.tone)}</div>`;
+    return `<div class="shop-order-details shop-order-details--variant-a${order?.privacy_restricted ? " is-restricted-order" : ""}" data-order-details-id="${view.id}"><section class="shop-order-progress" data-order-progress><div class="shop-order-progress__head"><strong data-order-method>${escapeHtml(view.method)}</strong><span data-order-timing>${escapeHtml(view.timing)}</span></div><div class="shop-order-progress__route">${view.steps.map(renderShopOrderStep).join("")}</div><span class="shop-order-progress__announcement" role="status" data-order-status-announcement>${escapeHtml(view.statusLabel)}</span></section>${view.comment ? `<section class="shop-order-comment" data-order-comment>${renderShopOrderComment(view.comment)}</section>` : ""}${renderShopOrderAccordion("products", "Товары", "fa-bag-shopping", `${view.items.length} позиций`, money(view.summary.subtotalBeforeDiscounts - view.summary.discountAmount), `<div class="shop-cart-items">${renderSharedReadonlyOrderItemsHtml(view.items, order)}</div>`, true)}${renderShopOrderAccordion("delivery", "Детали получения", "fa-location-dot", view.method, "", renderShopOrderPairs(view.deliveryRows))}<section class="shop-order-customer" data-order-customer>${renderShopOrderCustomer(view)}</section>${renderShopOrderAccordion("payment", view.paymentPresentation.title, "fa-wallet", view.payment, money(view.summary.orderTotal), renderShopOrderPayment(view), false, view.paymentPresentation.tone)}</div>`;
   }
   renderShopOrderDetails.sequence = 0;
 
@@ -23842,6 +23832,11 @@ function renderSheetAddressList() {
       if(!button)return;
       button.classList.toggle('is-order-paid',paid);
       const value=button.querySelector('span');
+      value?.classList.toggle('shop-private-value', !!order.privacy_restricted);
+      if(order.privacy_restricted){
+        if(value)value.textContent='\u2022\u2022\u2022\u2022';
+        button.disabled=true;button.onclick=null;return;
+      }
       const method = payment?.method || String(order.payment_code || '');
       const offline = !paid && !refund && ['cash','card'].includes(method);
       if(value) {
@@ -26663,7 +26658,19 @@ function renderSheetAddressList() {
     window.bindRepeatOrderItemRows = bindRepeatOrderItemRows;
   }
 
-  function buildProfileContent({ host, me, onLogout, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false, returnToProfile = false } = {}) {
+  function restrictedVisitorProfile() {
+    return { is_guest: true, privacy_restricted: true, name: "", phone: "", birthday: null, photo: null };
+  }
+
+  function buildProfileContent({ host, me, onLogout, onLoginSuccess, initialTab, ordersOnly = false, sourceScreen = "", settingsPage = false, returnToProfile = false } = {}) {
+    if (me?.is_guest) me = { ...me, name: '', photo: null, birthday: null, privacy_restricted: true };
+    async function requestGuestProfileAuthorization() {
+      const confirmed = await window.AppModal.confirm({ title: 'Внимание',
+        message: 'Чтобы изменить профиль, авторизуйтесь.', cancelText: 'Отмена', saveText: 'Авторизоваться' });
+      if (confirmed) openLoginSheet({ phone: me?.phone || '', onSuccess: fresh => {
+        if (typeof onLoginSuccess === "function") onLoginSuccess(fresh);
+      } });
+    }
     const showProfileWarning=message=>window.AppModal.confirm({appearance:"shop-warning",title:"Внимание",message,showCancel:false,saveText:"Понятно"});
     ensureShopOrdersCacheScope();
     host.innerHTML = "";
@@ -26691,6 +26698,8 @@ function renderSheetAddressList() {
         guestConfirmation=null;sessionStorage.removeItem(guestConfirmationKey);
         clearInterval(guestConfirmationTimer);guestConfirmationTimer=null;
         me=json.customer;
+        wrap.querySelectorAll(".shop-private-value").forEach(node => node.classList.remove("shop-private-value"));
+        birthdayText.textContent=formatBirthdayDisplay(me.birthday || "");
         setCustomerToken(json.token);setCustomerCache(me);
         fetchMeSafeVerifiedToken=json.token;
         currentName=me.name||'';nameText.textContent=currentName||'Покупатель';nameInput.value=currentName;
@@ -26796,7 +26805,8 @@ function renderSheetAddressList() {
       t.textContent = title;
       const v = document.createElement("div");
       v.className = "shop-profile-line-value";
-      v.textContent = value;
+      v.textContent = me?.privacy_restricted ? "••••••" : value;
+      v.classList.toggle("shop-private-value", !!me?.privacy_restricted);
       line.appendChild(t);
       line.appendChild(v);
       info.appendChild(line);
@@ -26815,7 +26825,8 @@ function renderSheetAddressList() {
 
     const nameText = document.createElement("span");
     nameText.className = "shop-profile-name-text";
-    nameText.textContent = str(me?.name || "—");
+    nameText.textContent = me?.privacy_restricted ? "••••••" : str(me?.name || "—");
+    nameText.classList.toggle("shop-private-value", !!me?.privacy_restricted);
 
     const nameEditBtn = document.createElement("button");
     nameEditBtn.type = "button";
@@ -26864,7 +26875,8 @@ function renderSheetAddressList() {
     birthdayValue.className = "shop-profile-line-value shop-profile-name-value";
     const birthdayText = document.createElement("span");
     birthdayText.className = "shop-profile-birthday-text";
-    birthdayText.textContent = formatBirthdayDisplay(me?.birthday || "");
+    birthdayText.textContent = me?.privacy_restricted ? "••.••.••••" : formatBirthdayDisplay(me?.birthday || "");
+    birthdayText.classList.toggle("shop-private-value", !!me?.privacy_restricted);
     const birthdayEditBtn = document.createElement("button");
     birthdayEditBtn.type = "button";
     birthdayEditBtn.className = "btn btn-icon shop-profile-name-edit";
@@ -27439,6 +27451,8 @@ function renderSheetAddressList() {
     function addPushPreferenceRow(titleText, key) {
       const row = document.createElement("div");
       row.className = "shop-profile-settings-row";
+      row.dataset.pushPreference = key;
+      if (key === "chat" || key === "important") row.classList.add("hidden");
       const title = document.createElement("div");
       title.className = "shop-profile-settings-title";
       title.textContent = titleText;
@@ -27507,6 +27521,17 @@ function renderSheetAddressList() {
 
     addPushPreferenceRow("От чата поддержки", "chat");
     addPushPreferenceRow("О важных сообщениях компании", "important");
+
+    apiJson("/api/public/tenant/chat-settings").then((payload) => {
+      if (payload?.ok !== true || !payload.settings) throw new Error("CHAT_SETTINGS_UNAVAILABLE");
+      const settings = payload.settings;
+      const enabled = (value) => value !== false && value !== 0 && !["0", "false"].includes(String(value).toLowerCase().trim());
+      pushNotificationRows.forEach((row) => {
+        const key = row.dataset.pushPreference;
+        if (key === "chat") row.classList.toggle("hidden", !enabled(settings.is_enabled ?? settings.chat_widget_enabled));
+        if (key === "important") row.classList.toggle("hidden", !enabled(settings.important_messages_enabled));
+      });
+    }).catch((error) => console.error("PROFILE_NOTIFICATION_CHANNELS_LOAD_FAILED", error));
 
     const messengerMarketingRows = [];
     const messengerMarketingInputs = new Map();
@@ -27725,11 +27750,13 @@ function renderSheetAddressList() {
       if (settingsBootstrapLoaded) return true;
       if (settingsBootstrapPromise) return settingsBootstrapPromise;
 
+      const requestToken=getCustomerToken();
       settingsBootstrapPromise = (async () => {
         try {
           let cacheKey,cached;
           try{cacheKey=await settingsCacheKey();cached=JSON.parse(sessionStorage.getItem(cacheKey)||'null');}catch(error){console.warn('AUTH_STATUS_CACHE_UNAVAILABLE');}
           const json = cached || await apiJson("/api/public/me/settings-bootstrap");
+          if (requestToken!==getCustomerToken()) return false;
           const data = (json && json.data) || {};
           const auth = data.auth_options || {};
           const maxData = data.max || {};
@@ -28328,6 +28355,7 @@ function renderSheetAddressList() {
       screenHeader.append(screenBack, screenTitle);
       let currentSettingsScreen = "main";
       const showSettingsScreen = (screen, trigger = null) => {
+        if (screen === 'edit' && me?.is_guest) { void requestGuestProfileAuthorization(); return false; }
         top.classList.remove("is-photo-expanded");photo.setAttribute("aria-expanded","false");
         const wasMain=currentSettingsScreen==="main";
         currentSettingsScreen = screen;
@@ -28436,7 +28464,7 @@ function renderSheetAddressList() {
         const symbol=document.createElement("i");symbol.className=`fas ${icon}`;symbol.setAttribute("aria-hidden","true");
         const text=document.createElement("span");text.textContent=label;
         const arrow=document.createElement("i");arrow.className="fas fa-chevron-right";arrow.setAttribute("aria-hidden","true");button.append(symbol,text,arrow);
-        button.addEventListener("click",()=>{showSettingsScreen("edit");action();});personal.append(button);
+        button.addEventListener("click",()=>{if(showSettingsScreen("edit")!==false)action();});personal.append(button);
       }
       syncSettingsSummary();
       maxLinkTitle.textContent="MAX";tgLinkTitle.textContent="Telegram";
@@ -28919,6 +28947,12 @@ function renderSheetAddressList() {
     tabSettings.addEventListener("click", () => setActiveTab("settings"));
 
     async function reloadAddresses() {
+      if (me?.privacy_restricted) {
+        addressesList.textContent = "••••••••••••";
+        addressesList.classList.add("shop-private-value");
+        return;
+      }
+      addressesList.classList.remove("shop-private-value");
       addressesList.innerHTML = `<div class="muted">Загрузка…</div>`;
       try {
         const json = await apiJson("/api/public/me/addresses");
@@ -29219,9 +29253,16 @@ function renderSheetAddressList() {
         // Используем флаг для переопределения стандартного поведения
         bindDesktopOrderDetailsFooter(order);
       }
+      window.shopCompanyChatNotifications?.orderDetailsShown(orderId, function () {
+        return currentOrdersView === 'details' && Number(currentOrderId) === Number(orderId)
+          && detailView.isConnected && !detailView.closest('.hidden') && detailView.getClientRects().length > 0
+          && (isModalOrderDetails ? window.AppModal?.isOpen?.() && window.AppModal.body?.contains(detailView)
+            : document.body.classList.contains('shop-orders-details-active'));
+      }, function () { return detailView.closest('#appModal') || detailView.parentElement; });
     }
 
     function showOrdersList() {
+      window.shopCompanyChatNotifications?.orderDetailsClosed(currentOrderId);
       currentOrdersView = "list";
       currentOrderId = null;
       resetOrderDetailsTransientUi();
@@ -29353,6 +29394,7 @@ function renderSheetAddressList() {
     function renderProfileOrderRow(o) {
       const row = document.createElement("div");
       row.className = "shop-profile-card shop-order-summary-card shop-profile-order-summary-card";
+      row.classList.toggle("is-restricted-order", !!o?.privacy_restricted);
       row.dataset.orderId = String(Number(o?.id || 0));
       row.style.cursor = "pointer";
       row.innerHTML = window.buildShopOrderSummaryCardInnerHtml(o, { maxPhotos: 40, context: "orders" });
@@ -29422,6 +29464,10 @@ function renderSheetAddressList() {
       const section = sectionKey === "completed" ? ordersCompletedSection : ordersActiveSection;
       const state = profileOrdersState[sectionKey];
       if (!section || !state) return;
+      if (!getCustomerToken()) {
+        section.items.replaceChildren();
+        return;
+      }
       if (state.loading) return;
       if (!reset && !state.hasMore) return;
       if (sectionKey === "completed" && ordersCompletedSection.collapsed) return;
@@ -29596,12 +29642,13 @@ function renderSheetAddressList() {
       photoRemoveBtn.classList.remove("hidden");
     }
 
-    setProfilePhoto(me?.photo || "");
+    setProfilePhoto((me?.privacy_restricted ? me?.restricted_photo : me?.photo) || "");
 
     nameEditBtn.addEventListener("click", () => setEditingMode(true));
     if(settingsPage)nameInput.addEventListener("focus",()=>{if(!isEditing)setEditingMode(true);});
 
     function setEditingMode(next) {
+      if (next && me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       isEditing = Boolean(next);
       if (isEditing) setBirthdayEditingMode(false);
       wrap.classList.toggle("is-editing", isEditing);
@@ -29639,6 +29686,7 @@ function renderSheetAddressList() {
     if(settingsPage)birthdayInput.addEventListener("focus",()=>{if(!isBirthdayEditing)setBirthdayEditingMode(true);});
 
     function setBirthdayEditingMode(next) {
+      if (next && me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       isBirthdayEditing = Boolean(next);
       if(settingsPage){
         birthdayLine.classList.toggle("is-birthday-empty",! /\d/.test(currentBirthday));
@@ -29687,10 +29735,12 @@ function renderSheetAddressList() {
     });
 
     function startPhotoUpload() {
+      if (me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       photoInput.click();
     }
 
     async function removePhoto() {
+      if (me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       if(photoRemoveBtn.disabled)return;
       photoRemoveBtn.disabled = true;
       try {
@@ -29716,6 +29766,7 @@ function renderSheetAddressList() {
     photoRemoveBtn.addEventListener("click", removePhoto);
 
     photoInput.addEventListener("change", async () => {
+      if (me?.is_guest) { photoInput.value = ''; void requestGuestProfileAuthorization(); return; }
       const file = photoInput.files && photoInput.files[0];
       photoInput.value = "";
       if (!file) return;
@@ -29770,6 +29821,7 @@ function renderSheetAddressList() {
       photoMenu.classList.add("hidden");
     }
     function openPhotoMenu() {
+      if (me?.is_guest) { void requestGuestProfileAuthorization(); return; }
       photoMenuOpen = true;
       photoMenu.classList.remove("hidden");
       const onDocClick = (e) => {
@@ -29942,6 +29994,20 @@ function renderSheetAddressList() {
       backSettingsScreen: () => backSettingsScreen(),
       confirmPhone: openPhoneConfirmation,
       customerToken: getCustomerToken(),
+      refreshAuth: async () => {
+        clearInterval(guestConfirmationTimer);
+        window._isViewingOrderDetails=false;
+        window._showOrdersListCallback=null;
+        const token=getCustomerToken();
+        const tab=tabs.querySelector('.shop-profile-tab.is-active')?.dataset.tab || initialTab;
+        if (!host.isConnected) return;
+        window._profileContext=buildProfileContent({host,me:restrictedVisitorProfile(),onLogout,onLoginSuccess,initialTab:tab,ordersOnly,sourceScreen,settingsPage,returnToProfile});
+        if (!token) return;
+        const fresh=await fetchMeSafe({force:true});
+        if (fresh && token===getCustomerToken() && host.isConnected) {
+          window._profileContext=buildProfileContent({host,me:fresh,onLogout,onLoginSuccess,initialTab:tab,ordersOnly,sourceScreen,settingsPage,returnToProfile});
+        }
+      },
     };
   }
 
@@ -29976,7 +30042,6 @@ function renderSheetAddressList() {
     clearCustomer({ fullReset: true });
     syncHeaderProfilePhoto(null);
     await refreshAddressState();
-    window.location.replace(window.location.pathname + window.location.search);
     return true;
   }
 
@@ -29984,6 +30049,14 @@ function renderSheetAddressList() {
     const isMobileProfile = window.matchMedia?.("(max-width: 768px)").matches === true;
     if (!isMobileProfile) {
       await openProfileSheet({ initialTab, onLoginSuccess });
+      return;
+    }
+    const me = meOverride || await fetchMeSafe();
+    if (!me) {
+      openLoginSheet({onCancel:onLoginCancel,onSuccess:customer=>{
+        if(typeof onLoginSuccess==='function')onLoginSuccess(customer);
+        else void openProfilePanel(customer,{forceOpen:true,initialTab});
+      }});
       return;
     }
     if (!forceOpen && cartViewMode === "profile") {
@@ -30004,42 +30077,11 @@ function renderSheetAddressList() {
       : elProfileContent;
     if (!profileHost) return;
 
-    const me = meOverride || await fetchMeSafe();
-    if (!me) {
-      const closeLoginPanel = () => {
-        profileHost.querySelector('.shop-auth')?.dispose?.();
-        if (typeof onLoginCancel === "function") {
-          onLoginCancel();
-        }
-        void restorePreviousPanel();
-      };
-      const loginWrap = buildLoginContent({
-        onSuccess: (me2) => {
-          profileHost.querySelector('.shop-auth')?.dispose?.();
-          if (typeof onLoginSuccess === "function") {
-            onLoginSuccess(me2);
-            return;
-          }
-          openProfilePanel(me2, { forceOpen: true });
-        },
-      });
-      profileHost.querySelector('.shop-auth')?.dispose?.();
-      profileHost.innerHTML = "";
-      profileHost.appendChild(loginWrap);
-      if (elProfileHeaderActions) elProfileHeaderActions.classList.add("hidden");
-      setCartHeader({
-        title: "Вход",
-        showAddressChip: false,
-        showProfileActions: false,
-        showClose: typeof onLoginCancel === "function",
-        onClose: typeof onLoginCancel === "function" ? closeLoginPanel : null,
-      });
-      return;
-    }
 
     const ctx = buildProfileContent({
       host: profileHost,
       me,
+      onLoginSuccess,
       onLogout: async () => {
         const loggedOut = await handleProfileLogout();
         if (loggedOut) await openProfilePanel(null, { forceOpen: true });
@@ -30330,47 +30372,31 @@ function renderSheetAddressList() {
   async function openProfileSheet({ initialTab, onLoginSuccess, ordersOnly = false, sourceScreen = "", returnToProfile = false, forceModal = false } = {}) {
     const navigationGeneration = shopNavigationGeneration;
     const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    const me=await fetchMeSafe();
+    if(navigationGeneration!==shopNavigationGeneration)return;
+    if(!me){
+      openLoginSheet({onSuccess:customer=>{
+        if(typeof onLoginSuccess==='function')onLoginSuccess(customer);
+        else void openProfileSheet({initialTab,ordersOnly,sourceScreen,returnToProfile,forceModal});
+      }});
+      return;
+    }
+
     if (!isMobile || forceModal) {
-      const me = await fetchMeSafe();
-      if (!me) {
-        openLoginSheet({
-          onSuccess: (me2) => {
-            if (typeof onLoginSuccess === "function") {
-              onLoginSuccess(me2);
-              return;
-            }
-            openProfileModal(me2, { initialTab, ordersOnly, sourceScreen, returnToProfile });
-          },
-        });
-        return;
-      }
       setActiveNav("profile");
-      openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile });
+      openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile, onLoginSuccess });
       return;
     }
 
     if (!ordersOnly) {
-      await openProfilePanel(null, { initialTab, onLoginSuccess });
+      await openProfilePanel(me, { initialTab, onLoginSuccess });
       return;
     }
 
     if (!window.AppModal) return;
 
-    const me = await fetchMeSafe();
     if (ordersOnly && navigationGeneration !== shopNavigationGeneration) return;
-    if (!me) {
-      openLoginSheet({
-        onSuccess: (me2) => {
-          if (typeof onLoginSuccess === "function") {
-            onLoginSuccess(me2);
-            return;
-          }
-          openProfileModal(me2, { initialTab, ordersOnly, sourceScreen, returnToProfile });
-        },
-      });
-      return;
-    }
-    openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile });
+    openProfileModal(me, { initialTab, ordersOnly, sourceScreen, returnToProfile, onLoginSuccess });
   }
 
   function openDesktopChatProfileModal(me) {
@@ -30412,7 +30438,7 @@ function renderSheetAddressList() {
     });
   }
 
-  function openProfileOrdersPage(me, { sourceScreen = "", returnToProfile = false } = {}) {
+  function openProfileOrdersPage(me, { sourceScreen = "", returnToProfile = false, onLoginSuccess } = {}) {
     const profilePage = document.getElementById("shopProfilePage");
     const pageParent = profilePage?.parentElement || document.body;
     let page = document.getElementById("shopProfileOrdersPage");
@@ -30435,6 +30461,7 @@ function renderSheetAddressList() {
 
     page.classList.toggle("shop-orders-from-profile",returnToProfile||sourceScreen==="profile");
     const closePage = ({ restoreNavigation = true } = {}) => {
+      window.shopCompanyChatNotifications?.orderDetailsClosed();
       const exitToHome = page._shopOrderDetailsExitToHome === true;
       document.body.classList.remove("shop-orders-page-active");
       document.body.classList.remove("shop-orders-details-active");
@@ -30490,6 +30517,7 @@ function renderSheetAddressList() {
     const ctx = buildProfileContent({
       host: content,
       me,
+      onLoginSuccess,
       onLogout: () => handleProfileLogout({ closeModal: false }),
       initialTab: "orders",
       ordersOnly: true,
@@ -30543,9 +30571,9 @@ function renderSheetAddressList() {
     return ctx;
   }
 
-  function openProfileModal(me, { initialTab, ordersOnly = false, sourceScreen = "", returnToProfile = false } = {}) {
+  function openProfileModal(me, { initialTab, ordersOnly = false, sourceScreen = "", returnToProfile = false, onLoginSuccess } = {}) {
     if (ordersOnly && window.matchMedia("(max-width: 768px)").matches) {
-      return openProfileOrdersPage(me, { sourceScreen, returnToProfile });
+      return openProfileOrdersPage(me, { sourceScreen, returnToProfile, onLoginSuccess });
     }
     if (!window.AppModal) return;
 
@@ -30580,6 +30608,7 @@ function renderSheetAddressList() {
     const ctx = buildProfileContent({
       host: page ? document.getElementById("shopProfilePageContent") : wrap,
       me,
+      onLoginSuccess,
       onLogout: () => handleProfileLogout({ closeModal: true }),
       initialTab,
       ordersOnly,
@@ -30604,6 +30633,7 @@ function renderSheetAddressList() {
       title: ordersOnly ? "Мои заказы" : "Профиль",
       content: wrap,
       onClose: () => {
+        window.shopCompanyChatNotifications?.orderDetailsClosed();
         shopPaymentWidgetSession?.finish();
         restoreProfileSettingsPage();
         cleanupOrdersPageState();
@@ -30778,48 +30808,23 @@ function renderSheetAddressList() {
 
     const useMobileCartPage = window.matchMedia("(max-width: 768px)").matches
       && document.body.classList.contains("shop-cart-page-active");
-    if (useMobileCartPage) {
-      const checkoutAuthResumeId = ++checkoutFlowRunId;
-      ensureCheckoutAuthPageHistory();
-      document.body.classList.add("shop-checkout-auth-page-active");
-      await openProfilePanel(null, {
-        forceOpen: true,
-        onLoginCancel: () => {
-          cancelPendingCheckoutFlow();
-          if (window.history.state?.shopCheckoutAuthPage === true) window.history.back();
-          else closeCheckoutAuthPageToCart();
-        },
-        onLoginSuccess: () => {
-          if (checkoutAuthResumeId !== checkoutFlowRunId) return;
-          resetCheckoutAuthPageUi();
-          void startCheckoutFlow({ isSheet: true, forceAddressRefresh: true });
-        },
-      });
-      applyCheckoutAuthPageHeader();
-    } else if (isSheet) {
-      openLoginSheet({
-        onSuccess: async () => {
-          if (document.body?.classList?.contains("page-kso")) {
-            await openSheetCheckoutFlow();
-            return;
-          }
-          if (window.AppModal?.isOpen?.()) {
-            window.AppModal.close("sheet");
-          }
-          setTimeout(() => {
-            void startCheckoutFlow({ isSheet: true, forceAddressRefresh: true });
-          }, 0);
-        },
-        fromCheckout: true,
-      });
-    } else {
-      await openProfilePanel(null, {
-        forceOpen: true,
-        onLoginSuccess: () => {
-          void startCheckoutFlow({ isSheet: false, forceAddressRefresh: true });
-        },
-      });
-    }
+    const checkoutAuthResumeId=++checkoutFlowRunId;
+    openLoginSheet({
+      fromCheckout:true,
+      onCancel:()=>cancelPendingCheckoutFlow(),
+      onSuccess:async()=>{
+        if(checkoutAuthResumeId!==checkoutFlowRunId)return;
+        if(document.body?.classList?.contains("page-kso")){
+          await openSheetCheckoutFlow();
+          return;
+        }
+        if(window.AppModal?.isOpen?.())window.AppModal.close("sheet");
+        setTimeout(()=>{
+          if(checkoutAuthResumeId!==checkoutFlowRunId)return;
+          void startCheckoutFlow({isSheet:!!isSheet || useMobileCartPage,forceAddressRefresh:true});
+        },0);
+      },
+    });
     return false;
   }
   // -----------------------------
@@ -37134,6 +37139,9 @@ function setBottomNavActive(tab) {
       if (typeof onBack === "function") onBack();
       const currentCustomer = await fetchMeSafe();
       if (!currentCustomer) throw new Error("ORDER_DETAILS_UNAVAILABLE");
+      if (!window.shopCompanyChatNotifications && typeof window.ensureShopChatLoaded === 'function') {
+        await window.ensureShopChatLoaded().catch(error => console.error('SHOP_ORDER_NOTIFICATIONS_LOAD_FAILED', error));
+      }
       closeShopSheetIfOpen({ checkoutCompleted: true });
       const detailsContext = openProfileModal(currentCustomer, {
         initialTab: "orders",
@@ -37143,6 +37151,7 @@ function setBottomNavActive(tab) {
       if (!detailsContext || typeof detailsContext.showOrderDetails !== "function") {
         throw new Error("ORDER_DETAILS_UNAVAILABLE");
       }
+      window.shopCompanyChatNotifications?.orderPlaced(createdOrderId);
       await detailsContext.showOrderDetails(createdOrderId, { exitToHome: true });
       return;
 
@@ -38768,7 +38777,11 @@ function initShopLate() {
       window.addEventListener("shop:customer-profile-changed", () => {
         const changed = shopOrderScopeKey() !== orderSocketScope;
         syncOrderSocket();
-        if (changed) void window.updateActiveOrdersBadge({ force: true });
+        if (changed) {
+          ensureShopOrdersCacheScope();
+          if (window._profileContext?.customerToken !== getCustomerToken()) void window._profileContext?.refreshAuth?.().catch(console.error);
+          void window.updateActiveOrdersBadge({ force: true });
+        }
       });
       window.addEventListener("tenantStoreChanged", () => {
         syncOrderSocket();

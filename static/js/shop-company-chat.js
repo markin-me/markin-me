@@ -513,8 +513,15 @@
   let webPushSyncRequestedWithPermission = false;
   let webPushSyncForceRequested = false;
   let webPushSyncQueuedClientId = "";
-  let notificationPermissionPromptShownInSession = false;
-  let notificationPermissionPromptScheduled = false;
+  let notificationPermissionPromptOpen = false;
+  let notificationPromptLeaving = false;
+  let notificationPromptTimer = 0;
+  let notificationChatWait = null;
+  let notificationChatTimer = 0;
+  let notificationRealTypingUntil = 0;
+  let notificationCreatedOrderId = 0;
+  let notificationOrderWait = null;
+  let notificationOrderTimer = 0;
   let webPushPreferencesCache = null;
   const selectedMessageIds = new Set();
   const hotQuestionOrderCardsCache = new Map();
@@ -1120,6 +1127,10 @@
     const info = normalizePeerTypingInfo(rawTyping);
     const nowMs = Date.now();
     const fromEmulation = opts.source === "assistant-emulation";
+    if (!fromEmulation) {
+      notificationRealTypingUntil = isPeerTypingInfoActiveNow(info) && !opts.forceInactive ? getPeerTypingEffectiveUntilMs(info) : 0;
+      updateNotificationChatWait();
+    }
     const emulationActive = assistantTypingEmulationUntilMs > nowMs;
     if (!fromEmulation && !opts.forceInactive && emulationActive) {
       return;
@@ -1924,51 +1935,133 @@
     return Promise.resolve(String(Notification.permission || "default"));
   }
 
+  function notificationPromptLocalDay() {
+    const now = new Date();
+    return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  }
+
   function shouldOfferNotificationPermissionPrompt() {
-    if (notificationPermissionPromptShownInSession) return false;
-    if (!isWebPushSupported()) return false;
-    if (!isWebPushSecureContext()) return false;
-    if (!("Notification" in window)) return false;
+    if (notificationPermissionPromptOpen || notificationPromptLeaving || document.visibilityState !== 'visible') return false;
+    if (!isWebPushSupported() || !isWebPushSecureContext() || !('Notification' in window)) return false;
     try {
-      if (localStorage.getItem(webPushPermissionPromptStorageKey) === "1") return false;
+      const declined = localStorage.getItem(webPushPermissionPromptStorageKey);
+      if (declined === notificationPromptLocalDay()) return false;
+      if (declined === '1') localStorage.removeItem(webPushPermissionPromptStorageKey);
     } catch {}
-    return String(Notification.permission || "default") === "default";
+    return Notification.permission === 'default';
   }
 
-  function maybeShowNotificationPermissionPrompt() {
-    if (!shouldOfferNotificationPermissionPrompt()) return;
-    if (!window.AppModal || typeof window.AppModal.open !== "function") return;
-    if (typeof window.AppModal.isOpen === "function" && window.AppModal.isOpen()) return;
-    notificationPermissionPromptShownInSession = true;
-    try { localStorage.setItem(webPushPermissionPromptStorageKey, "1"); } catch {}
-    const content = document.createElement("div");
-    content.className = "shop-profile-notification-permission";
-    content.textContent = "Разрешите уведомления, чтобы получать новости компании, изменения статуса заказов и ответы поддержки.";
-    window.AppModal.open({
-      title: "Получать уведомления?",
-      content: content,
-      cancelText: "Не сейчас",
-      saveText: "Разрешить",
-      showCancel: true,
-      showSave: true,
-      onSave: function () {
-        return setChatNotificationsEnabled(true).then(function () { return true; });
+  function maybeShowNotificationPermissionPrompt(context) {
+    if (!['chat-close', 'chat-wait', 'order-view', 'order-close'].includes(context)) return false;
+    const orderHost = context === 'order-view' && notificationOrderWait?.visible()
+      ? notificationOrderWait.host?.() : null;
+    if (!shouldOfferNotificationPermissionPrompt() || !window.AppModal?.confirm
+        || (window.AppModal.isOpen?.() && !orderHost)) return false;
+    if (isSupportChatOpen() && context !== 'chat-wait') return false;
+    if (document.querySelector('.app-modal-confirmation') || pendingDeleteConfirm
+        || (attachPreviewOverlay && !attachPreviewOverlay.classList.contains('hidden'))
+        || (imageViewerOverlay && !imageViewerOverlay.classList.contains('hidden'))) return false;
+    const chatContext = context.startsWith('chat-');
+    notificationPermissionPromptOpen = true;
+    notificationCreatedOrderId = 0;
+    if (notificationChatWait) { notificationChatWait.offered = true; notificationChatWait.offeredDay = notificationPromptLocalDay(); }
+    pauseNotificationChatWait();
+    clearTimeout(notificationPromptTimer);
+    notificationPromptTimer = 0;
+    clearNotificationOrderWait();
+    window.AppModal.confirm({
+      host: isSupportChatOpen() ? modal : orderHost,
+      title: chatContext ? 'Не пропустите ответ на сообщение' : 'Следите за статусом заказа',
+      cancelText: 'Не сейчас', saveText: 'Уведомлять', actionsLayout: 'split',
+      onSave: function () { return setChatNotificationsEnabled(true, { preservePreferences: true }).then(function () { return true; }); },
+      onCancel: function () {
+        try { localStorage.setItem(webPushPermissionPromptStorageKey, notificationPromptLocalDay()); } catch {}
       },
-      onClose: function () {
-        window.AppModal?.body?.classList.remove("shop-notification-permission-modal-body");
-      },
+    }).finally(function () { notificationPermissionPromptOpen = false; });
+    return true;
+  }
+
+  function scheduleNotificationPermissionPrompt(context) {
+    clearTimeout(notificationPromptTimer);
+    notificationPromptTimer = window.setTimeout(function () {
+      notificationPromptTimer = 0;
+      if (context === 'chat-close' && (!notificationChatWait || notificationChatWait.clientId !== getActiveChatClientId() || (notificationChatWait.offered && notificationChatWait.offeredDay === notificationPromptLocalDay()) || notificationChatHasReply(notificationChatWait.message))) return;
+      if (context === 'order-view' && (!notificationOrderWait || !notificationOrderWait.visible())) return;
+      if (context === 'chat-wait' && (!notificationChatWait || notificationChatWait.clientId !== getActiveChatClientId() || notificationChatWait.offered || !isSupportChatOpen() || notificationRealTypingUntil > Date.now() || notificationChatHasReply(notificationChatWait.message))) return;
+      maybeShowNotificationPermissionPrompt(context);
+    }, 0);
+  }
+
+  function notificationChatHasReply(message, entries = liveEntries) {
+    const index = entries.findIndex(entry => String(entry.id) === String(message.id));
+    return entries.some(function (entry, i) {
+      return entry.type === 'message' && entry.role === 'agent' && !isAssistantMessageId(entry.id)
+        && (index >= 0 ? i > index : compareIsoDates(String(entry.createdAt || ''), String(message.createdAt || '')) >= 0);
     });
-    window.AppModal.body?.classList.add("shop-notification-permission-modal-body");
   }
 
-  function scheduleNotificationPermissionPrompt() {
-    if (notificationPermissionPromptScheduled) return;
-    notificationPermissionPromptScheduled = true;
-    const show = function () {
-      window.setTimeout(maybeShowNotificationPermissionPrompt, 350);
-    };
-    if (document.readyState === "complete") show();
-    else window.addEventListener("load", show, { once: true });
+  function pauseNotificationChatWait() {
+    clearTimeout(notificationChatTimer);
+    notificationChatTimer = 0;
+    if (notificationChatWait?.runningSince) {
+      notificationChatWait.remaining = Math.max(0, notificationChatWait.remaining - (Date.now() - notificationChatWait.runningSince));
+      notificationChatWait.runningSince = 0;
+    }
+  }
+
+  function updateNotificationChatWait() {
+    pauseNotificationChatWait();
+    const wait = notificationChatWait;
+    if (!wait) return;
+    if (wait.clientId !== getActiveChatClientId() || notificationChatHasReply(wait.message)) { notificationChatWait = null; return; }
+    if (wait.offered || !shouldOfferNotificationPermissionPrompt() || !isSupportChatOpen()) return;
+    const typingDelay = notificationRealTypingUntil - Date.now();
+    if (typingDelay > 0) {
+      notificationChatTimer = window.setTimeout(updateNotificationChatWait, typingDelay);
+      return;
+    }
+    wait.runningSince = Date.now();
+    notificationChatTimer = window.setTimeout(function () {
+      pauseNotificationChatWait();
+      scheduleNotificationPermissionPrompt('chat-wait');
+    }, wait.remaining);
+  }
+
+  function beginNotificationChatWait(message) {
+    if (notificationChatWait?.offered && notificationChatWait.offeredDay !== notificationPromptLocalDay()) { notificationChatWait.offered = false; notificationChatWait.remaining = 30000; }
+    updateNotificationChatWait();
+    if (notificationChatHasReply(message)) return;
+    if (!notificationChatWait) notificationChatWait = { message, clientId: getActiveChatClientId(), remaining: 30000, runningSince: 0, offered: false };
+    updateNotificationChatWait();
+  }
+
+  function clearNotificationOrderWait() {
+    clearTimeout(notificationOrderTimer);
+    notificationOrderTimer = 0;
+    notificationOrderWait = null;
+  }
+
+  function notificationOrderDetailsShown(orderId, visible, host) {
+    if (Number(orderId) !== notificationCreatedOrderId || notificationOrderWait) return;
+    if (notificationPromptLeaving || !visible()) return;
+    notificationOrderWait = { id: Number(orderId), visible, host };
+    resumeNotificationOrderWait();
+  }
+
+  function resumeNotificationOrderWait() {
+    if (!notificationOrderWait || notificationOrderTimer || document.visibilityState !== 'visible') return;
+    notificationOrderTimer = window.setTimeout(function () {
+      notificationOrderTimer = 0;
+      const wait = notificationOrderWait;
+      if (wait && wait.visible()) scheduleNotificationPermissionPrompt('order-view');
+    }, 3000);
+  }
+
+  function notificationOrderDetailsClosed(orderId) {
+    if (!notificationOrderWait || (orderId && Number(orderId) !== notificationOrderWait.id)) return;
+    clearNotificationOrderWait();
+    notificationCreatedOrderId = 0;
+    scheduleNotificationPermissionPrompt('order-close');
   }
 
   function suppressIncomingAlertsFor(ms) {
@@ -2622,7 +2715,7 @@
     }
   }
 
-  async function setChatNotificationsEnabled(enabled) {
+  async function setChatNotificationsEnabled(enabled, options = {}) {
     const nextEnabled = enabled === true;
     if (!nextEnabled) {
       try { localStorage.setItem(chatNotificationsStorageKey, "0"); } catch {}
@@ -2632,6 +2725,7 @@
     }
 
     if (!isWebPushSupported() || !isWebPushSecureContext()) {
+      if (options.preservePreferences) return false;
       try { localStorage.setItem(chatNotificationsStorageKey, "0"); } catch {}
       await unsubscribeWebPushNotifications();
       return false;
@@ -2639,6 +2733,7 @@
 
     const permission = await requestMessageAlertNotificationPermission();
     const allowed = permission === "granted";
+    if (!allowed && options.preservePreferences) return false;
     try { localStorage.setItem(chatNotificationsStorageKey, allowed ? "1" : "0"); } catch {}
     if (!allowed) {
       await unsubscribeWebPushNotifications();
@@ -3454,7 +3549,8 @@
   function getCustomerCache() {
     try {
       const raw = localStorage.getItem(customerCacheKey);
-      return raw ? JSON.parse(raw) : null;
+      const cached = raw ? JSON.parse(raw) : null;
+      return cached?.is_guest ? { ...cached, name: 'Гость', photo: null } : cached;
     } catch {
       return null;
     }
@@ -3490,6 +3586,7 @@
   }
 
   function markSharedThreadMutated() {
+    persistDeferredChatMessages();
     sharedThreadMutationVersion += 1;
   }
 
@@ -3556,12 +3653,30 @@
     return out;
   }
 
+  function deferredChatStorageKey(){return 'shop_chat_deferred_t'+tenantId+'_c'+getActiveChatClientId();}
+  function persistDeferredChatMessages(){
+    if(isAdminClientChatMode || !getActiveChatClientId())return;
+    const entries=liveEntries.filter(entry=>entry._localAuto===true);
+    try{
+      if(entries.length)localStorage.setItem(deferredChatStorageKey(),JSON.stringify(entries));
+      else localStorage.removeItem(deferredChatStorageKey());
+    }catch(error){console.warn('CHAT_DEFERRED_STORAGE_FAILED',error.name);}
+  }
+  function readDeferredChatMessages(){
+    try{const entries=JSON.parse(localStorage.getItem(deferredChatStorageKey()) || '[]');
+      return Array.isArray(entries)?entries.filter(entry=>entry && entry._localAuto===true && entry.id):[];
+    }catch(error){console.warn('CHAT_DEFERRED_STORAGE_FAILED',error.name);return [];}
+  }
+
   function syncServerChatIdentity() {
     if (isAdminClientChatMode) return;
     const token = getCustomerToken();
     if (chatIdentity?.token === token || chatIdentityRequest?.token === token) return;
     const generation = ++chatIdentityGeneration;
     const previous = chatIdentity;
+    const pendingSourceId=Number(chatClientProfile?.id || 0);
+    const pendingCandidates=mergeSharedEntryLists(readDeferredChatMessages(),liveEntries)
+      .filter(entry=>entry?._localPendingRemoteCreate===true || entry?._localAuto===true);
     const drain = previous?.isVisitor ? sharedMutationQueue : Promise.resolve();
     const request = async () => {
       await drain;
@@ -3571,17 +3686,26 @@
       });
       if (generation !== chatIdentityGeneration || token !== getCustomerToken()) return;
       const mergedFrom = Number(result.data.merged_from || 0);
+      const pendingMessages = mergedFrom && pendingSourceId===mergedFrom
+        ? pendingCandidates.filter(entry=>entry._localPendingRemoteCreate===true || entry._localAuto===true) : [];
       if (mergedFrom) {
         const draft = Number(chatClientProfile?.id) === mergedFrom ? input?.value : undefined;
         transferPersistedComposerDraft(mergedFrom, result.data.client_id, draft);
       }
-      chatIdentity = { id: Number(result.data.client_id), isVisitor: result.data.is_visitor, token };
+      chatIdentity = { id: Number(result.data.client_id), isVisitor: result.data.is_visitor, token,
+        sessionStarted:result.data.is_visitor===false || result.data.session_started===true };
+      window.ShopPresence?.refresh?.();
       const open = isSupportChatOpen();
       if (!refreshChatClientProfileIfNeeded({ pull: open })) {
         stopSharedThreadSseConnection();
         stopUnreadSseConnection();
         if (open) startSharedThreadPolling();
         else startUnreadPolling();
+      }
+      for(const entry of pendingMessages){
+        entry._mergedGuestOrigin=mergedFrom;
+        if(!findMessageEntry(entry.id))liveEntries.push(entry);
+        enqueueSharedMutation(()=>remoteCreateSharedMessage(entry));
       }
       flushPendingPushChatOpenRequest();
     };
@@ -3872,6 +3996,9 @@
 
     persistComposerDraft(currentProfile.id);
     stopLocalTypingSession({ flush: true });
+    pauseNotificationChatWait();
+    notificationChatWait = null;
+    notificationRealTypingUntil = 0;
     clearPeerTypingHideTimer();
     peerTypingState = { active: false, text: "", updatedAt: "", expiresAt: "" };
     peerTypingUpdatedAt = "";
@@ -4395,7 +4522,7 @@
       read: message.read === true,
       deliveredAt: String(message.deliveredAt || ""),
       readAt: String(message.readAt || ""),
-      orderCards: cacheHotQuestionOrderPreviews(message.orderCards),
+      orderCards: isAdminClientChatMode ? cacheHotQuestionOrderPreviews(message.orderCards) : (Array.isArray(message.orderCards) ? message.orderCards : []).map(card => ({id:toPositiveOrderId(card.id)})).filter(card => card.id),
     };
   }
 
@@ -4488,7 +4615,7 @@
       deliveryStatus: status,
       deliveredAt: String(entry.deliveredAt || ""),
       readAt: String(entry.readAt || ""),
-      orderCards: cacheHotQuestionOrderPreviews(entry.orderCards),
+      orderCards: isAdminClientChatMode ? cacheHotQuestionOrderPreviews(entry.orderCards) : (Array.isArray(entry.orderCards) ? entry.orderCards : []).map(card => ({id:toPositiveOrderId(card.id)})).filter(card => card.id),
     };
   }
 
@@ -4738,7 +4865,11 @@
 
   async function remoteCreateSharedMessage(entry) {
     const requestClientId = getActiveChatClientId();
+    const notificationIdentity = chatIdentityGeneration;
     if (!requestClientId || !entry) return;
+    if(!isAdminClientChatMode && chatIdentity?.isVisitor && !chatIdentity.sessionStarted && (entry.role==='agent' || entry._localAuto)){
+      entry._localAuto=true;markLocalOutgoingEntryRemotePending(entry,false);persistDeferredChatMessages();return;
+    }
     const payload = mapEntryToSharedMessage(entry);
     if (!payload || !payload.id) return;
     const metaState = sanitizeSharedThreadMeta(sharedThreadMeta);
@@ -4748,6 +4879,7 @@
         method: "POST",
         body: {
           message: payload,
+          ...(entry._mergedGuestOrigin ? {origin_client_id:entry._mergedGuestOrigin} : {}),
           meta: {
             name: String(metaState.name || "\u041a\u043b\u0438\u0435\u043d\u0442"),
             phone: String(metaState.phone || ""),
@@ -4756,16 +4888,38 @@
         },
       }
     );
+    if(json?.data?.deferred){entry._localAuto=true;markLocalOutgoingEntryRemotePending(entry,false);persistDeferredChatMessages();return;}
+    if(chatIdentity?.isVisitor && requestClientId===getActiveChatClientId())chatIdentity.sessionStarted=true;
+    const wasDeferred=entry._localAuto===true;
+    delete entry._localAuto;
+    const savedId=String(json?.data?.message?.id || '');
+    if(entry._mergedGuestOrigin && savedId && savedId!==payload.id){
+      const index=liveEntries.indexOf(entry);
+      if(index>=0){
+        if(liveEntries.some(other=>other!==entry && String(other.id)===savedId))liveEntries.splice(index,1);
+        else entry.id=savedId;
+      }
+      payload.id=savedId;
+    }
+    if (entry.role === "user" && !wasDeferred && notificationIdentity === chatIdentityGeneration && requestClientId === getActiveChatClientId()) beginNotificationChatWait(entry);
     const updatedAt = String(json && json.data && json.data.updated_at || "");
     if (updatedAt) sharedThreadUpdatedAt = updatedAt;
     const currentEntry = findMessageEntry(payload.id);
     if (currentEntry) {
+      delete currentEntry._localAuto;
       markLocalOutgoingEntryRemotePending(currentEntry, false);
       protectLocalOutgoingEntry(currentEntry);
+    }
+    if(wasDeferred)persistDeferredChatMessages();
+    if(!wasDeferred && chatIdentity?.sessionStarted){
+      for(const deferred of liveEntries.filter(item=>item._localAuto===true)){
+        await remoteCreateSharedMessage(deferred);
+      }
     }
   }
 
   async function remotePatchSharedMessage(messageId, patch) {
+    if(findMessageEntry(messageId)?._localAuto){persistDeferredChatMessages();return;}
     const requestClientId = getActiveChatClientId();
     const id = String(messageId || "").trim();
     if (!requestClientId || !id || !patch || typeof patch !== "object") return;
@@ -5101,7 +5255,12 @@
     const appendOlder = opts.appendOlder === true;
     const preserveHistory = opts.preserveHistory === true && !appendOlder;
     const incomingEntries = applyPendingReactionOverridesToEntries(Array.isArray(mappedEntries) ? mappedEntries : []);
+    if (notificationChatWait && notificationChatHasReply(notificationChatWait.message, incomingEntries)) {
+      pauseNotificationChatWait();
+      notificationChatWait = null;
+    }
     const currentEntries = Array.isArray(liveEntries) ? liveEntries : [];
+    const deferred=mergeSharedEntryLists(readDeferredChatMessages(),currentEntries.filter(entry=>entry._localAuto===true));
     let entries = appendOlder
       ? mergeSharedEntryLists(incomingEntries, currentEntries)
       : preserveHistory
@@ -5110,6 +5269,7 @@
     if (!appendOlder && !preserveHistory) {
       entries = mergeProtectedLocalOutgoingEntries(entries, currentEntries);
     }
+    entries=mergeSharedEntryLists(entries,deferred);
     const remoteUpdatedAt = String(updatedAt || "");
     if (appendOlder || !preserveHistory) {
       updateSharedHistoryStateFromPage(opts.page);
@@ -5199,6 +5359,7 @@
         }
       : null;
     liveEntries = entries;
+    updateNotificationChatWait();
     sharedThreadUpdatedAt = remoteUpdatedAt;
     renderThread();
     const hasIncomingAgentMessages = hasLoadedSharedThreadOnce && notifiableAgentMessageIds.length > 0;
@@ -8321,6 +8482,7 @@
   }
 
   function leaveSupportChatForMessages() {
+    if (notificationPermissionPromptOpen && modal.querySelector('.app-modal-confirmation')) window.AppModal.close('chat-navigation');
     if (!isSupportChatOpen()) return;
     if (window.ShopPresence && typeof window.ShopPresence.setMode === "function") {
       window.ShopPresence.setMode("site");
@@ -8347,6 +8509,8 @@
     pendingFeedRestoreState = null;
     setChatBootstrapLoading(false);
     startUnreadPolling({ forceRefresh: true });
+    pauseNotificationChatWait();
+    scheduleNotificationPermissionPrompt("chat-close");
   }
 
   function navigateMessageCenterBack() {
@@ -8481,7 +8645,7 @@
     syncOpenButtonActiveState();
     document.body.classList.add("shop-company-chat-open");
     document.body.classList.toggle("shop-company-chat-page-active", isCompanyChatPageMode());
-    maybeShowNotificationPermissionPrompt();
+    updateNotificationChatWait();
     if (!shouldLockPageBeforeOpen) {
       lockBackgroundPageScrollForChat();
       captureMobileKeyboardViewportBaseBottom({ force: true });
@@ -8569,6 +8733,7 @@
   }
 
   function closeCompanyChat(options) {
+    if (notificationPermissionPromptOpen && modal.querySelector('.app-modal-confirmation')) window.AppModal.close('chat-close');
     const closeOptions = options && typeof options === "object" ? options : {};
     if (window.ShopPresence && typeof window.ShopPresence.setMode === "function") {
       window.ShopPresence.setMode("site");
@@ -8654,9 +8819,13 @@
     renderUnreadBadge(liveEntries);
     renderTypingIndicator();
     startUnreadPolling();
+    pauseNotificationChatWait();
+    scheduleNotificationPermissionPrompt("chat-close");
   }
 
   function resetConversation() {
+    pauseNotificationChatWait();
+    notificationChatWait = null;
     hideContextMenu();
     hideReactionBar();
     hideEmojiPopover();
@@ -10193,7 +10362,7 @@
 
   function buildChatOrderDetailsHtml(order) {
     const source = order && typeof order === "object" ? order : {};
-    let html = '<div class="shop-order-details">';
+    let html = '<div class="shop-order-details' + (source.privacy_restricted ? ' is-restricted-order' : '') + '">';
 
     html += '<div class="shop-order-details-header">';
     html += '<div class="shop-order-details-title">\u0417\u0430\u043a\u0430\u0437 '
@@ -10429,6 +10598,7 @@
     const safeOrderId = toPositiveOrderId(source.id || orderId);
     const photos = Array.isArray(source.photos) ? source.photos.slice(0, HOT_QUESTION_ORDER_CARD_PHOTOS_MAX) : [];
     button.innerHTML = "";
+    button.classList.toggle("is-restricted-order", !!source.privacy_restricted);
 
     const head = document.createElement("div");
     head.className = "shop-company-chat-order-card__head";
@@ -13145,8 +13315,9 @@
       readAt: "",
       orderCards: orderCards,
       _sharedDirection: direction,
+      _localAuto:!isAdminClientChatMode && chatIdentity?.isVisitor && !chatIdentity.sessionStarted && role==='agent',
     };
-    if (role === "user") {
+    if (role === "user" && !message._localAuto) {
       markLocalOutgoingEntryRemotePending(message, true);
       protectLocalOutgoingEntry(message);
     }
@@ -13159,7 +13330,7 @@
     if (attachment) {
       scheduleMessageAttachmentBottomPin(message.id, { bottomDistance: 0 });
     }
-    if (opts.persistRemote !== false) {
+    if (opts.persistRemote !== false && !message._localAuto) {
       enqueueSharedMutation(function () {
         return remoteCreateSharedMessage(message);
       });
@@ -13330,6 +13501,7 @@
       : [];
     const preview = {
       id: id,
+      privacy_restricted: source.privacy_restricted === true,
       publicId: String(source.public_id || source.publicId || "").trim(),
       statusTitle: String(
         source.status_title || source.statusTitle || HOT_QUESTION_ORDER_STATUS_UNKNOWN
@@ -13406,7 +13578,9 @@
     const resolved = [];
     const seen = new Set();
 
-    cacheHotQuestionOrderPreviews(source.orderCards).forEach(function (preview) {
+    const references=isAdminClientChatMode ? cacheHotQuestionOrderPreviews(source.orderCards)
+      : (Array.isArray(source.orderCards) ? source.orderCards : []).map(card => hotQuestionOrderCardsCache.get(toPositiveOrderId(card.id)) || {id:toPositiveOrderId(card.id)});
+    references.forEach(function (preview) {
       const orderId = toPositiveOrderId(preview && preview.id);
       if (!orderId || seen.has(orderId)) return;
       seen.add(orderId);
@@ -13483,7 +13657,7 @@
       "/api/public/me/orders/" + encodeURIComponent(String(safeOrderId)) + "?_ts=" + Date.now()
     );
     const order = json && json.data ? json.data : null;
-    return cacheHotQuestionOrderPreview(order);
+    return mapHotQuestionOrderPreview(order);
   }
 
   async function ensureHotQuestionOrderCardPreview(orderId, refresh) {
@@ -13495,17 +13669,20 @@
     if (hotQuestionOrderCardsFetchInFlight.has(safeOrderId)) {
       return hotQuestionOrderCardsFetchInFlight.get(safeOrderId);
     }
+    const requestToken=getCustomerToken();
     const pending = fetchHotQuestionOrderPreviewById(safeOrderId)
       .then(function (preview) {
+        if (requestToken!==getCustomerToken()) return null;
         hotQuestionOrderCardsCache.set(safeOrderId, preview || null);
         return preview || null;
       })
       .catch(function () {
+        if(requestToken!==getCustomerToken()) return null;
         hotQuestionOrderCardsCache.set(safeOrderId, null);
         return null;
       })
       .finally(function () {
-        hotQuestionOrderCardsFetchInFlight.delete(safeOrderId);
+        if(hotQuestionOrderCardsFetchInFlight.get(safeOrderId)===pending) hotQuestionOrderCardsFetchInFlight.delete(safeOrderId);
       });
     hotQuestionOrderCardsFetchInFlight.set(safeOrderId, pending);
     return pending;
@@ -13595,18 +13772,17 @@
     const opts = options && typeof options === "object" ? options : {};
     const phoneCandidate = normalizePhoneForHotQuestion(opts.phone);
     try {
+      const token = getCustomerToken();
+      if (token.startsWith("g_")) {
+        const activeOrders = await fetchActiveOrdersForHotQuestion();
+        clearPendingOrderPhoneLookup(getActiveChatClientId());
+        return buildWhereIsOrderReplyPayloadFromOrders(activeOrders);
+      }
       if (phoneCandidate) {
         const byPhoneOrders = await fetchActiveOrdersByPhoneForHotQuestion(phoneCandidate);
         return buildWhereIsOrderReplyPayloadFromOrders(byPhoneOrders);
       }
 
-      if (chatClientProfile && chatClientProfile.isGuest === true) {
-        return {
-          text: buildWhereIsOrderGuestReply(),
-          orderCards: [],
-        };
-      }
-      const token = getCustomerToken();
       if (!token) {
         return {
           text: buildWhereIsOrderGuestReply(),
@@ -13615,6 +13791,7 @@
       }
 
       const activeOrders = await fetchActiveOrdersForHotQuestion();
+      clearPendingOrderPhoneLookup(getActiveChatClientId());
       return buildWhereIsOrderReplyPayloadFromOrders(activeOrders);
     } catch (err) {
       const errText = String(err && err.message || "").toUpperCase();
@@ -14593,6 +14770,9 @@
   }
 
   document.addEventListener("visibilitychange", function () {
+    updateNotificationChatWait();
+    if (document.visibilityState !== "visible") { clearTimeout(notificationPromptTimer); clearTimeout(notificationOrderTimer); notificationOrderTimer = 0; }
+    else resumeNotificationOrderWait();
     if (document.visibilityState !== "visible") {
       if (isSupportChatOpen()) {
         saveFeedScrollPosition({ force: true, persist: true });
@@ -14644,6 +14824,10 @@
   });
 
   window.addEventListener("pagehide", function () {
+    notificationPromptLeaving = true;
+    pauseNotificationChatWait();
+    clearNotificationOrderWait();
+    clearTimeout(notificationPromptTimer);
     stopSharedThreadPolling();
     stopUnreadPolling();
     stopLocalTypingSession({ flush: true, keepalive: true });
@@ -14728,7 +14912,15 @@
   });
 
   // Same-tab customer auth/profile updates do not fire window.storage.
+  let orderCardsCustomerToken=getCustomerToken();
   window.addEventListener("shop:customer-profile-changed", function () {
+    if (!isAdminClientChatMode && orderCardsCustomerToken!==getCustomerToken()) {
+      orderCardsCustomerToken=getCustomerToken();
+      hotQuestionOrderCardsCache.clear();
+      hotQuestionOrderCardsFetchInFlight.clear();
+      hideChatOrderDetailsView();
+      if(chatOrderDetailsView) chatOrderDetailsView.replaceChildren();
+    }
     refreshChatClientProfileIfNeeded({ pull: isSupportChatOpen() });
     if (isAdminClientChatMode) {
       if (isSupportChatOpen()) {
@@ -15835,7 +16027,18 @@
     deleteSelectedMessages();
   });
 
+  window.addEventListener('pageshow', function () { notificationPromptLeaving = false; });
+  window.addEventListener('storage', function (event) {
+    if (event.key === chatNotificationsStorageKey && event.newValue === '1' && 'Notification' in window && Notification.permission === 'granted' && notificationPermissionPromptOpen) window.AppModal.close('permission-granted-in-another-tab');
+    if (event.key === webPushPermissionPromptStorageKey && event.newValue === notificationPromptLocalDay()) {
+      clearTimeout(notificationPromptTimer);
+      if (notificationPermissionPromptOpen) window.AppModal.close('declined-in-another-tab');
+    }
+  });
   window.shopCompanyChatNotifications = {
+    orderPlaced: function (id) { clearNotificationOrderWait(); notificationCreatedOrderId = Number(id) || 0; },
+    orderDetailsShown: notificationOrderDetailsShown,
+    orderDetailsClosed: notificationOrderDetailsClosed,
     isEnabled: isChatNotificationsEnabled,
     setEnabled: setChatNotificationsEnabled,
     getPreferences: getWebPushPreferences,
@@ -15849,10 +16052,10 @@
       };
     },
   };
-  if (!isChatNotificationsEnabled()) {
+  if (!isChatNotificationsEnabled() && (!('Notification' in window) || Notification.permission !== 'default')) {
     unsubscribeWebPushNotifications().catch(function () {});
   }
-  scheduleNotificationPermissionPrompt();
+
   syncServerChatIdentity();
 })();
 

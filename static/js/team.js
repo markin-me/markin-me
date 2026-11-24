@@ -65,7 +65,7 @@
     '/dashboard/courier-screen': 'Экран курьера',
     '/dashboard/new-order': 'Новый заказ',
     '/dashboard/clients': 'Маркетинг',
-    '/dashboard/chat': 'Чаты',
+    '/dashboard/chat': 'Чат поддержки',
     '/dashboard/team': 'Команда',
     '/dashboard/settings': 'Настройки',
   };

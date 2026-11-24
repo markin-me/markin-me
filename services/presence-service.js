@@ -37,25 +37,26 @@ class PresenceService {
   adjustCounts(record, visitor, from, to) {
     if (from !== OFFLINE) {
       record.counts.siteVisitors -= 1;
-      if (visitor.clientId) record.counts.identifiedClients -= 1;
-      if (visitor.clientId && from === CHAT_ACTIVE) record.counts.chatClients -= 1;
+      if (visitor.clientId && visitor.isCustomer!==false) record.counts.identifiedClients -= 1;
+      if (from === CHAT_ACTIVE) record.counts.chatClients -= 1;
     }
     if (to !== OFFLINE) {
       record.counts.siteVisitors += 1;
-      if (visitor.clientId) record.counts.identifiedClients += 1;
-      if (visitor.clientId && to === CHAT_ACTIVE) record.counts.chatClients += 1;
+      if (visitor.clientId && visitor.isCustomer!==false) record.counts.identifiedClients += 1;
+      if (to === CHAT_ACTIVE) record.counts.chatClients += 1;
     }
   }
 
-  emit(record, clientId, previousState, state) {
-    if (previousState === state) return;
-    const event = { scope: { ...record.scope }, clientId: clientId || null, previousState, state, counts: { ...record.counts } };
+  emit(record, clientId, previousState, state, force = false) {
+    if (previousState === state && !force) return;
+    const marketingClients=this.getMarketingClients(record.scope);
+    const event = { scope: { ...record.scope }, clientId: clientId || null, previousState, state, marketingClients, counts: { ...record.counts, marketingOnlineClients:marketingClients.length } };
     this.listeners.forEach((listener) => {
       try { listener(event); } catch (error) { console.error('PRESENCE_SUBSCRIBER_FAILED:', error); }
     });
   }
 
-  touch({ scope, presenceSessionId, tabId, clientId = null, mode = SITE_ACTIVE, visible = true, now = Date.now() }) {
+  touch({ scope, presenceSessionId, tabId, clientId = null, isCustomer = true, marketingClientId = null, mode = SITE_ACTIVE, visible = true, now = Date.now() }) {
     const normalizedScope = this.normalizeScope(scope);
     const key = this.scopeKey(normalizedScope);
     const record = this.store.ensureScope(key, normalizedScope);
@@ -66,15 +67,15 @@ class PresenceService {
     [priorKey, visitorKey].forEach((candidateKey) => {
       const visitor = candidateKey ? record.visitors.get(candidateKey) : null;
       if (visitor && !previous.has(candidateKey)) {
-        previous.set(candidateKey, { visitor: { clientId: visitor.clientId }, state: this.visitorState(visitor) });
+        previous.set(candidateKey, { visitor: { clientId: visitor.clientId,isCustomer:visitor.isCustomer,marketingClientId:visitor.marketingClientId }, state: this.visitorState(visitor) });
       }
     });
 
     let visitor = record.visitors.get(visitorKey);
     if (!visitor) {
-      visitor = { clientId: normalizedClientId, sessions: new Set(), tabs: new Map() };
+      visitor = { clientId: normalizedClientId,isCustomer,marketingClientId:null, sessions: new Set(), tabs: new Map() };
       record.visitors.set(visitorKey, visitor);
-      previous.set(visitorKey, { visitor: { clientId: visitor.clientId }, state: OFFLINE });
+      previous.set(visitorKey, { visitor: { clientId: visitor.clientId,isCustomer:visitor.isCustomer,marketingClientId:visitor.marketingClientId }, state: OFFLINE });
     }
     if (priorKey && priorKey !== visitorKey) {
       const prior = record.visitors.get(priorKey);
@@ -90,6 +91,8 @@ class PresenceService {
       }
     }
     visitor.clientId = normalizedClientId;
+    visitor.isCustomer=isCustomer;
+    visitor.marketingClientId=Number(marketingClientId)>0 ? Number(marketingClientId) : isCustomer ? normalizedClientId : null;
     visitor.sessions.add(presenceSessionId);
     record.sessionVisitors.set(presenceSessionId, visitorKey);
     visitor.tabs.set(tabId, { presenceSessionId, mode, visible: visible === true, lastSeenAt: Number(now) });
@@ -100,9 +103,9 @@ class PresenceService {
       const to = this.visitorState(current);
       this.adjustCounts(record, oldVisitor, from, OFFLINE);
       if (current) this.adjustCounts(record, current, OFFLINE, to);
-      transitions.push({ clientId: current ? current.clientId : oldVisitor.clientId, from, to });
+      transitions.push({ clientId: current ? current.clientId : oldVisitor.clientId, from, to, marketingChanged:oldVisitor.marketingClientId!==current?.marketingClientId });
     });
-    transitions.forEach((transition) => this.emit(record, transition.clientId, transition.from, transition.to));
+    transitions.forEach((transition) => this.emit(record, transition.clientId, transition.from, transition.to, transition.marketingChanged));
   }
 
   leave({ scope, presenceSessionId, tabId }) {
@@ -159,13 +162,25 @@ class PresenceService {
   getCounts(scope) {
     const normalized = this.normalizeScope(scope);
     const record = this.store.getScope(this.scopeKey(normalized));
-    return record ? { ...record.counts } : { siteVisitors: 0, identifiedClients: 0, chatClients: 0 };
+    return { ...(record ? record.counts : {siteVisitors:0,identifiedClients:0,chatClients:0}), marketingOnlineClients:this.getMarketingClients(normalized).length };
   }
 
   getClientState(scope, clientId) {
     const normalized = this.normalizeScope(scope);
     const record = this.store.getScope(this.scopeKey(normalized));
     return record ? this.visitorState(record.visitors.get(`client:${Number(clientId)}`)) : OFFLINE;
+  }
+
+  getMarketingClients(scope) {
+    const normalized=this.normalizeScope(scope);
+    const record=this.store.getScope(this.scopeKey(normalized));
+    const clients=new Map();
+    if(record)for(const visitor of record.visitors.values()){
+      const id=Number(visitor.marketingClientId || (visitor.isCustomer!==false ? visitor.clientId : 0));
+      const state=this.visitorState(visitor);
+      if(id>0 && state!==OFFLINE && clients.get(id)!==CHAT_ACTIVE)clients.set(id,state);
+    }
+    return [...clients].map(([clientId,state])=>({clientId,state}));
   }
 
   getOnlineClientIds(scope) {
@@ -183,6 +198,7 @@ class PresenceService {
     const normalized = this.normalizeScope(scope);
     return {
       counts: this.getCounts(normalized),
+      marketingClients:this.getMarketingClients(normalized),
       clients: this.getOnlineClientIds(normalized).map((clientId) => ({ clientId, state: this.getClientState(normalized, clientId) })),
     };
   }

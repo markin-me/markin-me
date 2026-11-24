@@ -98,7 +98,7 @@ const NAVIGATION_RBAC_NODES = Object.freeze([
     { key: 'team.roles.permissions', label: 'Управление разрешениями' },
   ]),
 
-  node('chat', null, 'chat', 'Чаты', 'chat.access'),
+  node('chat', null, 'chat', 'Чат поддержки', 'chat.access'),
   node('chat.threads', 'chat', 'chat', 'Чат поддержки', 'chat.threads.access', { read: 'chat.threads.read', create: 'chat.threads.create', update: 'chat.threads.update', delete: 'chat.threads.delete' }),
 
   node('settings', null, 'settings', 'Настройки', 'settings.access'),
@@ -184,6 +184,7 @@ function resolveAdminPermission({ path, method, headers = {}, query = {}, body =
   if (route === '/clients/filters/preview-count') return byAction('marketing.segments', 'read');
   if (route.startsWith('/clients/filters')) return byAction('marketing.segments');
   if (route.startsWith('/clients')) {
+    if (context === 'chat' && action === 'read' && /^\/clients\/chat-guests\/[0-9]+$/.test(route)) return 'chat.threads.read';
     if (context === 'chat' && action === 'read' && /^\/clients\/[^/]+(?:\/orders(?:\/header-candidate)?)?$/.test(route)) {
       return 'chat.threads.read';
     }

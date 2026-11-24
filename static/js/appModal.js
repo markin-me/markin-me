@@ -282,21 +282,26 @@
     const profileSettings=Array.from(document.querySelectorAll('.shop-profile-settings-redesign')).find(element=>element.getClientRects().length);
     const activeEl=document.activeElement;
     const profileHost=profileSettings?.closest('#shopProfileSettingsPage')||profileSettings||modal;
-    const underlying=(profileSettings
+    const host=options.host instanceof HTMLElement && options.host.isConnected ? options.host : null;
+    const hostHadClass=host?.classList.contains('app-modal-confirmation-host');
+    const hostPosition=host?.style.position || '';
+    const hostNeedsPosition=host && getComputedStyle(host).position==='static';
+    const underlying=(host ? Array.from(host.children) : profileSettings
       ?(isOpen()&&modal.contains(profileSettings)?Array.from(modal.children):[profileHost])
       :Array.from(document.body.children)).map(element=>({element,inert:element.inert}));
     const overlay=document.createElement('div');overlay.className='app-modal-confirmation';
     const panel=document.createElement('section');panel.className='app-modal-confirmation-panel';
     panel.setAttribute('role','alertdialog');panel.setAttribute('aria-modal','true');
     panel.setAttribute('aria-labelledby','appModalConfirmationTitle');
-    panel.setAttribute('aria-describedby','appModalConfirmationMessage');
+    if(options.message)panel.setAttribute('aria-describedby','appModalConfirmationMessage');
     const heading=document.createElement('h2');heading.id='appModalConfirmationTitle';heading.textContent=options.title||'Подтверждение';
     const message=document.createElement('p');message.id='appModalConfirmationMessage';message.textContent=options.message||'';
     const actions=document.createElement('div');actions.className='app-modal-confirmation-actions';
+    if(options.actionsLayout==='split')actions.classList.add('app-modal-confirmation-actions-split');
     const cancel=document.createElement('button');cancel.type='button';cancel.textContent=options.cancelText||'Отмена';
     const accept=document.createElement('button');accept.type='button';accept.textContent=options.saveText||'Подтвердить';
     if(options.showCancel!==false)actions.append(cancel);
-    actions.append(accept);panel.append(heading,message,actions);overlay.append(panel);
+    actions.append(accept);panel.append(heading);if(options.message)panel.append(message);panel.append(actions);overlay.append(panel);
     const choices=Array.isArray(options.choices)?options.choices:[];
     let choiceBusy=false;
     const choiceButtons=choices.map(choice=>{
@@ -353,7 +358,20 @@
     }
     underlying.forEach(({element})=>{element.inert=true;});
     overlay.style.zIndex=String(Math.max(Number(getComputedStyle(modal).zIndex)||0,Number(getComputedStyle(backdrop).zIndex)||0,Number(getComputedStyle(profileHost).zIndex)||0)+1);
-    document.body.append(overlay);
+    if(host)host.classList.add('app-modal-confirmation-host');
+    if(hostNeedsPosition)host.style.position='relative';
+    (host || document.body).append(overlay);
+    async function handleConfirmationSave(){
+      if(choiceBusy)return;
+      if(typeof options.onSave!=='function'){dismissConfirmation(true);return;}
+      choiceBusy=true;accept.disabled=true;cancel.disabled=true;accept.setAttribute('aria-busy','true');
+      try{
+        const result=await options.onSave();
+        choiceBusy=false;
+        if(result!==false)dismissConfirmation(true);
+      }catch(error){choiceBusy=false;console.error(error);}
+      finally{accept.disabled=false;cancel.disabled=false;accept.removeAttribute('aria-busy');}
+    }
     const onKey=event=>{
       if(choiceBusy){if(event.key==='Escape'||event.key==='Tab'){event.preventDefault();event.stopImmediatePropagation();}return;}
       if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();dismissConfirmation(false);}
@@ -362,20 +380,22 @@
         const buttons=Array.from(panel.querySelectorAll('button:not(:disabled):not([hidden])'));
         const index=buttons.indexOf(document.activeElement);
         buttons[(index+(event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus();
-      }else if(!choiceButtons.length&&(event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();event.stopImmediatePropagation();dismissConfirmation(true);}
+      }else if(!choiceButtons.length&&(event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();event.stopImmediatePropagation();void handleConfirmationSave();}
     };
     pendingConfirmation=new Promise(resolve=>{
       dismissConfirmation=accepted=>{
         if(choiceBusy)return;
         document.removeEventListener('keydown',onKey,true);
         overlay.remove();
+        if(host && !hostHadClass)host.classList.remove('app-modal-confirmation-host');
+        if(hostNeedsPosition && host.style.position==='relative')host.style.position=hostPosition;
         underlying.forEach(({element,inert})=>{element.inert=inert;});
         dismissConfirmation=null;pendingConfirmation=null;
         activeEl?.focus?.({preventScroll:true});
         resolve(accepted);
       };
-      cancel.onclick=event=>{event.stopPropagation();dismissConfirmation(false);};
-      accept.onclick=event=>{event.stopPropagation();dismissConfirmation(true);};
+      cancel.onclick=event=>{event.stopPropagation();if(choiceBusy)return;options.onCancel?.();dismissConfirmation(false);};
+      accept.onclick=event=>{event.stopPropagation();void handleConfirmationSave();};
       overlay.onclick=event=>{event.stopPropagation();if(event.target===overlay)dismissConfirmation(false);};
     });
     document.addEventListener('keydown',onKey,true);

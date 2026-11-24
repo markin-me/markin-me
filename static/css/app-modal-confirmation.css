@@ -33,10 +33,15 @@
 }
 .app-modal-confirmation-panel h2{margin:0 0 16px;font-size:20px;font-weight:700;line-height:1.3;text-align:left;}
 .app-modal-confirmation-panel p{display:flex;align-items:center;flex:1;margin:0 0 20px;font-size:16px;line-height:1.4;white-space:pre-line;overflow-wrap:anywhere;}
-.app-modal-confirmation-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:auto;}
+.app-modal-confirmation-host>.app-modal-confirmation{position:absolute;border-radius:inherit;}
+.app-modal-confirmation-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:auto;flex-wrap:wrap;}
 .app-modal-confirmation-actions button{min-height:44px;padding:10px 12px;border:0;border-radius:12px;background:transparent;color:var(--color-text,#111827);font:inherit;font-size:16px;font-weight:600;text-transform:uppercase;cursor:pointer;}
 .app-modal-confirmation-actions button:last-child{color:var(--color-primary,#ff6600);}
 .app-modal-confirmation-actions button:hover{background:var(--color-surface-2,#f3f4f6);}
+.app-modal-confirmation-actions.app-modal-confirmation-actions-split{justify-content:space-between;flex-wrap:nowrap;}
+.app-modal-confirmation-actions-split button{min-width:0;}
+.app-modal-confirmation-actions-split button:first-child{white-space:nowrap;}
+.app-modal-confirmation-actions-split button:last-child{white-space:pre-line;}
 .app-modal-confirmation-choices{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 20px;}
 .app-modal-confirmation-choices button[hidden]{display:none;}
 .app-modal-confirmation-choices.has-selected-provider button:not([hidden]){grid-column:1 / -1;justify-self:center;min-width:calc((100% - 12px) / 2);max-width:100%;}

@@ -14,10 +14,24 @@ async function sendImportantMessagePush({
   }
   await ensurePushSubscriptionsTable();
   const [subscriptionRows] = await db.query(
-    `SELECT id,endpoint,p256dh,auth FROM chat_push_subscriptions
-      WHERE tenant_id=? AND store_id=? AND actor='in' AND push_important_enabled=1
-      ORDER BY updated_at DESC,id DESC`,
-    [Number(tenantId), Number(storeId)]
+    `SELECT s.id,s.endpoint,s.p256dh,s.auth FROM chat_push_subscriptions s
+      WHERE s.tenant_id=? AND s.store_id=? AND s.actor='in' AND s.push_important_enabled=1
+        AND (?='all' OR EXISTS (
+          SELECT 1 FROM mkt_important_message_recipients recipient
+          JOIN cust_customers customer ON customer.tenant_id=recipient.tenant_id AND customer.id=recipient.customer_id
+            AND customer.is_active=1
+          WHERE recipient.tenant_id=s.tenant_id AND recipient.store_id=s.store_id AND recipient.message_id=?
+            AND (recipient.customer_id=s.client_id OR EXISTS (
+              SELECT 1 FROM chat_visitor_identities visitor
+              JOIN cust_guest_sessions guest ON guest.tenant_id=visitor.tenant_id AND guest.token_hash=visitor.guest_session_hash
+              WHERE visitor.tenant_id=s.tenant_id AND visitor.client_id=s.client_id
+                AND visitor.claimed_at IS NULL AND visitor.session_deleted_at IS NULL
+                AND guest.revoked_at IS NULL AND (guest.expires_at IS NULL OR guest.expires_at>UTC_TIMESTAMP())
+                AND guest.phone=customer.phone COLLATE utf8mb4_general_ci
+            ))
+        ))
+      ORDER BY s.updated_at DESC,s.id DESC`,
+    [Number(tenantId), Number(storeId), message.recipient_mode || 'all', Number(message.id)]
   );
   const seen = new Set();
   const subscriptions = (subscriptionRows || []).filter((row) => {

@@ -1,4 +1,5 @@
 (() => {
+  let syncCustomerAuthEditState = null;
   async function initCustomerAuthSettings(){
     const inputs=Array.from(document.querySelectorAll('[data-customer-auth]'));
     if(!inputs.length || inputs[0].dataset.authBound)return;
@@ -9,17 +10,25 @@
       if(!response.ok||!data.ok)throw new Error(data.error||'REQUEST_FAILED');
       return data;
     };
-    let saved,canUpdate=false;
-    const render=()=>inputs.forEach(input=>{input.checked=Boolean(saved?.[input.dataset.customerAuth]);input.disabled=!canUpdate;});
+    let saved,canUpdate=false,busy=false;
+    const render=()=>inputs.forEach(input=>{
+      input.checked=Boolean(saved?.[input.dataset.customerAuth]);
+      const editing=input.dataset.customerAuth==='tg'?telegramDraftMode:maxDraftMode;
+      input.disabled=!canUpdate || !editing || busy;
+    });
+    syncCustomerAuthEditState=render;
     try{const data=await request();saved=data.settings;canUpdate=data.can_update;render();}
     catch(error){inputs.forEach(input=>{document.querySelector('[data-customer-auth-notice="'+input.dataset.customerAuth+'"]').textContent='Не удалось загрузить настройки авторизации.';});inputs.forEach(input=>{delete input.dataset.authBound;});return;}
     inputs.forEach(input=>input.addEventListener('change',async()=>{
+      const editing=input.dataset.customerAuth==='tg'?telegramDraftMode:maxDraftMode;
+      if(!canUpdate || !editing || busy){render();return;}
       const notice=document.querySelector('[data-customer-auth-notice="'+input.dataset.customerAuth+'"]');
       const body={...saved,[input.dataset.customerAuth]:input.checked};
+      busy=true;
       inputs.forEach(control=>{control.disabled=true;});notice.textContent='';
       try{saved=(await request({method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).settings;}
       catch(error){notice.textContent='Не удалось сохранить настройки.';}
-      finally{render();}
+      finally{busy=false;render();}
     }));
   }
   function initCorporateLoginSuffix() {
@@ -5632,7 +5641,7 @@
 
 
 
-        tgLoginEnabledInput.title = hasRequired ? "" : "Сначала заполните имя бота и токен Telegram";
+        tgLoginEnabledInput.title = hasRequired ? "" : "Сначала укажите токен Telegram";
 
 
 
@@ -24170,6 +24179,34 @@
     const maxBotTokenEl = document.getElementById("tenantMaxBotToken");
 
     const maxConnectionNode = document.getElementById("tenantMaxConnectionStatus");
+    const tgConnectionNode = document.getElementById('tenantTelegramConnectionStatus');
+    let tgStatusPending = false, tgStatusReadAt = 0;
+    async function refreshTelegramConnection(force = false) {
+      if (!tgConnectionNode || tgStatusPending || !tgConnectionNode.getClientRects().length) return;
+      if (!force && Date.now() - tgStatusReadAt < 60000) return;
+      tgStatusPending = true;
+      try {
+        const response = await authFetch('/api/admin/tenant/telegram-connection');
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error('TELEGRAM_STATUS_UNAVAILABLE');
+        tgConnectionNode.textContent = result.data.state === 'verified' ? 'Токен подтверждён. Бот подключен.'
+          : result.data.state === 'not_configured' ? 'Бот не подключён' : 'Не удалось проверить токен Telegram' + (result.data.error ? ': ' + result.data.error : '');
+        if (!telegramDraftMode && tgBotUsernameEl) {
+          tgBotUsernameEl.value = result.data.bot_name || '';
+          if (result.data.bot_name) {
+            telegramOriginal.telegram_bot_username = result.data.bot_name;
+            telegramDraft.telegram_bot_username = result.data.bot_name;
+          }
+        }
+        if (tgBotUsernameLinkBtn) tgBotUsernameLinkBtn.disabled = !result.data.bot_name;
+      } catch (error) {
+        tgConnectionNode.textContent = 'Не удалось проверить состояние подключения';
+      } finally { tgStatusPending = false; tgStatusReadAt = Date.now(); }
+    }
+    document.getElementById('tenantMaxBotIdLink')?.addEventListener('click', () => {
+      const name = String(maxBotIdEl?.value || '').trim().replace(/^@/, '');
+      if (name) window.open('https://max.ru/' + encodeURIComponent(name), '_blank', 'noopener');
+    });
     let maxStatusPending = false, maxStatusReadAt = 0, maxStatusTimer = null;
     const maxStatusLabels = {
       connected: '\u0411\u043e\u0442 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d',
@@ -24208,10 +24245,15 @@
         maxStatusReadAt = Date.now();
       } finally { maxStatusPending = false; }
     }
-    maxStatusTimer = setInterval(() => { if (!document.hidden) void refreshMaxConnection(); }, 5000);
+    const refreshMessengerConnections = () => {
+      if (document.hidden) return;
+      void refreshMaxConnection();
+      void refreshTelegramConnection();
+    };
+    maxStatusTimer = setInterval(refreshMessengerConnections, 5000);
     window.addEventListener('pagehide', () => { clearInterval(maxStatusTimer); maxStatusTimer = null; });
     window.addEventListener('pageshow', event => {
-      if (event.persisted && !maxStatusTimer) maxStatusTimer = setInterval(() => { if (!document.hidden) void refreshMaxConnection(); }, 5000);
+      if (event.persisted && !maxStatusTimer) maxStatusTimer = setInterval(refreshMessengerConnections, 5000);
     });
 
 
@@ -24339,7 +24381,7 @@
 
 
 
-      var hasRequired = !!(String((tgBotUsernameEl && tgBotUsernameEl.value) || "").trim() && String((tgBotTokenEl && tgBotTokenEl.value) || "").trim());
+      var hasRequired = !!String((tgBotTokenEl && tgBotTokenEl.value) || "").trim();
 
 
 
@@ -24347,7 +24389,7 @@
 
 
 
-      tgLoginEnabledEl.title = hasRequired ? "" : "Сначала заполните имя бота и токен Telegram";
+      tgLoginEnabledEl.title = hasRequired ? "" : "Сначала укажите токен Telegram";
 
 
 
@@ -25055,7 +25097,7 @@
 
 
 
-        max_mini_app_enabled: maxMiniAppEnabledEl && maxMiniAppEnabledEl.checked ? 1 : 0,
+        max_mini_app_enabled: maxMiniAppEnabledEl ? (maxMiniAppEnabledEl.checked ? 1 : 0) : maxOriginal.max_mini_app_enabled,
 
 
 
@@ -25112,6 +25154,7 @@
 
 
       maxDraftMode = Boolean(enabled);
+      syncCustomerAuthEditState?.();
 
 
 
@@ -25119,7 +25162,7 @@
 
 
 
-        maxBotIdEl.disabled = !maxDraftMode;
+        maxBotIdEl.disabled = true;
 
 
 
@@ -25324,6 +25367,8 @@
 
 
       telegramDraftMode = Boolean(enabled);
+      syncCustomerAuthEditState?.();
+      if (!telegramDraftMode) void refreshTelegramConnection(true);
 
 
 
@@ -25331,11 +25376,11 @@
 
 
 
-        tgBotUsernameEl.disabled = !telegramDraftMode;
+        tgBotUsernameEl.disabled = true;
 
 
 
-        tgBotUsernameEl.readOnly = !telegramDraftMode;
+        tgBotUsernameEl.readOnly = true;
 
 
 
@@ -25452,11 +25497,11 @@
 
 
 
-          tgBotUsernameEl.focus();
+          tgBotTokenEl?.focus();
 
 
 
-          tgBotUsernameEl.select();
+          tgBotTokenEl?.select();
 
 
 
@@ -25505,7 +25550,7 @@
 
 
 
-        const hasRequired = !!(telegramDraft.telegram_bot_username && telegramDraft.telegram_bot_token);
+        const hasRequired = !!telegramDraft.telegram_bot_token;
 
 
 
@@ -25513,7 +25558,7 @@
 
 
 
-          alert("Сначала заполните имя бота и токен Telegram");
+          alert("Сначала укажите токен Telegram");
 
 
 
@@ -25566,6 +25611,7 @@
 
           const reason = {
             TELEGRAM_BOT_TOKEN_INVALID: "Неверный формат токена Telegram. Скопируйте полный токен бота из BotFather и вставьте в поле «Токен бота».",
+            TELEGRAM_BOT_IDENTITY_UNAVAILABLE: "Не удалось сохранить настройки Telegram. Введен неверный токен.\nКод ошибки TELEGRAM_BOT_IDENTITY_UNAVAILABLE",
             TELEGRAM_WEBHOOK_HTTPS_REQUIRED: "Для Telegram webhook нужен публичный HTTPS-адрес. Для локального запуска настройте Telegram On-Demand Polling.",
             TELEGRAM_WEBHOOK_REGISTRATION_FAILED: "Не удалось зарегистрировать Telegram webhook. Проверьте соединение с Telegram и настройки бота.",
             AUTH_WEBHOOK_SECRET_REQUIRED: "Не настроен секрет Telegram webhook на сервере.",
@@ -26108,11 +26154,11 @@
 
 
 
-          maxBotIdEl.focus();
+          maxBotTokenEl?.focus();
 
 
 
-          maxBotIdEl.select();
+          maxBotTokenEl?.select();
 
 
 
@@ -26525,6 +26571,10 @@
 
 
       maxBotTokenCopyBtn.addEventListener("click", function () {
+        if (!maxBotTokenEl.value || /^[*•●]+$/.test(maxBotTokenEl.value)) {
+          alert('Сохранённый токен скрыт. Для копирования введите полный токен.');
+          return;
+        }
 
 
 
@@ -26576,7 +26626,7 @@
 
 
 
-        var hasRequired = !!(String((tgBotUsernameEl && tgBotUsernameEl.value) || "").trim() && String((tgBotTokenEl && tgBotTokenEl.value) || "").trim());
+        var hasRequired = !!String((tgBotTokenEl && tgBotTokenEl.value) || "").trim();
 
 
 
@@ -26588,7 +26638,7 @@
 
 
 
-          alert("Сначала заполните имя бота и токен Telegram");
+          alert("Сначала укажите токен Telegram");
 
 
 

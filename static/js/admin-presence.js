@@ -3,6 +3,7 @@
 
   const listeners = new Set();
   const clients = new Map();
+  const marketingClients = new Map();
   let counts = { siteVisitors: 0, identifiedOnlineClients: 0, chatActiveClients: 0 };
   let source = null;
   let scopeKey = '';
@@ -18,6 +19,7 @@
     return {
       siteVisitors: Math.max(0, Number(value?.siteVisitors || 0) || 0),
       identifiedOnlineClients: Math.max(0, Number(value?.identifiedOnlineClients || 0) || 0),
+      marketingOnlineClients: Math.max(0, Number(value?.marketingOnlineClients || 0) || 0),
       chatActiveClients: Math.max(0, Number(value?.chatActiveClients || 0) || 0),
     };
   }
@@ -46,6 +48,16 @@
 
   function applyPayload(payload) {
     if (!payload || typeof payload !== 'object') return;
+    const previousMarketing=new Map(marketingClients);
+    if(Array.isArray(payload.marketingClients)){
+      marketingClients.clear();
+      payload.marketingClients.forEach(client=>{
+        const id=Number(client.clientId),state=normalizeState(client.state);
+        if(id>0 && state!=='offline')marketingClients.set(id,state);
+      });
+    }
+    const marketingChanged=[...new Set([...previousMarketing.keys(),...marketingClients.keys()])]
+      .filter(id=>previousMarketing.get(id)!==marketingClients.get(id));
     if (payload.type === 'snapshot') {
       clients.clear();
       (Array.isArray(payload.clients) ? payload.clients : []).forEach(function (client) {
@@ -67,7 +79,7 @@
       else clients.set(clientId, state);
     }
     counts = normalizeCounts(payload.counts);
-    notify({ type: 'delta', clientId: clientId > 0 ? clientId : null, previousState, state, counts: { ...counts } });
+    notify({ type: 'delta', clientId: clientId > 0 ? clientId : null, previousState, state, marketingChanged, counts: { ...counts } });
   }
 
   function disconnect() {
@@ -84,6 +96,7 @@
         disconnect();
         scopeKey = '';
         clients.clear();
+        marketingClients.clear();
         counts = normalizeCounts(null);
         hasSnapshot = false;
         notify({ type: 'reset', clientId: null, state: null, counts: { ...counts } });
@@ -94,6 +107,7 @@
     disconnect();
     scopeKey = nextScopeKey;
     clients.clear();
+    marketingClients.clear();
     counts = normalizeCounts(null);
     hasSnapshot = false;
     notify({ type: 'reset', clientId: null, state: null, counts: { ...counts } });
@@ -120,6 +134,7 @@
     },
     getCounts: function () { return { ...counts }; },
     getClientState: function (clientId) { return clients.get(Number(clientId)) || 'offline'; },
+    getMarketingClientState: function (clientId) { return marketingClients.get(Number(clientId)) || 'offline'; },
     isOnSite: function (clientId) { return clients.has(Number(clientId)); },
     isInChat: function (clientId) { return clients.get(Number(clientId)) === 'chat'; },
     subscribe,

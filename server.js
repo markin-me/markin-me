@@ -2455,6 +2455,7 @@ app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
   const normalizeCounts = (counts) => ({
     siteVisitors: Number(counts?.siteVisitors || 0),
     identifiedOnlineClients: Number(counts?.identifiedClients || 0),
+    marketingOnlineClients: Number(counts?.marketingOnlineClients || 0),
     chatActiveClients: Number(counts?.chatClients || 0),
   });
   let streamWrites = Promise.resolve();
@@ -2486,6 +2487,7 @@ app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
       previousState: String(delta.previousState || 'offline'),
       state: String(delta.state || 'offline'),
       counts: normalizeCounts(delta.counts),
+      marketingClients: delta.marketingClients,
     })) cleanup();
   };
   const unsubscribe = presenceService.subscribe(listener);
@@ -2495,6 +2497,7 @@ app.get('/api/admin/presence/stream', authMiddleware, async (req, res) => {
     type: 'snapshot',
     counts: normalizeCounts(snapshot.counts),
     clients: snapshot.clients.map((client) => ({ clientId: Number(client.clientId), state: client.state })),
+    marketingClients: snapshot.marketingClients,
   })) {
     unsubscribe();
     return res.end();

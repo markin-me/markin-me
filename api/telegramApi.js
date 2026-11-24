@@ -99,7 +99,7 @@ function deliveryError(diagnostic) {
 }
 
 async function requestTelegramApi(apiBase, method, body, options = {}) {
-  if (!['sendMessage', 'answerCallbackQuery', 'getUpdates', 'getWebhookInfo', 'deleteWebhook', 'editMessageReplyMarkup'].includes(method)) throw new Error('TELEGRAM_METHOD_NOT_SUPPORTED');
+  if (!['sendMessage', 'answerCallbackQuery', 'getUpdates', 'getWebhookInfo', 'getMe', 'deleteWebhook', 'editMessageReplyMarkup'].includes(method)) throw new Error('TELEGRAM_METHOD_NOT_SUPPORTED');
   const signal = options.signal || AbortSignal.timeout(10000);
   const startedAtMonoMs = nowMs();
   let stage = 'prepare_request';
@@ -130,6 +130,8 @@ async function requestTelegramApi(apiBase, method, body, options = {}) {
     const validResult = ['answerCallbackQuery', 'deleteWebhook'].includes(method) ? data?.result === true
       : method === 'getUpdates' ? Array.isArray(data?.result) && data.result.every(update => Number.isSafeInteger(update?.update_id) && update.update_id >= 0)
       : method === 'getWebhookInfo' ? typeof data?.result?.url === 'string'
+      : method === 'getMe' ? Number.isSafeInteger(data?.result?.id) && data.result.id > 0
+        && data.result.is_bot === true && typeof data.result.username === 'string' && data.result.username.length > 0
       : method === 'editMessageReplyMarkup' ? data?.result === true || Number.isSafeInteger(data?.result?.message_id)
       : Number.isSafeInteger(data?.result?.message_id) && data.result.message_id >= 0;
     if (data?.ok !== true || !validResult) {

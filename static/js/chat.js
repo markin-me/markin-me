@@ -77,7 +77,7 @@
   const CHAT_CLIENTS_SEARCH_DEBOUNCE_MS = 250;
   const CHAT_SUMMARIES_CACHE_DOMAIN = "chat:summaries";
   const CHAT_THREADS_CACHE_DOMAIN = "chat:threads";
-  const CHAT_PERSISTENT_CACHE_VERSION = 1;
+  const CHAT_PERSISTENT_CACHE_VERSION = 2;
   const CHAT_SUMMARIES_CACHE_KEY = "latest";
   const CHAT_SUMMARIES_CACHE_RETENTION_MS = 24 * 60 * 60 * 1000;
   const CHAT_THREADS_CACHE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -232,6 +232,7 @@
       panel: document.querySelector(".page-col-left"),
       search: $("#chatClientsSearch"),
       list: $("#chatClientsList"),
+      scroll: $(".chat-clients-body"),
       empty: $("#chatClientsEmpty"),
       connectionStatus: $("#chatConnectionStatus"),
       mobileCloseBtn: $("#chatMobileClientsCloseBtn"),
@@ -2527,6 +2528,11 @@
       stack.style.removeProperty("--chat-mobile-thread-top-inset");
       stack.style.removeProperty("--chat-mobile-thread-bottom-inset");
       stack.style.removeProperty("--chat-scroll-down-composer-extra");
+      const footerHeight = getAdminMobileBottomOverlayHeight(getAdminMobileChatBottomOverlayNode());
+      stack.style.setProperty("--chat-desktop-footer-height", `${footerHeight}px`);
+      if (dom.center.messages) {
+        dom.center.messages.style.setProperty("padding-bottom", `${footerHeight + 20}px`, "important");
+      }
       if (messagesWrap) {
         messagesWrap.style.removeProperty("padding-bottom");
       }
@@ -2535,6 +2541,8 @@
       return;
     }
 
+    dom.center.messages?.style.removeProperty("padding-bottom");
+    stack.style.removeProperty("--chat-desktop-footer-height");
     const headerHeight = Math.max(0, Math.ceil(dom.center.headerPanel?.getBoundingClientRect().height || 0));
     const bottomOverlayNode = getAdminMobileChatBottomOverlayNode();
     const bottomOverlayHeight = getAdminMobileBottomOverlayHeight(bottomOverlayNode);
@@ -2549,7 +2557,7 @@
     if (messagesWrap) {
       // Hard fallback: reserve real footer height in the scrolling container itself.
       // Use !important because mobile chat CSS sets padding-bottom: 0 !important.
-      messagesWrap.style.setProperty("padding-bottom", `${Math.max(0, bottomOverlayHeight)}px`, "important");
+      messagesWrap.style.setProperty("padding-bottom", `${Math.max(0, bottomOverlayHeight) + 20}px`, "important");
     }
     syncAdminMobileThreadBottomInset();
     syncAdminMobileChatScrollDownPosition();
@@ -3409,56 +3417,14 @@
   }
 
   async function openClientDetailsPanel(options = {}) {
-    const activeClientId = Number(state.activeClientId || 0);
-    if (activeClientId <= 0) return "clients";
-    showChatRightPane("client");
-    const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === activeClientId) || null;
-    upsertChatRightTab("client", activeClientId, selectedFromList?.name || "");
-    const clientsRightApi = await ensureClientDetailsDependencies();
-    if (Number(state.activeClientId || 0) !== activeClientId) return "center";
-    if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
-      clientsRightApi.setChatRightForceEmpty(false);
-    }
-    if (clientsRightApi) {
-      const isGuestClient = isGuestChatClient(selectedFromList);
-      if (
-        isGuestClient
-        && typeof clientsRightApi.selectGuestChatClient === "function"
-      ) {
-        await clientsRightApi.selectGuestChatClient(
-          activeClientId,
-          selectedFromList?.name || "",
-          { skipMobileSheet: true }
-        ).catch(console.error);
-      } else if (typeof clientsRightApi.openClientPassport === "function") {
-        await clientsRightApi.openClientPassport(
-          activeClientId,
-          {
-            source: "chat",
-            title: selectedFromList?.name || "",
-            chatGuest: isGuestClient,
-            skipMobileSheet: true,
-            onBack: () => syncMobileChatView("center", { persistState: true }),
-            onOrderOpen: (orderId) => {
-              const id = Number(orderId || 0);
-              if (!(id > 0)) return null;
-              showChatRightPane("order");
-              upsertChatRightTab("order", id);
-              return openCanonicalChatOrder(id, { backToClient: true });
-            },
-          }
-        ).catch(console.error);
-      }
-
-      if (
-        typeof clientsRightApi.openMobileSheet === "function"
-        && !(document.body && document.body.classList.contains("page-chat"))
-      ) {
-        clientsRightApi.openMobileSheet(options);
-        return "right";
-      }
-    }
-    return syncMobileChatView("right", options);
+    const activeClientId=Number(state.activeClientId || 0);
+    if(activeClientId<=0)return 'clients';
+    const selected=await ensureChatClientState(activeClientId);
+    if(Number(state.activeClientId)!==activeClientId)return 'center';
+    const profileId=getChatCustomerProfileId(selected);
+    if(!profileId){clearChatRightPane();return 'right';}
+    await activateChatRightTab(upsertChatRightTab('client',profileId,selected.name || ''));
+    return syncMobileChatView('right',options);
   }
 
   function closeClientDetailsPanel(options = {}) {
@@ -3526,6 +3492,7 @@
   let activeThreadSsePullInFlight = false;
   let activeThreadSsePullPending = false;
   let headerLoadingSafetyTimer = 0;
+  let chatClientSelectionRequest = 0;
   let webPushPublicKeyCache = "";
   let webPushPublicKeyFetched = false;
   let webPushSyncTimer = 0;
@@ -3963,6 +3930,8 @@
 
   function clearChatRightPane() {
     if (!document.body || !document.body.classList.contains("page-chat")) return;
+    state.rightTabActivationToken+=1;
+    state.activeRightTabKey='';
     const host = document.querySelector(".page-chat .page-col-right");
     const storage = document.getElementById("chatRightPaneStorage");
     const clientPane = document.querySelector(".client-info-panel");
@@ -4034,9 +4003,14 @@
 
   function upsertChatRightTab(kind, id, title = "") {
     const tabKind = String(kind || "").trim().toLowerCase() === "order" ? "order" : "client";
-    const n = Number(id || 0);
+    let n = Number(id || 0);
+    if(tabKind==='client' && findClientById(n)){
+      n=getChatCustomerProfileId(findClientById(n));
+    }
     if (!Number.isFinite(n) || n <= 0) return null;
     if (!Array.isArray(state.rightTabs)) state.rightTabs = [];
+    if(tabKind==='client')state.rightTabs=state.rightTabs.filter(tab=>tab.kind!=='client' || Number(tab.id)===n
+      || getChatCustomerProfileId(findClientById(tab.id))!==n);
     const key = buildChatRightTabKey(tabKind, n);
     const existing = state.rightTabs.find((t) => buildChatRightTabKey(t.kind, t.id) === key) || null;
     if (existing) {
@@ -4113,17 +4087,22 @@
 
     showChatRightPane("client");
     
-    const selectedFromList = state.clients.find((client) => Number(client?.id || 0) === id) || null;
-    const isGuestClient = isGuestChatClient(selectedFromList);
-    const preferredTitle = selectedFromList?.name || "";
+    const selectedFromList = await ensureChatClientState(id);
+    if (activationToken !== state.rightTabActivationToken) return;
+    if(selectedFromList.session_state==='legacy'){getClientsRightApi()?.setChatRightForceEmpty?.(true);return;}
+    const profileId=getChatCustomerProfileId(selectedFromList);
+    if(!profileId){clearChatRightPane();return;}
+    if(profileId!==id){
+      state.rightTabs=state.rightTabs.filter(tab=>buildChatRightTabKey(tab.kind,tab.id)!==k);
+      return activateChatRightTab(upsertChatRightTab('client',profileId,selectedFromList.name || ''));
+    }
+    const preferredTitle = selectedFromList?.name || '';
     if (clientsRightApi) {
-      if (isGuestClient && typeof clientsRightApi.selectGuestChatClient === "function") {
-        await clientsRightApi.selectGuestChatClient(id, preferredTitle, { skipMobileSheet: true }).catch(console.error);
-      } else if (typeof clientsRightApi.openClientPassport === "function") {
-        await clientsRightApi.openClientPassport(id, {
+      if (typeof clientsRightApi.openClientPassport === 'function') {
+        await clientsRightApi.openClientPassport(Number(selectedFromList?.profile_customer_id || id), {
           source: "chat",
           title: preferredTitle,
-          chatGuest: isGuestClient,
+          chatGuest: false,
           skipMobileSheet: true,
           onBack: () => syncMobileChatView("center", { persistState: true }),
           onOrderOpen: (orderId) => {
@@ -4171,8 +4150,8 @@
     const rightMode = document.body.classList.contains("chat-right-order-mode") ? "order" : "client";
     if (rightMode === "order" && Number.isFinite(headerOrderId) && headerOrderId > 0) {
       state.activeRightTabKey = buildChatRightTabKey("order", headerOrderId);
-    } else if (Number.isFinite(activeClientId) && activeClientId > 0) {
-      state.activeRightTabKey = buildChatRightTabKey("client", activeClientId);
+    } else if (getChatCustomerProfileId(activeClientFromList)) {
+      state.activeRightTabKey = buildChatRightTabKey("client",getChatCustomerProfileId(activeClientFromList));
     }
 
     renderChatRightTabs();
@@ -4648,55 +4627,24 @@
     if (event.detail?.kind === "profile") state.clientProfileCache.delete(key);
   });
 
-  function getSharedClientOrdersFetcher() {
-    if (typeof window === "undefined") return null;
-    if (typeof window.__markinMeSharedOrdersFetcher === "function") {
-      return window.__markinMeSharedOrdersFetcher;
-    }
-    const inFlight = new Map();
-    window.__markinMeSharedOrdersFetcher = async (clientId, requestFactory) => {
-      const id = Number(clientId || 0);
-      const key = `${getSharedClientDetailsCacheKey()}:${localStorage.getItem("authToken") || ""}:${id}`;
-      if (!(id > 0) || typeof requestFactory !== "function") {
-        return requestFactory();
-      }
-      if (inFlight.has(key)) return inFlight.get(key);
-      const task = Promise.resolve()
-        .then(() => requestFactory())
-        .finally(() => {
-          inFlight.delete(key);
-        });
-      inFlight.set(key, task);
-      return task;
-    };
-    return window.__markinMeSharedOrdersFetcher;
-  }
-
   function buildFreshClientOrdersUrl(clientId) {
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return `/api/admin/clients/${clientId}/orders`;
-    return `/api/admin/clients/${id}/orders?_=${Date.now()}`;
+    return `/api/admin/clients/${id}/orders?chat_sessions=1&_=${Date.now()}`;
   }
 
   async function fetchClientOrdersFresh(clientId) {
-    const fetcher = getSharedClientOrdersFetcher();
-    const loader = () => fetcher(clientId, () => apiJson(`/api/admin/clients/${Number(clientId)}/orders`));
-    return window.AdminPersistentCache?.clientData
-      ? window.AdminPersistentCache.clientData.load("orders", clientId, loader)
-      : loader();
+    return apiJson(buildFreshClientOrdersUrl(clientId));
   }
 
   function buildFreshHeaderOrderCandidateUrl(clientId) {
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return `/api/admin/clients/${clientId}/orders/header-candidate`;
-    return `/api/admin/clients/${id}/orders/header-candidate?_=${Date.now()}`;
+    return `/api/admin/clients/${id}/orders/header-candidate?chat_sessions=1&_=${Date.now()}`;
   }
 
   async function fetchHeaderOrderCandidateFresh(clientId) {
-    const loader = () => apiJson(`/api/admin/clients/${Number(clientId)}/orders/header-candidate`);
-    return window.AdminPersistentCache?.clientData
-      ? window.AdminPersistentCache.clientData.load("header", clientId, loader)
-      : loader();
+    return apiJson(buildFreshHeaderOrderCandidateUrl(clientId));
   }
 
   function buildFreshOrderDetailsUrl(orderId) {
@@ -4897,6 +4845,8 @@
         throw new Error("UNAUTHORIZED");
       }
 
+      if(opts.responseType==='blob' && res.ok)return await res.blob();
+
       const json = await res.json().catch(() => null);
       if (!json || json.ok !== true) {
         const errorCode = String(json?.error || `API_ERROR (${res.status})`);
@@ -5048,7 +4998,7 @@
     const typingText = String(source.typing_text ?? source.typingText ?? "");
     const typingUpdatedAt = String(source.typing_updated_at ?? source.typingUpdatedAt ?? "");
     const typingExpiresAt = String(source.typing_expires_at ?? source.typingExpiresAt ?? "");
-    return [threadRevision, safeMessageCount, safeUnreadCount, lastMessageAt, lastMessageText, lastMessageDirection, lastDeliveryStatus, lastDeliveredAt, lastReadAt, firstUnreadMessageId, typingActive ? "1" : "0", typingText, typingUpdatedAt, typingExpiresAt].join("|");
+    return [threadRevision, safeMessageCount, safeUnreadCount, lastMessageAt, lastMessageText, lastMessageDirection, lastDeliveryStatus, lastDeliveredAt, lastReadAt, firstUnreadMessageId, typingActive ? "1" : "0", typingText, typingUpdatedAt, typingExpiresAt,source.group_key,source.session_state,source.session_can_delete].join("|");
   }
 
   function hasPendingRemoteSave(clientId) {
@@ -5089,6 +5039,8 @@
       String(msg.file_url || ""),
       String(msg.reply_to_id || ""),
       String(msg.hidden || ""),
+      String(msg.historySourceLabel || ''),
+      msg.historyReadOnly ? 'history' : 'own',
       reactionIn,
       reactionOut,
     ].join("|");
@@ -5560,6 +5512,8 @@
       messageCount: Number(payload.message_count || 0),
       messages: Array.isArray(payload.messages) ? payload.messages : [],
       meta: payload.meta && typeof payload.meta === "object" ? payload.meta : {},
+      historyClientIds: Array.isArray(payload.history_client_ids) ? payload.history_client_ids.map(String) : [],
+      historyCounts: payload.history_counts || {},
       page: {
         hasMore: page.has_more === true || payload.has_more === true,
         nextBeforeId: Number.isFinite(nextBeforeIdRaw) && nextBeforeIdRaw > 0
@@ -5598,6 +5552,8 @@
       updatedAt: String(payload.updated_at || ""),
       messageCount: Number(payload.message_count || 0),
       messages: Array.isArray(payload.messages) ? payload.messages : [],
+      historyClientIds: Array.isArray(payload.history_client_ids) ? payload.history_client_ids.map(String) : [],
+      historyCounts: payload.history_counts || {},
     };
   }
 
@@ -5621,6 +5577,11 @@
 
   function syncClientIdentityIntoList(clientId, profile) {
     const key = normalizeClientIdKey(clientId || profile?.id);
+    const existingClient = key && findClientById(key);
+    if (existingClient?.client_state === 'guest' || existingClient?.client_state === 'anonymous') {
+      return { changed: false, prevName: existingClient.name, prevPhone: existingClient.phone,
+        nextName: existingClient.name, nextPhone: existingClient.phone };
+    }
     const nextName = String(profile?.name || "").trim();
     const nextPhone = String(profile?.phone || "").trim();
     const nextNameIdentity = normalizeClientNameIdentity(nextName);
@@ -5727,6 +5688,14 @@
       if (localChangedDuringRequest && !remoteIsNewer) return false;
     }
 
+    if(Array.isArray(snapshot.historyClientIds)){
+      if(!state.adminHistoryClientIds)state.adminHistoryClientIds={};
+      state.adminHistoryClientIds[key]=snapshot.historyClientIds;
+    }
+    if(snapshot.historyCounts){
+      if(!state.adminHistoryCounts)state.adminHistoryCounts={};
+      state.adminHistoryCounts[key]=snapshot.historyCounts;
+    }
     state.remoteThreadUpdatedAt[key] = remoteUpdatedAt;
     const remoteMessageCount = Number(snapshot.messageCount);
     if (Number.isFinite(remoteMessageCount) && remoteMessageCount >= 0) {
@@ -5761,7 +5730,7 @@
           .filter(Boolean)
       );
       return next
-        .filter((msg) => msg && String(msg.direction || "").toLowerCase() === "in")
+        .filter((msg) => msg && !msg.historyReadOnly && !isMessageRead(msg) && String(msg.direction || "").toLowerCase() === "in")
         .map((msg) => String(msg.id || ""))
         .filter((id) => id && !prevIds.has(id));
     })();
@@ -5850,7 +5819,7 @@
   async function pushThreadToRemote(clientId) {
     const key = normalizeClientIdKey(clientId);
     if (!key) return;
-    const thread = getThread(key);
+    const thread = getThread(key).filter(message=>!message.historyReadOnly);
     const meta = getClientMetaForSync(key);
     state.remoteSaveInFlight[key] = true;
     try {
@@ -6099,6 +6068,7 @@
     const key = normalizeClientIdKey(clientId);
     const thread = key && Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
     if (typeof navigator !== "undefined" && navigator.onLine === false) return "offline-cache";
+    if(!state.adminHistoryClientIds?.[key])return 'full';
     if (!thread.length) return "full";
     const localRevision = normalizeThreadRevision(state.remoteThreadUpdatedAt[key]);
     const summary = state.remoteSummariesByClient?.[key];
@@ -6214,6 +6184,11 @@
     if (!diff || !Number.isFinite(Number(diff.clientId))) return null;
     const key = normalizeClientIdKey(diff.clientId);
     if (!key) return null;
+    const members=state.adminHistoryClientIds?.[key];
+    if(members && Array.isArray(diff.historyClientIds)
+        && [...members].sort().join(',')!==[...diff.historyClientIds].sort().join(','))return null;
+    const counts=state.adminHistoryCounts?.[key];
+    if(counts && diff.historyCounts && Object.keys(counts).some(id=>Number(diff.historyCounts[id] || 0)<Number(counts[id])))return null;
 
     const previousThread = Array.isArray(state.store.threads[key]) ? state.store.threads[key] : [];
     const expectedCount = Number(diff.messageCount);
@@ -6232,7 +6207,11 @@
     }
 
     const changedMessages = Array.isArray(diff.messages) ? diff.messages : [];
+    // A merge adds older messages outside the date-based diff window.
+    if (Number.isFinite(previousTotalCount) && Number.isFinite(expectedCount)
+        && expectedCount > previousTotalCount + changedMessages.length) return null;
     if (!changedMessages.length) {
+      if(diff.historyCounts){if(!state.adminHistoryCounts)state.adminHistoryCounts={};state.adminHistoryCounts[key]=diff.historyCounts;}
       if (diff.updatedAt) state.remoteThreadUpdatedAt[key] = String(diff.updatedAt);
       if (Number.isFinite(expectedCount) && expectedCount >= 0) {
         state.remoteThreadMessageCount[key] = Math.trunc(expectedCount);
@@ -6276,6 +6255,8 @@
         updatedAt: String(diff.updatedAt || ""),
         messageCount: Number.isFinite(expectedCount) ? expectedCount : nextThread.length,
         messages: nextThread,
+        historyClientIds: diff.historyClientIds,
+        historyCounts: diff.historyCounts,
       },
       options
     );
@@ -6317,6 +6298,15 @@
 
       try {
         const knownUpdatedAt = String(state.remoteThreadUpdatedAt[key] || "");
+        if(state.adminHistoryClientIds?.[key]){
+          if(knownUpdatedAt){
+            const version=getThreadMutationVersion(key);
+            const diff=await fetchRemoteThreadDiff(key,knownUpdatedAt);
+            const applied=applyRemoteThreadDiff(diff,{...runOptions,localChangedDuringRequest:getThreadMutationVersion(key)!==version});
+            if(applied!==null)return applied;
+          }
+          return pullThreadFromRemote(key,{...runOptions,preserveHistory:false});
+        }
         const targetRevision = normalizeThreadRevision(runOptions.targetRevision);
         const meta = targetRevision ? null : await fetchRemoteThreadMeta(key);
         const remoteUpdatedAt = targetRevision || String(meta?.updatedAt || "");
@@ -6407,7 +6397,13 @@
     const cursor = String(options.cursor || "");
     const query = String(options.query || "").trim();
     const requestScope = String(state.persistentCacheNamespace || getTenantId() || "");
-    const requestKey = `${requestScope}:${limit}:${cursor}:${query}`;
+    const reconcileIds=cursor?[]:(state.clients || []).filter(client=>client.client_state!=='authorized')
+      .map(client=>Number(client.id)).filter(id=>Number.isSafeInteger(id)&&id>0).slice(0,200);
+    const online=window.AdminPresence?.getSnapshot?.().clients || [];
+    const includeIds=online.filter(client=>client.state==='chat' || client.state==='site')
+      .sort((a,b)=>(a.state==='chat'?0:1)-(b.state==='chat'?0:1) || Number(a.clientId)-Number(b.clientId))
+      .map(client=>Number(client.clientId)).filter(id=>Number.isSafeInteger(id)&&id>0).slice(0,200);
+    const requestKey = `${requestScope}:${limit}:${cursor}:${query}:${reconcileIds.join(',')}:${includeIds.join(',')}`;
     const cachedEntry = remoteClientsPageRequests.get(requestKey);
     const now = Date.now();
 
@@ -6427,11 +6423,15 @@
     });
     if (cursor) qs.set("cursor", cursor);
     if (query) qs.set("q", query);
+    qs.set('view','customers');
+    if(includeIds.length)qs.set('include_ids',includeIds.join(','));
+    if (reconcileIds.length) qs.set('reconcile_ids',reconcileIds.join(','));
     const requestPromise = apiJson(`${CHAT_TEMP_API_BASE}/clients?${qs.toString()}`)
       .then((json) => {
         const rows = Array.isArray(json?.data) ? json.data : [];
         const page = {
           rows,
+          merges: Array.isArray(json?.merges) ? json.merges : [],
           limit,
           hasMore: json?.has_more === true,
           nextCursor: String(json?.next_cursor || ""),
@@ -6489,8 +6489,12 @@
         || ""
       );
       const existing = merged.get(key);
+      const clientState = String(remote?.client_state || '');
+      const sessionFields={group_key:remote.group_key,session_state:remote.session_state,
+        session_can_delete:remote.session_can_delete===true,profile_customer_id:remote.profile_customer_id,message_count:Number(remote.message_count)||0};
       if (existing) {
-        const nextExisting = { ...existing };
+        const nextExisting = { ...existing,...sessionFields };
+        if (clientState) nextExisting.client_state = clientState;
         const existingName = String(nextExisting.name || "").trim();
         const existingPhone = String(nextExisting.phone || "").trim();
         const existingPhoneDigits = normalizePhoneDigits(existingPhone);
@@ -6530,7 +6534,8 @@
         if (shouldReplacePhone && remotePhoneDigits && remotePhoneDigits !== existingPhoneDigits) {
           nextExisting.phone = remotePhone;
         }
-        if (remotePhoto) nextExisting.photo = remotePhoto;
+        if (remotePhoto || clientState === 'guest' || clientState === 'anonymous') nextExisting.photo = remotePhoto;
+        if (clientState === 'guest' || clientState === 'anonymous') nextExisting.name = remoteName;
 
         if (updatedAt) {
           const existingUpdatedAt = String(nextExisting.updated_at || "");
@@ -6555,6 +6560,8 @@
         updated_at: updatedAt || new Date().toISOString(),
         last_order_date: updatedAt || null,
         _isVirtualChatClient: true,
+        client_state: clientState,
+        ...sessionFields,
       });
     });
 
@@ -6696,6 +6703,7 @@
 
     if (!changedIds.length) return false;
     applyClientFilter();
+    if(state.activeClientId){setComposerEnabled(true);syncGuestConversationNotice();}
     flushPendingMergedClientSelection();
     let changed = false;
     const activeKey = normalizeClientIdKey(state.activeClientId);
@@ -6723,6 +6731,7 @@
     qs.set("_ts", String(Date.now()));
     const json = await apiJson(`${CHAT_TEMP_API_BASE}/summaries?${qs.toString()}`);
     const rows = Array.isArray(json?.data) ? json.data : [];
+    state.clients = mergeRemoteClients(state.clients, rows);
     return applyRemoteSummariesRows(rows, options);
   }
 
@@ -6833,10 +6842,35 @@
     if (notice.mergedIntoClientId && notice.updatedAt) {
       changed = setClientSortBoostUpdatedAt(notice.mergedIntoClientId, notice.updatedAt) || changed;
     }
+    if (notice.mergedIntoClientId) {
+      delete state.remoteThreadUpdatedAt[notice.mergedIntoClientId];
+      state.clientOrdersCache.delete(notice.mergedIntoClientId);
+      Promise.all(['orders','header'].map(kind=>window.AdminPersistentCache?.clientData?.invalidate(kind,Number(notice.mergedIntoClientId))))
+        .then(()=>{
+          if(Number(state.activeClientId)===Number(notice.mergedIntoClientId)){
+            return loadActiveClientData(Number(notice.mergedIntoClientId),findClientById(notice.mergedIntoClientId),{renderThread:false});
+          }
+        }).catch(console.error);
+      if (Number(state.activeClientId) === Number(notice.mergedIntoClientId)) {
+        // Reset pagination: newly merged older rows may fall between cached pages.
+        pullThreadFromRemoteIfChanged(notice.mergedIntoClientId, { force: true, signalHint: true }).catch(console.error);
+      }
+    }
     let removedResult = { removed: false, wasActive: false };
     if (notice.removedClientId) {
       removedResult = destroyClientThreadState(notice.removedClientId, { removeClientEntry: true });
       changed = removedResult.removed === true || changed;
+      const sourceKey=buildChatRightTabKey('client',Number(notice.removedClientId));
+      const sourceTab=(state.rightTabs || []).find(tab=>buildChatRightTabKey(tab.kind,tab.id)===sourceKey);
+      const targetKey=notice.mergedIntoClientId?buildChatRightTabKey('client',Number(notice.mergedIntoClientId)):'';
+      state.rightTabs=(state.rightTabs || []).filter(tab=>buildChatRightTabKey(tab.kind,tab.id)!==sourceKey);
+      if(sourceTab && targetKey && !state.rightTabs.some(tab=>buildChatRightTabKey(tab.kind,tab.id)===targetKey)){
+        state.rightTabs.push({kind:'client',id:Number(notice.mergedIntoClientId),title:findClientById(notice.mergedIntoClientId)?.name || 'Клиент'});
+      }
+      const sourceWasActive=state.activeRightTabKey===sourceKey;
+      if(sourceWasActive)state.activeRightTabKey=targetKey;
+      renderChatRightTabs();
+      if(sourceWasActive && targetKey && !removedResult.wasActive)activateChatRightTab(targetKey).catch(console.error);
     }
     if (removedResult.wasActive && notice.mergedIntoClientId) {
       if (findClientById(notice.mergedIntoClientId)) {
@@ -6877,14 +6911,15 @@
         offset: 0,
       }).catch(() => null);
       const remoteClients = Array.isArray(remotePage?.rows) ? remotePage.rows : [];
+      (remotePage?.merges || []).forEach(applyServerMergeNotice);
       let changed = false;
       if (remoteClients.length) {
         const merged = filterOpenChatClients(mergeRemoteClients(state.clients, remoteClients));
         const prevFingerprint = stableSerialize(
-          (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+          (state.clients || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || ""), String(client.photo || ""), String(client.client_state || ""),client.group_key,client.session_state,client.session_can_delete,client.profile_customer_id,client.message_count])
         );
         const nextFingerprint = stableSerialize(
-          (merged || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || "")])
+          (merged || []).map((client) => [Number(client.id), String(client.name || ""), String(client.phone || ""), String(client.photo || ""), String(client.client_state || ""),client.group_key,client.session_state,client.session_can_delete,client.profile_customer_id,client.message_count])
         );
         if (prevFingerprint !== nextFingerprint) {
           state.clients = merged;
@@ -6901,18 +6936,25 @@
               activeIdentityChanged = (
                 normalizeClientNameIdentity(prevActive.name) !== normalizeClientNameIdentity(nextActiveName)
                 || normalizePhoneDigits(prevActive.phone) !== normalizePhoneDigits(nextActivePhone)
+                || String(prevActive.photo || '') !== String(activeFromList.photo || '')
+                || prevActive.client_state !== activeFromList.client_state
               );
               state.activeClient = {
                 ...prevActive,
                 id: Number(activeFromList.id || activeKey),
                 name: nextActiveName,
                 phone: nextActivePhone,
+                photo: String(activeFromList.photo || ''),
+                client_state: activeFromList.client_state,
               };
             }
           }
           applyClientFilter();
           flushPendingMergedClientSelection();
           if (activeIdentityChanged && Number(state.activeClientId) === Number(activeKey)) {
+            if (state.activeClient?.client_state === 'guest' || state.activeClient?.client_state === 'anonymous') {
+              getClientsRightApi()?.syncGuestChatProfile?.(state.activeClient);
+            }
             renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
           }
         }
@@ -7576,7 +7618,7 @@
   function saveClientsListScrollPosition() {
     if (!dom.left.list) return;
     const ui = ensureUiStoreState();
-    ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+    ui.clientsListScrollTop = toStoredScrollTop(dom.left.scroll.scrollTop);
     scheduleUiStatePersist();
   }
 
@@ -7585,8 +7627,8 @@
     const apply = () => {
       if (!dom.left.list) return false;
       const targetTop = toStoredScrollTop(state.store?.ui?.clientsListScrollTop);
-      const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
-      dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
+      const maxTop = Math.max(0, dom.left.scroll.scrollHeight - dom.left.scroll.clientHeight);
+      dom.left.scroll.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
       return true;
     };
     if (options.defer === true) {
@@ -7608,7 +7650,7 @@
     ui.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.threadScrollTopByClient);
     ui.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.threadPinnedBottomByClient);
     if (dom.left.list) {
-      ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+      ui.clientsListScrollTop = toStoredScrollTop(dom.left.scroll.scrollTop);
     } else {
       ui.clientsListScrollTop = toStoredScrollTop(ui.clientsListScrollTop);
     }
@@ -7683,6 +7725,8 @@
 
     list.forEach((message) => {
       if (!message || typeof message !== "object") return;
+      // Discard obsolete phone-based projections cached before a proven merge.
+      if (message.historyReadOnly || String(message.id || '').startsWith('history:')) return;
       const id = String(message.id || "").trim();
       if (!id) return;
 
@@ -7783,7 +7827,7 @@
   }
 
   function getLastMessage(clientId) {
-    const thread = getVisibleThread(clientId);
+    const thread = getVisibleThread(clientId).filter(message=>!message.historyReadOnly);
     const localLast = thread.length ? thread[thread.length - 1] : null;
     const summary = getRemoteSummaryForClient(clientId);
     if (!summary) return localLast;
@@ -7913,21 +7957,27 @@
   function updateClientRowPreview(clientId) {
     const key = normalizeClientIdKey(clientId);
     if (!key || !dom.left.list) return;
-    const selectorId = (typeof CSS !== "undefined" && CSS && typeof CSS.escape === "function")
-      ? CSS.escape(String(key))
-      : String(key).replace(/["\\]/g, "\\$&");
-    const row = dom.left.list.querySelector(`.chat-client-row[data-client-id="${selectorId}"]`);
-    if (!row) return;
     const client = (state.filteredClients || []).find((item) => Number(item?.id) === Number(key))
       || (state.clients || []).find((item) => Number(item?.id) === Number(key))
       || null;
-    if (client) {
-      row.replaceWith(buildChatClientRow(client));
-      return;
+    if(!client)return;
+    const groupKey=client.group_key || `dialog:${key}`;
+    const rows=dom.left.list.querySelectorAll(`.chat-client-row[data-client-id="${cssEscape(key)}"],.chat-client-row[data-client-group="${cssEscape(groupKey)}"]`);
+    for(const row of rows){
+      const view=row.__chatClientView;
+      if(!view)continue;
+      const next=view._groupRow?{...view,
+        _groupUnread:(state.clients || []).filter(item=>(item.group_key || `dialog:${item.id}`)===groupKey)
+          .reduce((sum,item)=>sum+getUnreadCount(item.id),0),
+        _groupSelected:(findClientById(state.activeClientId)?.group_key || `dialog:${state.activeClientId}`)===groupKey,
+      }:client;
+      const signature=getChatClientRowSignature(next);
+      if(row.dataset.signature===signature)continue;
+      const replacement=buildChatClientRow(next);
+      replacement.dataset.rowKey=row.dataset.rowKey;
+      replacement.dataset.signature=signature;
+      row.replaceWith(replacement);
     }
-    const previewEl = $(".chat-client-preview", row);
-    if (!previewEl) return;
-    renderClientPreview(previewEl, getClientPreviewState(key));
   }
 
   function collectUnansweredIncomingIds(thread) {
@@ -7936,7 +7986,7 @@
     let pendingBotReplies = 0;
     for (let i = list.length - 1; i >= 0; i -= 1) {
       const msg = list[i];
-      if (!msg) continue;
+      if (!msg || msg.historyReadOnly) continue;
       const direction = String(msg.direction || "").toLowerCase();
       if (direction === "out") {
         if (isAssistantOrSystemThreadMessageId(msg.id)) pendingBotReplies += 1;
@@ -7962,14 +8012,14 @@
     const summary = getRemoteSummaryForClient(clientId);
     const hasLocalThread = !!(key && Array.isArray(state.store?.threads?.[key]));
     if (hasLocalThread && Number(state.activeClientId) === Number(key)) {
-      const localUnread = getVisibleThread(key).filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg)).length;
+      const localUnread = getVisibleThread(key).filter((msg) => msg && !msg.historyReadOnly && msg.direction === "in" && !isMessageRead(msg)).length;
       const visibleUnread = collectVisibleIncomingUnreadMessageIds(key).length;
       return Math.max(0, localUnread - visibleUnread);
     }
     const unread = Number(summary?.unread_count ?? summary?.unreadCount ?? 0);
     if (Number.isFinite(unread) && unread >= 0) return Math.trunc(unread);
     if (hasLocalThread) {
-      return getVisibleThread(key).filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg)).length;
+      return getVisibleThread(key).filter((msg) => msg && !msg.historyReadOnly && msg.direction === "in" && !isMessageRead(msg)).length;
     }
     return 0;
   }
@@ -8011,7 +8061,7 @@
       ? { ...current }
       : { client_id: Number(key), clientId: Number(key) };
 
-    const thread = getVisibleThread(key);
+    const thread = getVisibleThread(key).filter(message=>!message.historyReadOnly);
     const lastMsg = Array.isArray(thread) && thread.length ? thread[thread.length - 1] : null;
     const nextText = lastMsg ? String(getMessagePreviewText(lastMsg) || "").trim() : "";
     const nextAt = lastMsg ? String(lastMsg.createdAt || "") : "";
@@ -8119,12 +8169,24 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return "Клиент";
     const fromList = (state.clients || []).find((client) => Number(client?.id) === Number(key));
-    if (fromList && String(fromList.name || "").trim()) return String(fromList.name || "").trim();
+    if (fromList && String(fromList.name || "").trim()) return formatChatClientName(fromList);
     if (state.activeClient && Number(state.activeClient.id) === Number(key)) {
       const activeName = String(state.activeClient.name || "").trim();
-      if (activeName) return activeName;
+      if (activeName) return formatChatClientName(state.activeClient);
     }
     return `Клиент #${key}`;
+  }
+
+  function formatChatClientName(client) {
+    const name=String(client?.name || 'Клиент').replace(/\s+\(гость\)$/iu,'').trim();
+    return client?.client_state==='guest'?`${name} (гость)`:name;
+  }
+
+  function syncGuestConversationNotice() {
+    const client=state.activeClient;
+    const guest=Boolean(state.activeClientId && client?.client_state==='guest');
+    const warning=document.getElementById('chatGuestWarning');
+    warning?.classList.toggle('hidden',!guest);
   }
 
   function ensureMessageAlertAudioContext() {
@@ -8810,7 +8872,7 @@
     let changed = false;
     const nowIso = new Date().toISOString();
     thread.forEach((msg) => {
-      if (!msg || msg.direction !== "in") return;
+      if (!msg || msg.historyReadOnly || msg.direction !== "in") return;
       if (isMessageDelivered(msg)) return;
       msg.deliveryStatus = "delivered";
       msg.deliveredAt = msg.deliveredAt || nowIso;
@@ -8843,7 +8905,7 @@
     const changedIds = [];
     const nowIso = new Date().toISOString();
     thread.forEach((msg) => {
-      if (!msg || msg.direction !== "in") return;
+      if (!msg || msg.historyReadOnly || msg.direction !== "in") return;
       const id = String(msg.id || "");
       if (!id || !idSet.has(id)) return;
       if (isMessageRead(msg)) return;
@@ -8856,7 +8918,7 @@
     });
     if (changed) {
       const remainingUnread = getVisibleThread(key)
-        .filter((msg) => msg && msg.direction === "in" && !isMessageRead(msg))
+        .filter((msg) => msg && !msg.historyReadOnly && msg.direction === "in" && !isMessageRead(msg))
         .length;
       setRemoteSummaryUnreadCount(key, remainingUnread);
       markThreadMutated(key);
@@ -8886,7 +8948,7 @@
       const id = String(node.getAttribute("data-message-id") || "");
       if (!id) return;
       const msg = findThreadMessage(key, id);
-      if (!msg || isMessageRead(msg)) return;
+      if (!msg || msg.historyReadOnly || isMessageRead(msg)) return;
       out.push(id);
     });
     return out;
@@ -8966,12 +9028,81 @@
     }
   }
 
+  const privateThreadImages=new Map();
+  let privateThreadImageScope='';
+  let privateThreadImageObserver=null;
+
+  function clearPrivateThreadImages(){
+    privateThreadImageObserver?.disconnect();
+    for(const entry of privateThreadImages.values()){
+      entry.controller.abort();
+      if(entry.url)URL.revokeObjectURL(entry.url);
+    }
+    privateThreadImages.clear();privateThreadImageScope='';
+    document.querySelectorAll('img[data-chat-attachment-src]').forEach(img=>{
+      delete img.__privateImageScope;
+      if(String(img.getAttribute('src') || '').startsWith('blob:'))img.removeAttribute('src');
+    });
+  }
+  window.addEventListener('pagehide',clearPrivateThreadImages);
+  window.addEventListener('pageshow',applyThreadImageLoadingStrategy);
+
+  function ensurePrivateThreadImageScope(){
+    const scope=`${getTenantId()}:${localStorage.getItem('activeStoreId') || '1'}:${localStorage.getItem('authToken') || ''}`;
+    if(privateThreadImageScope!==scope){clearPrivateThreadImages();privateThreadImageScope=scope;}
+    return scope;
+  }
+
+  function setThreadAttachmentImageSource(img,src){
+    if(isCacheableThreadImageSrc(src)){
+      if(img.dataset.chatAttachmentSrc!==src){img.dataset.chatAttachmentSrc=src;delete img.__privateImageScope;img.removeAttribute('src');}
+      queueMicrotask(()=>loadPrivateThreadImage(img));
+    }else{
+      delete img.dataset.chatAttachmentSrc;delete img.__privateImageScope;
+      img.src=src;
+    }
+  }
+
+  function loadPrivateThreadImage(img){
+    const src=img.dataset.chatAttachmentSrc;
+    if(!src || !img.isConnected)return;
+    const scope=ensurePrivateThreadImageScope();
+    if(img.__privateImageScope===scope)return;
+    img.__privateImageScope=scope;
+    let entry=privateThreadImages.get(src);
+    if(!entry){
+      const local=new URL(src,location.href).pathname.match(/^\/(static\/)?uploads\/chat\/(.+)$/i);
+      if(!local)return;
+      entry={controller:new AbortController(),url:''};
+      privateThreadImages.set(src,entry);
+      entry.promise=apiJson(`${CHAT_TEMP_API_BASE}/media/${local[1]?'static':'uploads'}/${local[2]}`,
+        {responseType:'blob',cache:'no-store',signal:entry.controller.signal})
+        .then(blob=>{
+          if(entry.controller.signal.aborted)throw new DOMException('Image scope changed','AbortError');
+          if(!blob.type.startsWith('image/'))throw new Error('CHAT_ATTACHMENT_NOT_IMAGE');
+          entry.url=URL.createObjectURL(blob);return entry.url;
+        }).catch(error=>{
+          if(privateThreadImages.get(src)===entry)privateThreadImages.delete(src);
+          throw error;
+        });
+    }
+    entry.promise.then(url=>{
+      if(!entry.controller.signal.aborted && img.isConnected && privateThreadImageScope===scope
+        && img.dataset.chatAttachmentSrc===src)img.src=url;
+    }).catch(error=>{
+      if(img.__privateImageScope===scope)delete img.__privateImageScope;
+      if(!isAbortError(error))console.error('CHAT_ATTACHMENT_LOAD_FAILED',error.message);
+    });
+  }
+
   function applyThreadImageLoadingStrategy() {
     if (!dom.center.messages) return;
+    ensurePrivateThreadImageScope();
+    privateThreadImageObserver?.disconnect();
     const activeId = normalizeClientIdKey(state.activeClientId);
     const images = Array.from(dom.center.messages.querySelectorAll(".chat-message-attachment-image")).filter((img) => {
       if (!(img instanceof HTMLImageElement)) return;
-      const src = String(img.getAttribute("src") || "").trim();
+      const src = String(img.dataset.chatAttachmentSrc || img.getAttribute("src") || "").trim();
       return isCacheableThreadImageSrc(src);
     });
     const eagerFromIndex = Math.max(0, images.length - CHAT_THREAD_EAGER_IMAGE_COUNT);
@@ -8993,6 +9124,15 @@
         };
         img.addEventListener("load", alignBottomIfNeeded, { passive: true });
         img.addEventListener("error", alignBottomIfNeeded, { passive: true });
+      }
+      if(img.dataset.chatAttachmentSrc){
+        if(eager || typeof IntersectionObserver==='undefined')loadPrivateThreadImage(img);
+        else{
+          if(!privateThreadImageObserver)privateThreadImageObserver=new IntersectionObserver(entries=>{
+            for(const entry of entries)if(entry.isIntersecting){privateThreadImageObserver.unobserve(entry.target);loadPrivateThreadImage(entry.target);}
+          },{root:dom.center.messagesWrap,rootMargin:'300px'});
+          privateThreadImageObserver.observe(img);
+        }
       }
     });
   }
@@ -9067,7 +9207,7 @@
   function setComposerReplyByMessage(messageId) {
     if (!state.activeClientId) return;
     const msg = findThreadMessage(state.activeClientId, messageId);
-    if (!msg) return;
+    if (!msg || msg.historyReadOnly) return;
 
     state.replyDraft = {
       id: String(msg.id || ""),
@@ -9203,7 +9343,10 @@
         const deleteForClient = !!ui.check?.checked;
         closeDeleteConfirm();
         if (!pending || typeof pending.onConfirm !== "function") return;
-        pending.onConfirm({ deleteForClient });
+        Promise.resolve(pending.onConfirm({ deleteForClient })).catch(error=>{
+          console.error('CHAT_DELETE_FAILED',error);
+          window.AppModal?.alert?.({title:'Не удалось удалить',message:'Диалог не удалён. Обновите список и проверьте срок хранения сессии.'});
+        });
       });
     }
 
@@ -10120,6 +10263,10 @@
     if (!(clientId > 0)) return;
     const scope = getMessageOrderCardScope();
     const ids = [...new Set(thread.flatMap(resolveAssistantOrderCardIds))];
+    const orderSources=new Map();
+    thread.forEach(message=>resolveAssistantOrderCardIds(message).forEach(id=>{
+      if(!orderSources.has(id) || !message.historyReadOnly)orderSources.set(id,Number(message.conversationClientId || clientId));
+    }));
     const now = Date.now();
     const missing = ids.filter(id => now - (state.messageOrderCardJobs.get(`${scope}:${id}`) || 0) > 60000);
     for (let offset=0; offset<missing.length; offset+=50) {
@@ -10137,7 +10284,16 @@
           entries.forEach(({id,entry}) => {if(entry?.order)state.messageOrderCards.set(`${scope}:${id}`,{...entry.order,...findKnownOrderById(id)});});
           patchMessageOrderCards();
         }
-        const json=await apiJson(`/api/admin/clients/${clientId}/orders?ids=${batch.join(',')}`,{cache:'no-store'});
+        const groups=new Map();
+        batch.forEach(id=>{const source=orderSources.get(id)||clientId;if(!groups.has(source))groups.set(source,[]);groups.get(source).push(id);});
+        const responses=await Promise.all([...groups].map(async([source,orderIds])=>{
+          const cardClient=await ensureChatClientState(source);
+          const cardUrl=isGuestChatClient(cardClient)
+            ?`/api/admin/clients/chat-guests/${source}?ids=${orderIds.join(',')}`
+            :`/api/admin/clients/${source}/orders?chat_sessions=1&ids=${orderIds.join(',')}`;
+          return apiJson(cardUrl,{cache:'no-store'});
+        }));
+        const json={data:responses.flatMap(response=>Array.isArray(response?.data)?response.data:[])};
         if (scope !== getMessageOrderCardScope()) return;
         const returned = new Set((json?.data || []).map(row=>Number(row.id)));
         batch.forEach(id=>{if(!returned.has(Number(id)))state.messageOrderCards.set(`${scope}:${id}`,{id,cardState:'unavailable'});});
@@ -10607,7 +10763,30 @@
       const qDigits = normalizePhoneDigits(q);
       return name.includes(q) || (qDigits && phone.includes(qDigits));
     });
+    const presenceRanks=new Map();
+    const messageRanks=new Map();
+    const activityRanks=new Map();
+    const rank={offline:0,site:1,chat:2};
+    for(const client of state.clients){
+      const key=client.group_key || `dialog:${client.id}`;
+      const presence=getGroupedPresenceState([client.id,getChatCustomerProfileId(client)]);
+      presenceRanks.set(key,Math.max(presenceRanks.get(key)||0,rank[presence]||0));
+      const hasMessages=Number(client.message_count)>0 || getVisibleThread(client.id).some(message=>!message.historyReadOnly);
+      if(hasMessages){
+        messageRanks.set(key,1);
+        activityRanks.set(key,Math.max(activityRanks.get(key)||0,getClientSortTimestamp(client)));
+      }
+
+    }
     bySearch.sort((a, b) => {
+      const presenceDiff=(presenceRanks.get(b.group_key || `dialog:${b.id}`)||0)-(presenceRanks.get(a.group_key || `dialog:${a.id}`)||0);
+      if(presenceDiff)return presenceDiff;
+      const aKey=a.group_key || `dialog:${a.id}`,bKey=b.group_key || `dialog:${b.id}`;
+      const messagesDiff=(messageRanks.get(bKey)||0)-(messageRanks.get(aKey)||0);
+      if(messagesDiff)return messagesDiff;
+      const threadDiff=(activityRanks.get(bKey)||0)-(activityRanks.get(aKey)||0);
+      if(threadDiff)return threadDiff;
+
       const activityDiff = getClientSortTimestamp(b) - getClientSortTimestamp(a);
       if (activityDiff) return activityDiff;
       return Number(b?.id || 0) - Number(a?.id || 0);
@@ -10652,9 +10831,21 @@
     if (!dom.left.list) return;
     const id = Number(clientId || 0);
     if (!(id > 0)) return;
-    const row = dom.left.list.querySelector(`.chat-client-row[data-client-id="${cssEscape(String(id))}"]`);
-    if (!row) return;
-    const presenceState = getClientPresenceState(id);
+    dom.left.list.querySelectorAll(`.chat-client-row[data-presence-clients~="${cssEscape(String(id))}"]`).forEach(patchClientPresenceRow);
+  }
+
+  function getGroupedPresenceState(ids){
+    let state='offline';
+    for(const id of ids){
+      const current=getClientPresenceState(id);
+      if(current==='chat')return 'chat';
+      if(current==='site')state='site';
+    }
+    return state;
+  }
+
+  function patchClientPresenceRow(row){
+    const presenceState=getGroupedPresenceState(String(row.dataset.presenceClients || '').split(' ').filter(Boolean));
     row.dataset.clientPresence = presenceState;
     const dot = $(".chat-client-presence-dot", row);
     const badge = $(".chat-client-presence-badge", row);
@@ -10665,20 +10856,32 @@
   function initClientPresence() {
     if (!window.AdminPresence || typeof window.AdminPresence.subscribe !== "function") return;
     window.AdminPresence.subscribe((change) => {
-      if (change?.type === "delta" && Number(change.clientId || 0) > 0) {
-        patchClientPresence(change.clientId);
-        return;
-      }
       if (!dom.left.list) return;
-      $$(".chat-client-row[data-client-id]", dom.left.list).forEach((row) => {
-        patchClientPresence(row.getAttribute("data-client-id"));
+      const rows=change?.type==='delta' && Number(change.clientId)>0
+        ? dom.left.list.querySelectorAll(`.chat-client-row[data-presence-clients~="${cssEscape(String(change.clientId))}"]`)
+        : dom.left.list.querySelectorAll('.chat-client-row[data-presence-clients]');
+      let changed=false;
+      rows.forEach(row=>{
+        const next=getGroupedPresenceState(String(row.dataset.presenceClients || '').split(' ').filter(Boolean));
+        if(row.dataset.clientPresence!==next)changed=true;
+        patchClientPresenceRow(row);
       });
+      if(changed)applyClientFilter();
+      const online=window.AdminPresence.getSnapshot?.().clients || [];
+      const known=new Set((state.clients || []).map(client=>Number(client.id)));
+      if(online.some(client=>!known.has(Number(client.clientId))))void syncRemoteSummariesSnapshot().catch(console.error);
     });
   }
 
+  function getChatClientRowSignature(client){
+    const active=client._groupRow?client._groupSelected===true:Number(state.activeClientId)===Number(client.id);
+    return JSON.stringify([client,active,getUnreadCount(client.id),getClientPreviewState(client.id),getLastMessage(client.id)]);
+  }
+
   function buildChatClientRow(client) {
-    const active = Number(state.activeClientId) === Number(client.id);
-    const unread = getUnreadCount(client.id);
+    const active = client._groupRow ? client._groupSelected===true : Number(state.activeClientId) === Number(client.id);
+    const unread = client._groupRow ? client._groupUnread : getUnreadCount(client.id);
+    const label=client._groupRow ? String(client.name || 'Гость') : dialogueLabel(client);
     const lastMsg = getLastMessage(client.id);
     const previewState = getClientPreviewState(client.id);
     const preview = String(previewState.text || "");
@@ -10692,17 +10895,21 @@
           ? "Отправлено"
           : "";
     const unreadText = unread > 99 ? "99+" : String(unread);
-    const canDeleteGuest = isGuestChatClient(client);
+    const canDeleteGuest = !client._groupRow && client.session_can_delete===true;
     const avatar = resolveClientAvatar(client);
     const avatarFallback = renderClientAvatarFallback(avatar);
-    const presenceState = getClientPresenceState(client.id);
+    const presenceIds=client._groupRow?(client._presenceClientIds || [client.id]):[client.id];
+    const presenceState = getGroupedPresenceState(presenceIds);
 
     const row = document.createElement("div");
-    row.className = `chat-client-row${active ? " is-active" : ""}`;
-    row.setAttribute("data-client-id", String(client.id));
+    row.__chatClientView=client;
+    row.className = `chat-client-row${active ? " is-active" : ""}${client._groupRow?' is-session-group':' is-session-row'}`;
+    if(client._groupRow)row.setAttribute('data-client-group',client.group_key);
+    if(!client._groupRow || client._singleActiveId)row.setAttribute("data-client-id", String(client.id));
     row.setAttribute("data-client-presence", presenceState);
+    row.setAttribute('data-presence-clients',presenceIds.join(' '));
     row.innerHTML = `
-      <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(client.name || `Клиент #${client.id}`)}">
+      <button type="button" class="chat-client-row-main" aria-label="${escapeHtml(label)}">
         <span class="chat-client-avatar${avatar.photoUrl ? " has-photo" : ""}">
           <span class="chat-client-avatar-fallback">${avatarFallback}</span>
           ${avatar.photoUrl ? `<img class="chat-client-avatar-image" src="${escapeHtml(avatar.photoUrl)}" alt="" loading="lazy" decoding="async">` : ""}
@@ -10711,24 +10918,26 @@
         </span>
         <span class="chat-client-main">
         <span class="chat-client-top">
-          <span class="chat-client-name" data-chat-client-open-details="1">${escapeHtml(client.name || `Клиент #${client.id}`)}</span>
-          ${status || timeText
+          <span class="chat-client-name" data-chat-client-open-details="1">${escapeHtml(label)}</span>
+          ${status || timeText || client._groupRow && !client._singleActiveId
             ? `<span class="chat-client-time-wrap">
                 ${status
                   ? `<span class="chat-client-status chat-client-status--${escapeHtml(status)}" title="${escapeHtml(statusTitle)}" aria-label="${escapeHtml(statusTitle)}">${getOutgoingStatusIconMarkup(status)}</span>`
                   : ""}
                 ${timeText ? `<span class="chat-client-time">${escapeHtml(timeText)}</span>` : ""}
+                ${client._groupRow && !client._singleActiveId?`<i class="fas fa-chevron-${client._expanded?'up':'down'} chat-session-chevron" aria-hidden="true"></i>`:''}
               </span>`
             : ""}
         </span>
         <span class="chat-client-bottom">
           <span class="chat-client-preview${getClientTypingPreviewText(client.id) ? " is-typing" : ""}" data-chat-client-open-details="1">${escapeHtml(preview)}</span>
-          ${unread > 0 ? `<span class="chat-client-unread">${escapeHtml(unreadText)}</span>` : ""}
+          ${unread > 0 ? '<span class="chat-client-unread is-dot" role="img" aria-label="Есть непрочитанные сообщения"></span>' : ""}
         </span>
+        ${!client._groupRow && client.session_state==='completed'?'<span class="chat-client-identity">Сессия завершена</span>':''}
         </span>
       </button>
-      <div class="chat-client-row-actions${state.canDeleteChat ? "" : " hidden"}" aria-hidden="true">
-        <button type="button" class="chat-client-row-action is-clear" data-chat-client-action-inline="clear">Очистить</button>
+      <div class="chat-client-row-actions${state.canDeleteChat && !client._groupRow ? "" : " hidden"}" aria-hidden="true">
+        <button type="button" class="chat-client-row-action is-clear${isGuestChatClient(client)?' hidden':''}" data-chat-client-action-inline="clear">Очистить</button>
         <button type="button" class="chat-client-row-action is-delete${canDeleteGuest ? "" : " hidden"}" data-chat-client-action-inline="delete-guest">Удалить</button>
       </div>
     `;
@@ -10749,6 +10958,32 @@
     }
 
     const openClientThreadAndDetails = async (event) => {
+      if(client._groupRow){
+        event?.preventDefault();event?.stopPropagation();
+        if(isAdminMobileChatLayout()){
+          if(client._singleActiveId){
+            await selectClient(client._singleActiveId,{openDetails:false,preserveAccordion:true});
+          } else {
+            if(state.expandedClientGroups.has(client.group_key))state.expandedClientGroups.delete(client.group_key);
+            else state.expandedClientGroups.add(client.group_key);
+            renderClientsList();
+          }
+          return;
+        }
+        if(!client._singleActiveId){
+          if(state.expandedClientGroups.has(client.group_key))state.expandedClientGroups.delete(client.group_key);
+          else state.expandedClientGroups.add(client.group_key);
+        }
+        renderClientsList();
+        Array.from(dom.left.list.children).find(node=>node.dataset.clientGroup===client.group_key)
+          ?.querySelector('.chat-client-row-main')?.focus({preventScroll:true});
+        const profileId=getChatCustomerProfileId(client);
+        const card=profileId?activateChatRightTab(upsertChatRightTab('client',profileId,client.name || '')):Promise.resolve(clearChatRightPane());
+        const selection=client._defaultSessionId && Number(state.activeClientId)!==Number(client._defaultSessionId)
+          ?selectClient(client._defaultSessionId,{openDetails:false,preserveAccordion:true}):Promise.resolve();
+        await Promise.all([card,selection]);
+        return;
+      }
       if (isAdminMobileChatLayout()) {
         if (event) {
           event.preventDefault();
@@ -10762,14 +10997,14 @@
       closeAllClientSwipeRows(null, { immediate: true });
       hideClientContextMenu();
       if (Number(state.activeClientId) !== Number(client.id)) {
-        await selectClient(client.id, { openDetails: true });
+        await selectClient(client.id, { openDetails: false });
         return;
       }
-      await openClientDetailsPanel();
     };
 
     const mainBtn = $(".chat-client-row-main", row);
     if (mainBtn) {
+      if(client._groupRow && !client._singleActiveId)mainBtn.setAttribute('aria-expanded',String(client._expanded===true));
       mainBtn.addEventListener("click", (event) => {
         if (Date.now() < suppressClientRowClickUntil) {
           event.preventDefault();
@@ -10786,6 +11021,7 @@
       });
       mainBtn.addEventListener("contextmenu", (event) => {
         event.preventDefault();
+        if(client._groupRow)return;
         if (!state.canDeleteChat) {
           hideClientContextMenu();
           return;
@@ -10799,28 +11035,78 @@
       if (event.target.closest("[data-chat-client-action-inline]")) return;
       hideClientContextMenu();
     });
-    bindClientRowSwipe(row, client);
+    if(!client._groupRow)bindClientRowSwipe(row, client);
     return row;
+  }
+
+  function dialogueLabel(client){
+    if(client?.session_state==='legacy')return 'Исторический диалог';
+    return client?.session_state==='main' || client?.client_state==='authorized' ? 'Основной чат'
+      : 'Гостевая сессия';
   }
 
   function renderClientsList() {
     if (!dom.left.list) return;
     closeAllClientSwipeRows(null, { immediate: true });
     const hadClientRows = !!dom.left.list.querySelector(".chat-client-row");
-    const previousScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
-    dom.left.list.innerHTML = "";
-    const items = state.filteredClients || [];
+    const previousScrollTop = toStoredScrollTop(dom.left.scroll.scrollTop);
+    const groupOf=client=>client.group_key || `dialog:${client.id}`;
+    const all=state.clients || [];
+    const groups=new Map();
+    const selectedGroup=groupOf(findClientById(state.activeClientId) || {});
+    for(const client of all){const key=groupOf(client);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(client);}
+    if(!(state.expandedClientGroups instanceof Set))state.expandedClientGroups=new Set();
+    for(const key of state.expandedClientGroups)if(!groups.has(key))state.expandedClientGroups.delete(key);
+    const items=[];
+    {
+      const seen=new Set();
+      for(const filtered of state.filteredClients || []){
+        const key=groupOf(filtered);if(seen.has(key) || !groups.has(key))continue;seen.add(key);
+        const members=groups.get(key) || [filtered];
+        const profile=members.find(client=>client.client_state==='authorized') || filtered;
+        const singleActive=members.length===1 && ['main','active'].includes(members[0].session_state);
+        const byActivity=members.slice().sort((a,b)=>compareIsoDates(String(b.updated_at || ''),String(a.updated_at || '')));
+        const defaultSession=byActivity.find(item=>item.session_state==='active')
+          || byActivity.find(item=>item.session_state==='main') || byActivity[0];
+        items.push({...filtered,name:profile.name,photo:profile.photo || filtered.photo,group_key:key,_groupRow:true,
+          _presenceClientIds:[...new Set([...members.map(item=>Number(item.id)),Number(getChatCustomerProfileId(profile))].filter(id=>id>0))],
+          _groupSelected:key===selectedGroup,
+          _singleActiveId:singleActive?Number(members[0].id):null,
+          _defaultSessionId:defaultSession?Number(defaultSession.id):null,
+          _expanded:state.expandedClientGroups.has(key),
+          _groupUnread:members.reduce((sum,client)=>sum+getUnreadCount(client.id),0)});
+        if(!singleActive && state.expandedClientGroups.has(key)){
+          items.push(...members.slice().sort((a,b)=>{
+            if(a.session_state==='main')return -1;if(b.session_state==='main')return 1;
+            return compareIsoDates(String(b.updated_at || ''),String(a.updated_at || '')) || Number(b.id)-Number(a.id);
+          }));
+        }
+      }
+    }
+    const previousNodes=new Map(Array.from(dom.left.list.children).map(node=>[node.dataset.rowKey,node]));
+    const keep=new Set();
     if (!items.length) {
+      dom.left.list.replaceChildren();
       if (dom.left.empty) dom.left.empty.classList.remove("hidden");
       saveClientsListScrollPosition();
       return;
     }
     if (dom.left.empty) dom.left.empty.classList.add("hidden");
-    items.forEach((client) => dom.left.list.appendChild(buildChatClientRow(client)));
+    let cursor=dom.left.list.firstElementChild;
+    for(const client of items){
+      const key=client._groupRow?client.group_key:String(client.id);
+      const signature=getChatClientRowSignature(client);
+      let node=previousNodes.get(key);
+      if(!node || node.dataset.signature!==signature){node=buildChatClientRow(client);node.dataset.rowKey=key;node.dataset.signature=signature;}
+      keep.add(node);
+      if(node!==cursor)dom.left.list.insertBefore(node,cursor);
+      cursor=node.nextElementSibling;
+    }
+    for(const node of Array.from(dom.left.list.children))if(!keep.has(node))node.remove();
     const persistedScrollTop = toStoredScrollTop(state.store?.ui?.clientsListScrollTop);
     const targetTop = hadClientRows ? previousScrollTop : persistedScrollTop;
-    const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
-    dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
+    const maxTop = Math.max(0, dom.left.scroll.scrollHeight - dom.left.scroll.clientHeight);
+    dom.left.scroll.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
     saveClientsListScrollPosition();
   }
 
@@ -12064,7 +12350,7 @@
       const id = String(node.getAttribute("data-message-id") || "");
       if (!id) return;
       const msg = findThreadMessage(key, id);
-      if (!msg || msg.direction !== "in" || isMessageRead(msg)) return;
+      if (!msg || msg.historyReadOnly || msg.direction !== "in" || isMessageRead(msg)) return;
       const rect = node.getBoundingClientRect();
       if (rect.bottom <= bottomEdge) return;
       out.push(id);
@@ -12557,7 +12843,9 @@
   }
 
   function setComposerEnabled(enabled) {
-    const canEnable = enabled && (state.editingMessageId ? state.canUpdateChat : state.canCreateChat);
+    const closed=['completed','legacy'].includes(findClientById(state.activeClientId)?.session_state);
+    const canEnable = enabled && !closed && (state.editingMessageId ? state.canUpdateChat : state.canCreateChat);
+    if(closed && dom.center.input)dom.center.input.placeholder=findClientById(state.activeClientId)?.session_state==='legacy'?'Только просмотр':'Сессия завершена';
     [dom.center.input, dom.center.attachInput, dom.center.attachBtn, dom.center.emojiBtn, dom.center.sendBtn].forEach((el) => {
       if (!el) return;
       el.disabled = !canEnable;
@@ -12582,6 +12870,7 @@
     dom.center.input.placeholder = (isEditing ? state.canUpdateChat : state.canCreateChat)
       ? (isEditing ? "Измените сообщение" : "Введите сообщение")
       : "Только просмотр";
+    if(findClientById(state.activeClientId)?.session_state==='completed')dom.center.input.placeholder='Сессия завершена';
   }
 
   function cancelEditingMessage() {
@@ -12632,6 +12921,7 @@
   function toggleMessageSelection(messageId) {
     const key = String(messageId || "");
     if (!key) return;
+    if(findThreadMessage(state.activeClientId,key)?.historyReadOnly)return;
     if (!state.selectionMode) setSelectionMode(true);
     if (state.selectedMessageIds.has(key)) {
       state.selectedMessageIds.delete(key);
@@ -12775,7 +13065,7 @@
   function toggleThreadMessagePinned(clientId, messageId) {
     if (!state.canUpdateChat) return false;
     const msg = findThreadMessage(clientId, messageId);
-    if (!msg) return false;
+    if (!msg || msg.historyReadOnly) return false;
     msg.pinned = !msg.pinned;
     markThreadMutated(clientId);
     saveStore();
@@ -12788,7 +13078,7 @@
   function setThreadMessageReaction(clientId, messageId, reaction) {
     if (!state.canUpdateChat) return false;
     const msg = findThreadMessage(clientId, messageId);
-    if (!msg) return false;
+    if (!msg || msg.historyReadOnly) return false;
     if (!setMessageActorReaction(msg, CHAT_REACTION_ACTOR, reaction)) return false;
     markThreadMutated(clientId);
     saveStore();
@@ -13823,6 +14113,7 @@
 
   function isGuestChatClient(client) {
     if (!client || typeof client !== "object") return false;
+    if (client.client_state) return client.client_state !== 'authorized';
     const isVirtual = client._isVirtualChatClient === true;
     const phoneDigits = normalizePhoneDigits(client.phone);
     const totalOrders = Number(client.total_orders || 0);
@@ -13831,6 +14122,26 @@
     const normalizedName = normalizeClientNameIdentity(client.name);
     if (!normalizedName) return false;
     return /^\u0433\u043e\u0441\u0442\u044c(?:$|\s|#|\u2116|\d)/.test(normalizedName);
+  }
+
+  function getChatCustomerProfileId(client){
+    if(!client)return null;
+    if(Number(client.profile_customer_id)>0)return Number(client.profile_customer_id);
+    if(client.client_state==='authorized')return Number(client.id);
+    const account=client.group_key && (state.clients || []).find(item=>item.group_key===client.group_key && item.client_state==='authorized');
+    return account?Number(account.id):null;
+  }
+
+  async function ensureChatClientState(clientId) {
+    let client = findClientById(clientId);
+    if (!['anonymous', 'guest', 'authorized'].includes(client?.client_state)) {
+      await pullRemoteSummaries([clientId]);
+      client = findClientById(clientId);
+      if (!['anonymous', 'guest', 'authorized'].includes(client?.client_state)) {
+        throw new Error('CHAT_CLIENT_STATE_UNAVAILABLE');
+      }
+    }
+    return client;
   }
 
   function destroyClientThreadState(clientId, options = {}) {
@@ -13852,6 +14163,8 @@
     }
 
     delete state.remoteThreadUpdatedAt[key];
+    if(state.adminHistoryClientIds)delete state.adminHistoryClientIds[key];
+    if(state.adminHistoryCounts)delete state.adminHistoryCounts[key];
     delete state.remoteThreadSyncInFlight[key];
     delete state.remoteThreadSyncPendingByClient[key];
     delete state.remoteThreadSyncLastAtByClient[key];
@@ -13928,7 +14241,7 @@
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
     const client = findClientById(key);
-    if (!isGuestChatClient(client)) return false;
+    if (!isGuestChatClient(client) || client.session_can_delete!==true) return false;
 
     const clientName = String(client?.name || `\u0413\u043e\u0441\u0442\u044c #${key}`);
     openDeleteConfirm({
@@ -13937,7 +14250,8 @@
       title: `\u0423\u0434\u0430\u043b\u0438\u0442\u044c ${clientName}?`,
       text: "\u0427\u0430\u0442 \u0433\u043e\u0441\u0442\u044f \u0431\u0443\u0434\u0435\u0442 \u0443\u0434\u0430\u043b\u0435\u043d \u0431\u0435\u0437 \u0432\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\u0438 \u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f.",
       allowDeleteForClient: false,
-      onConfirm: () => {
+      onConfirm: async () => {
+        await deleteRemoteThread(key);
         const result = destroyClientThreadState(key, { removeClientEntry: true });
         applyClientFilter();
         if (result.wasActive) {
@@ -13948,7 +14262,6 @@
           }
         }
         emitUnreadChangedSoon();
-        deleteRemoteThread(key).catch(console.error);
       },
     });
     return true;
@@ -13956,6 +14269,7 @@
 
   function clearClientChat(clientId) {
     if (!state.canDeleteChat) return false;
+    if(isGuestChatClient(findClientById(clientId)))return false;
     const key = normalizeClientIdKey(clientId);
     if (!key) return false;
 
@@ -14032,11 +14346,11 @@
     hideMessageContextMenu();
     const menu = ensureClientContextMenu();
     const client = findClientById(key);
-    const canDeleteGuest = isGuestChatClient(client);
+    const canDeleteGuest = client?.session_can_delete===true;
     const clearBtn = menu.querySelector('[data-chat-client-action="clear"]');
     const guestDeleteBtn = menu.querySelector('[data-chat-client-action="delete-guest"]');
     if (clearBtn) {
-      clearBtn.classList.remove("hidden");
+      clearBtn.classList.toggle('hidden',isGuestChatClient(client));
     }
     if (guestDeleteBtn) {
       guestDeleteBtn.classList.toggle("hidden", !canDeleteGuest);
@@ -14182,6 +14496,7 @@
   }
 
   function showReactionBarForMessage(message, menuRect) {
+    if(message.historyReadOnly){hideReactionBar();return;}
     if (!state.canUpdateChat) return;
     if (!dom.center.reactionBar) return;
     state.contextMessageId = String(message.id || "");
@@ -14221,7 +14536,7 @@
   function showMessageContextMenu(x, y, messageId, options = {}) {
     if (!state.activeClientId || !dom.center.contextMenu) return;
     const message = findThreadMessage(state.activeClientId, messageId);
-    if (!message) return;
+    if (!message || message.historyReadOnly) {hideMessageContextMenu();return;}
 
     hideClientContextMenu();
     hideEmojiPopover();
@@ -14263,7 +14578,7 @@
     if (!state.canUpdateChat) return;
     if (!state.activeClientId || !dom.center.input) return;
     const msg = findThreadMessage(state.activeClientId, messageId);
-    if (!msg || msg.direction !== "out") return;
+    if (!msg || msg.historyReadOnly || msg.direction !== "out") return;
     clearComposerReply();
     state.editingMessageId = String(messageId);
     setComposerEnabled(true);
@@ -14275,7 +14590,7 @@
     if (!state.canDeleteChat) return;
     if (!state.activeClientId) return;
     const message = findThreadMessage(state.activeClientId, messageId);
-    if (!message) return;
+    if (!message || message.historyReadOnly) return;
     const canDeleteForClient = message.direction === "out";
 
     openDeleteConfirm({
@@ -14464,6 +14779,7 @@
   }
 
   function renderChatHeader() {
+    syncGuestConversationNotice();
     ensureDesktopChatHeaderMarkup();
     syncConversationStageState();
     setHeaderLoading(state.activeClientDataLoading === true);
@@ -14573,6 +14889,7 @@
       const mobileOrderLabel = Number(orderId || 0) > 0 ? `#${safeId}` : "—";
       if (dom.center.headerOrder) {
         dom.center.headerOrder.classList.toggle("is-order-empty", isEmptyOrder);
+        dom.center.headerOrder.classList.toggle('hidden',isEmptyOrder && isGuestChatClient(findClientById(state.activeClientId)));
         if (isEmptyOrder) {
           dom.center.headerOrder.dataset.emptyMessage = String(emptyMessage || "Выберите клиента").trim() || "Выберите клиента";
         } else {
@@ -14660,7 +14977,7 @@
         statusText: "У клиента нет заказов",
         total: "—",
         title: "Последний заказ: —",
-        clientName: state.activeClient.name || `Клиент #${state.activeClient.id}`,
+        clientName: formatChatClientName(state.activeClient),
         clientPhone: formatPhoneDigitsToRU(state.activeClient.phone),
         orderId: 0,
         emptyMessage: "У клиента нет заказов",
@@ -14686,7 +15003,7 @@
         total: fmtOrderAmount(totalRaw),
         paymentCode: headerOrder.payment_code || "",
         title: `${kindTitle} #${headerOrder.id || "—"}`,
-        clientName: state.activeClient.name || `Клиент #${state.activeClient.id}`,
+        clientName: formatChatClientName(state.activeClient),
         clientPhone: formatPhoneDigitsToRU(state.activeClient.phone),
         order: headerOrder,
         orderId,
@@ -14739,6 +15056,9 @@
       editedAt: String(source.editedAt || ""),
       text: String(source.text || ""),
       pinned: source.pinned === true,
+      historySourceLabel: String(source.historySourceLabel || ''),
+      historySourceTitle: String(source.historySourceTitle || ''),
+      historyReadOnly: source.historyReadOnly===true,
       replyTo: source.replyTo && typeof source.replyTo === "object"
         ? {
             id: String(source.replyTo.id || ""),
@@ -14807,7 +15127,9 @@
         <div class="chat-message-attachment">
           <img
             class="chat-message-attachment-image"
-            src="${escapeHtml(getAttachmentImageSrc(imageAttachment))}"
+            ${isCacheableThreadImageSrc(getAttachmentImageSrc(imageAttachment))
+              ?`data-chat-attachment-src="${escapeHtml(getAttachmentImageSrc(imageAttachment))}"`
+              :`src="${escapeHtml(getAttachmentImageSrc(imageAttachment))}"`}
             alt="${escapeHtml(String(imageAttachment.name || "Фото"))}"
             draggable="false"
             loading="lazy"
@@ -14821,6 +15143,8 @@
     item.innerHTML = `
       <span class="chat-message-select-badge" aria-hidden="true"><i class="fas fa-check"></i></span>
       <div class="chat-message-bubble"${msg.id ? ` data-message-id="${escapeHtml(String(msg.id || ""))}"` : ""}>
+        ${msg.historyReadOnly && msg.historySourceLabel
+          ?`<button type="button" class="chat-message-source is-other-dialog" data-chat-source-client="${escapeHtml(msg.conversationClientId)}" title="${escapeHtml(msg.historySourceTitle || 'Открыть исходный диалог')}">${escapeHtml(msg.direction==='out'?`Ответ для ${msg.historySourceLabel}`:msg.historySourceLabel)}</button>`:''}
         ${replyMarkup}
         ${attachmentMarkup}
         ${textMarkup}
@@ -14838,6 +15162,10 @@
     `;
 
     const bubble = $(".chat-message-bubble", item);
+    const sourceButton=$('[data-chat-source-client]',item);
+    if(sourceButton)sourceButton.addEventListener('click',event=>{
+      event.stopPropagation();selectClient(Number(msg.conversationClientId)).catch(console.error);
+    });
     const messageTextNode = $(".chat-message-text", item);
     if (messageTextNode) {
       renderRichMessageText(
@@ -15064,6 +15392,7 @@
   }
 
   function renderMessages(options = {}) {
+    syncGuestConversationNotice();
     if (!dom.center.messages || !dom.center.empty) return;
     releaseAdminChatThreadEdgeSpring({ immediate: true });
     const forceScrollBottom = options.forceScrollBottom === true;
@@ -15088,7 +15417,7 @@
     setRenderedThreadClientKey(state.activeClientId);
     const thread = getVisibleThread(state.activeClientId);
     hydrateMessageOrderCards(thread);
-    const validIds = new Set(thread.map((msg) => String(msg.id)));
+    const validIds = new Set(thread.filter(msg=>!msg.historyReadOnly).map((msg) => String(msg.id)));
     Array.from(state.selectedMessageIds).forEach((id) => {
       if (!validIds.has(id)) state.selectedMessageIds.delete(id);
     });
@@ -15978,7 +16307,7 @@
       dom.center.attachPreviewTitle.textContent = getAttachPreviewTitle(total);
     }
     if (dom.center.attachPreviewImage && active) {
-      dom.center.attachPreviewImage.src = getAttachmentImageSrc(active);
+      setThreadAttachmentImageSource(dom.center.attachPreviewImage,getAttachmentImageSrc(active));
       dom.center.attachPreviewImage.alt = String(active.name || "Изображение");
     }
 
@@ -15995,7 +16324,7 @@
           btn.setAttribute("data-chat-attach-preview-index", String(idx));
 
           const img = document.createElement("img");
-          img.src = getAttachmentImageSrc(item);
+          setThreadAttachmentImageSource(img,getAttachmentImageSrc(item));
           img.alt = String(item.name || `Фото ${idx + 1}`);
           img.loading = "eager";
           img.decoding = "async";
@@ -17515,14 +17844,15 @@
     return {
       id: Number(clientId || source.id || 0) || 0,
       name: guestName,
-      phone: "",
+      phone: String(source.phone || ""),
       birthday: "",
-      photo: "",
+      photo: String(source.photo || ""),
       total_orders: 0,
       total_spent: 0,
       last_order_date: "",
       created_at: "",
       is_guest_chat: true,
+      client_state: String(source.client_state || 'guest'),
     };
   }
 
@@ -17570,8 +17900,20 @@
     };
     if (isGuestClient) {
       state.activeClient = buildGuestActiveClientProfile(clientId, selectedFromList);
+      renderChatHeader();
       setActiveOrders([], { forceRender: true });
       state.activeOrdersHydratedClientId = 0;
+      state.headerOrderSnapshot=null;
+      try{
+        const response=selectedFromList?.session_state==='legacy'?{data:{headerOrder:null}}
+          :await apiJson(`/api/admin/clients/chat-guests/${Number(clientId)}?view=header`);
+        if(requestId!==state.requestToken || Number(state.activeClientId)!==Number(clientId))return;
+        const order=response?.data?.headerOrder || null;
+        state.headerOrderSnapshot=order;
+        setActiveOrders(order?[order]:[],{forceRender:true});
+        state.activeOrdersHydratedClientId=Number(clientId);
+      }catch(error){if(!isAbortError(error))console.error('CHAT_GUEST_HEADER_FAILED',error);}
+      if(requestId!==state.requestToken)return;
       if (shouldRenderThread) {
         renderMessages({ disableAutoPin: true, smoothScroll: false, skipSaveScrollPosition: true });
         if (isAdminMobileChatLayout()) {
@@ -17644,7 +17986,10 @@
           if (Number(state.activeClientId || 0) !== Number(clientId)) return;
           const freshOrders = Array.isArray(ordersJson?.data) ? ordersJson.data : [];
           setCachedActiveClientOrders(clientId, freshOrders);
-          setSharedClientDetailsToLocalStorage(clientId, { orders: freshOrders });
+          const cardPhone=normalizePhoneDigits(state.activeClient?.phone);
+          setSharedClientDetailsToLocalStorage(clientId, { orders: freshOrders.filter(order=>
+            Number(order.customer_id)===Number(clientId)
+            || (order.customer_id==null && cardPhone && normalizePhoneDigits(order.customer_phone)===cardPhone)) });
           setActiveOrders(freshOrders, { forceRender: true, forceRightOrderRefresh: true });
           try {
             const candidateJson = await fetchHeaderOrderCandidateFresh(clientId);
@@ -17700,6 +18045,9 @@
   async function selectClient(clientId, options = {}) {
     const id = Number(clientId || 0);
     if (!Number.isFinite(id) || id <= 0) return;
+    const selectionRequest = ++chatClientSelectionRequest;
+    await ensureChatClientState(id);
+    if (selectionRequest !== chatClientSelectionRequest) return;
     const opts = options && typeof options === "object" ? options : {};
     // Show header loading immediately on click, before any heavy sync work below.
     setHeaderLoading(true);
@@ -17729,6 +18077,9 @@
     resetThreadImageDrop();
 
     state.activeClientId = id;
+    if(!(state.expandedClientGroups instanceof Set))state.expandedClientGroups=new Set();
+    if(!opts.preserveAccordion)state.expandedClientGroups.add(findClientById(id)?.group_key || `dialog:${id}`);
+    renderClientsList();
     const selectionGeneration = ++state.threadSelectionGeneration;
     const initialAnchor = resolveThreadInitialAnchor(id);
     state.pendingThreadInitialAnchor = {
@@ -17752,23 +18103,8 @@
       });
     state.store.lastOpenClientId = id;
     restoreComposerDraftForClient(id, { skipThreadViewportSync: true });
-    state.rightPanelOrderId = 0;
-    showChatRightPane("client");
     state.headerOrderSnapshot = null;
     scheduleUiStatePersist(0);
-    const selectedForTab = state.clients.find((c) => Number(c.id) === id) || null;
-    const titleForTab = String(selectedForTab?.name || "").trim();
-    const shouldAutoOpenDesktopDetails = !isAdminMobileChatLayout() && opts.openDetails !== false;
-    const shouldOpenDetails = opts.openDetails === true || shouldAutoOpenDesktopDetails;
-
-    if (shouldAutoOpenDesktopDetails || opts.openDetails === true) {
-      upsertChatRightTab("client", id, titleForTab);
-    }
-    if (shouldOpenDetails) {
-      window.requestAnimationFrame(() => {
-        openClientDetailsPanel().catch(console.error);
-      });
-    }
 
     const selectedFromList = state.clients.find((c) => Number(c.id) === id) || null;
     const isGuestClient = isGuestChatClient(selectedFromList);
@@ -17795,15 +18131,6 @@
       isGuest: isGuestClient,
       renderThread: false,
     }).catch(console.error);
-    try {
-      const clientsRightApi = getClientsRightApi();
-      if (clientsRightApi && typeof clientsRightApi.setChatRightForceEmpty === "function") {
-        clientsRightApi.setChatRightForceEmpty(false);
-      }
-    } catch (err) {
-      console.error("Failed to sync chat right empty state:", err);
-    }
-
     const syncMobileViewAfterRender = (() => {
       if (opts.restoreMobileView === true) {
         return () => {
@@ -17894,15 +18221,7 @@
   }
 
   function filterOpenChatClients(rows) {
-    const list = Array.isArray(rows) ? rows : [];
-    const existingThreadIds = new Set(Object.keys(state.store.threads || {}).map((k) => Number(k)));
-    const filtered = list.filter(
-      (client) =>
-        existingThreadIds.has(Number(client.id))
-        || Number(client.total_orders || 0) > 0
-        || client._isVirtualChatClient === true
-    );
-    return filtered.length ? filtered : list;
+    return Array.isArray(rows) ? rows : [];
   }
 
   function sanitizeCachedClientRows(rows) {
@@ -17924,6 +18243,10 @@
         created_at: String(row?.created_at || ""),
         updated_at: String(row?.updated_at || ""),
         _isVirtualChatClient: row?._isVirtualChatClient === true,
+        client_state: String(row?.client_state || ''),
+        group_key:row.group_key,session_state:row.session_state,
+        session_can_delete:row.session_can_delete===true,profile_customer_id:row.profile_customer_id,
+        message_count:Number(row.message_count)||0,
       });
     });
     return out.slice(0, CHAT_CLIENTS_CACHE_MAX_ROWS);
@@ -17973,6 +18296,7 @@
       if (remoteFailed) return false;
 
       const remoteRows = Array.isArray(remotePage?.rows) ? remotePage.rows : [];
+      (remotePage?.merges || []).forEach(applyServerMergeNotice);
       const remoteHasMoreFlag = remotePage?.hasMore === true;
 
       if (remoteRows.length === 0 && !reset) {
@@ -18026,7 +18350,7 @@
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     const pager = ensureClientsPager();
     if (!pager.hasMore || pager.loading) return;
-    const remaining = dom.left.list.scrollHeight - dom.left.list.scrollTop - dom.left.list.clientHeight;
+    const remaining = dom.left.scroll.scrollHeight - dom.left.scroll.scrollTop - dom.left.scroll.clientHeight;
     if (remaining > CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX) return;
     loadClientsPage({ reset: false, ensureSelection: false }).catch(console.error);
   }
@@ -18037,8 +18361,8 @@
     if (state.clientsViewportPrefillDone) return;
     const pager = ensureClientsPager();
     if (!pager.hasMore || pager.loading) return;
-    const isScrollable = Number(dom.left.list.scrollHeight || 0)
-      > Number(dom.left.list.clientHeight || 0) + CHAT_CLIENTS_VIEWPORT_TOLERANCE_PX;
+    const isScrollable = Number(dom.left.scroll.scrollHeight || 0)
+      > Number(dom.left.scroll.clientHeight || 0) + CHAT_CLIENTS_VIEWPORT_TOLERANCE_PX;
     if (isScrollable) {
       state.clientsViewportPrefillDone = true;
       return;
@@ -18540,9 +18864,9 @@
         scrollMessagesToBottom({ behavior: "smooth-fast", deferIfTouchGesture: false });
       });
     }
-    if (dom.left.list && dom.left.list.dataset.scrollPersistBound !== "1") {
-      dom.left.list.dataset.scrollPersistBound = "1";
-      dom.left.list.addEventListener("scroll", () => {
+    if (dom.left.scroll && dom.left.scroll.dataset.scrollPersistBound !== "1") {
+      dom.left.scroll.dataset.scrollPersistBound = "1";
+      dom.left.scroll.addEventListener("scroll", () => {
         closeAllClientSwipeRows(null, { immediate: true });
         saveClientsListScrollPosition();
         maybeLoadMoreClientsByScroll();

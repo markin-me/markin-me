@@ -8,6 +8,22 @@
   let bindingsRequest = null;
   const pendingLinks = new Map();
   const profileMenu = document.getElementById('userMenuDropdown');
+  const desktopProfileMedia = matchMedia('(min-width: 769px)');
+  const syncDesktopProfile = () => {
+    profileMenu.classList.toggle('admin-profile-desktop', desktopProfileMedia.matches);
+    const leftColumn = document.querySelector('.app-grid > .page-col-left');
+    if (desktopProfileMedia.matches && leftColumn) {
+      profileMenu.style.setProperty('--admin-profile-left', `${leftColumn.getBoundingClientRect().left}px`);
+    }
+  };
+  syncDesktopProfile();
+  desktopProfileMedia.addEventListener('change', syncDesktopProfile);
+  window.addEventListener('resize', syncDesktopProfile, { passive: true });
+  if (typeof ResizeObserver === 'function') {
+    const profilePositionObserver = new ResizeObserver(syncDesktopProfile);
+    const sidebar = document.getElementById('app-sidebar');
+    if (sidebar) profilePositionObserver.observe(sidebar);
+  }
   const rootProfileNodes = Array.from(profileMenu.childNodes);
   let profileOpenVersion = 0;
   const photo = profileMenu.querySelector('.user-menu-avatar');
@@ -30,6 +46,14 @@
   editProfile.className = 'btn btn-icon admin-profile-edit-trigger';
   editProfile.textContent = 'Изм.';
   document.querySelector('body > header .header-content').append(editProfile);
+  const syncProfileEditPlacement = () => {
+    const parent = desktopProfileMedia.matches
+      ? photo.closest('.user-menu-header')
+      : document.querySelector('body > header .header-content');
+    parent.append(editProfile);
+  };
+  syncProfileEditPlacement();
+  desktopProfileMedia.addEventListener('change', syncProfileEditPlacement);
   let photoBusy = false;
   document.querySelector('#userMenuLogout > span').textContent = '\u0412\u044b\u0439\u0442\u0438';
   const phoneLabel = profileMenu.querySelector('#userMenuPhone');
@@ -94,6 +118,7 @@
   }
 
   function resetPhotoEditor() {
+    editProfile.textContent = 'Изм.';
     profileMenu.classList.remove('is-profile-editing');
     photo.closest('.user-menu-header').classList.remove('is-photo-expanded');
     photo.setAttribute('role', 'button');
@@ -103,15 +128,20 @@
   }
   editProfile.addEventListener('click', event => {
     event.stopPropagation();
+    if (!mobileProfile() && profileMenu.classList.contains('is-profile-editing')) {
+      resetPhotoEditor();
+      return;
+    }
     openProfileSection('Изменить профиль', resetPhotoEditor);
     profileMenu.classList.add('is-profile-editing');
+    if (!mobileProfile()) editProfile.textContent = 'Готово';
     photo.setAttribute('role', 'button');
     photo.tabIndex = 0;
     photo.setAttribute('aria-label', 'Изменить фотографию профиля');
     photo.focus();
   });
   function activatePhoto() {
-    if (!mobileProfile() || photoBusy) return;
+    if ((!mobileProfile() && !desktopProfileMedia.matches) || photoBusy) return;
     if (profileMenu.classList.contains('is-profile-editing')) { photoInput.click(); return; }
     if (photo.querySelector('img').classList.contains('hidden')) { editProfile.click(); return; }
     const header = photo.closest('.user-menu-header');
@@ -154,6 +184,7 @@
     try {
       const result = await api('/api/auth/me/photo', options);
       await window.updateAdminProfilePhoto(result.photo_revision);
+      if (version === profileOpenVersion && !mobileProfile()) resetPhotoEditor();
       if (version === profileOpenVersion && mobileProfile() && profileMenu.classList.contains('is-profile-editing')) window.__adminMobilePages.back();
     } catch (error) {
       await window.AppModal.alert(error.code === 'INVALID_EMPLOYEE_PHOTO'
@@ -236,6 +267,11 @@
 
   document.getElementById('shopProfileBtn')?.addEventListener('click', () => {
     profileOpenVersion++;
+    if (desktopProfileMedia.matches) {
+      syncDesktopProfile();
+      resetPhotoEditor();
+      void loadProfilePhone();
+    }
     if (profileMenu.firstChild === rootProfileNodes[0]) return;
     clearInterval(pollTimer);pollTimer = null;
     profileMenu.replaceChildren(...rootProfileNodes);

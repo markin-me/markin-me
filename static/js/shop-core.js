@@ -1342,6 +1342,7 @@
   function getCartBonusAccountLevel() {
     const config = state.homeBonusConfig && typeof state.homeBonusConfig === "object" ? state.homeBonusConfig : null;
     const account = config?.account && typeof config.account === "object" ? config.account : null;
+    if(account?.is_guest && account.restricted_level)return account.restricted_level;
     if (!account?.is_guest && (!account?.joined_at || !(Number(account?.id || 0) > 0))) return null;
     const levelId = Number(account?.level_id || 0);
     const levels = Array.isArray(config?.levels) ? config.levels : [];
@@ -1420,6 +1421,8 @@
     const level = getCartBonusAccountLevel();
     if (!level) return buildCartBonusJoinSection();
     const balance = Math.max(0, Number(state.homeBonusConfig?.account?.balance || 0));
+    const restricted=state.homeBonusConfig?.account?.is_guest===true;
+    const maskedAmount='<span class="shop-private-value">••••</span> '+getShopBonusCoinIconHtml();
     const canRedeem = balance > 0 && state.homeBonusConfig?.account?.can_redeem !== false;
     const allowRedeemAndAccrue = Number(state.homeBonusConfig?.settings?.allow_redeem_and_accrue || 0) === 1;
     const redeemLabel = allowRedeemAndAccrue ? "Списать и начислить" : "Списать";
@@ -1434,22 +1437,22 @@
         <div class="shop-cart-bonus-redeem-head">
           <div class="shop-bonus-level-balance-main">
             <div class="shop-bonus-level-balance-label">${escapeHtml(coinName)}</div>
-            <div class="shop-bonus-level-balance-value">${formatShopBonusMoney(balance)}</div>
+            <div class="shop-bonus-level-balance-value">${restricted ? maskedAmount : formatShopBonusMoney(balance)}</div>
           </div>
           <div class="shop-cart-bonus-redeem-available">
             <div class="shop-cart-bonus-redeem-available-label">Можно списать</div>
-            <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${formatShopBonusMoney(0)}</div>
+            <div class="shop-cart-bonus-redeem-available-value" data-cart-bonus-redeem-available>${restricted ? maskedAmount : formatShopBonusMoney(0)}</div>
           </div>
         </div>
         <div class="shop-cart-bonus-redeem-actions">
           ${state.homeBonusConfig?.account?.is_guest?`<div class="shop-cart-bonus-join-text">${escapeHtml(state.homeBonusConfig.account.notice)}</div>`:''}
           <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--accrual${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? "" : " is-active"}${emptyCart ? " is-disabled" : ""}" type="button" data-cart-bonus-accrual-button ${emptyCart ? "disabled" : ""}>
             <span class="shop-cart-bonus-action-pill__label">Начислить</span>
-            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>+${formatShopBonusMoney(0)}</span>`}
+            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-accrual-amount>${restricted ? maskedAmount : '+'+formatShopBonusMoney(0)}</span>`}
           </button>
           <button class="shop-cart-bonus-action-pill shop-cart-bonus-action-pill--redeem${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? " is-active" : ""}${canRedeem && !emptyCart ? "" : " is-disabled"}" type="button" data-cart-bonus-redeem-button ${canRedeem && !emptyCart ? "" : "disabled"}>
             <span class="shop-cart-bonus-action-pill__label" data-cart-bonus-redeem-label>${escapeHtml(redeemLabel)}</span>
-            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>-${formatShopBonusMoney(0)}</span>`}
+            ${emptyCart ? "" : `<span class="shop-cart-bonus-action-pill__amount" data-cart-bonus-redeem-button-amount>${restricted ? maskedAmount : '-'+formatShopBonusMoney(0)}</span>`}
           </button>
           <input class="shop-cart-bonus-redeem-input" type="checkbox" data-cart-bonus-redeem-toggle ${!emptyCart && state.cartBonusRedeemEnabled && canRedeem ? "checked" : ""} ${canRedeem && !emptyCart ? "" : "disabled"} />
         </div>
@@ -1578,7 +1581,7 @@
     const baseColor = normalizeShopHexColor(level?.base_color, "#1f8d2e");
     const contentColor = normalizeShopHexColor(level?.content_color, "#ffffff");
     const titleColor = normalizeShopHexColor(level?.title_color, "#1f2937");
-    const cashbackValue = normalizeShopCardPercent(level?.cashback_percent, 1);
+    const cashbackValue = level?.privacy_restricted ? '••' : normalizeShopCardPercent(level?.cashback_percent, 1);
     const favoriteCategoryBonusText = formatShopBonusFavoriteCategoriesRange(level);
     const favoriteCategoryLimit = Math.max(0, Math.floor(Number(level?.favorite_categories_limit || 0)));
     const favoriteCategoryPreviewHtml = guestCard?'':buildBonusLevelPreviewFavoriteCategoriesHtml(level, contentColor, favoriteCategoryLimit);
@@ -1604,12 +1607,12 @@
       : `${logoHtml}<span style="font-weight:600;margin-right:4px;">${escapeHtml(programName)}</span><span style="opacity:0.8;">${escapeHtml(levelTitle)}</span>`;
 
     return `
-      <div class="bonus-level-preview-card" style="background:${escapeHtml(baseColor)};">
+      <div class="bonus-level-preview-card${level?.privacy_restricted ? ' is-private' : ''}" style="background:${escapeHtml(baseColor)};">
         <div class="bonus-level-preview-main" style="background:${escapeHtml(mainColor)};color:${escapeHtml(contentColor)};">
           <div class="bonus-level-preview-title${stackedTitle ? " shop-home-bonus-card__title" : ""}" style="${titleStyle}">${titleHtml}</div>
           <div class="bonus-level-preview-bonus-label" style="color:${escapeHtml(contentColor)};">${escapeHtml(coinName)}${guestCard && state.homeBonusConfig?.account?.notice ? ` · <span class="shop-guest-bonus-balance">${escapeHtml(state.homeBonusConfig.account.notice)}</span>` : ""}</div>
           ${guestCard ? '<div class="shop-guest-bonus-balance-row">' : ""}
-          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">${formatShopBonusMoney(getBonusLevelPreviewBalance(level))}</div>
+          <div class="bonus-level-preview-bonus-value" style="color:${escapeHtml(contentColor)};">${level?.privacy_restricted ? '••••' : formatShopBonusMoney(getBonusLevelPreviewBalance(level))}</div>
           ${guestCard ? '<button class="shop-home-bonus-card__action" type="button">Как списать?</button></div>' : ""}
           ${showQr ? `<div class="bonus-level-preview-qr" style="${qrStyle}"><span>QR</span></div>` : ""}
         </div>
@@ -2377,16 +2380,16 @@
       ? rawProgressPercent
       : 100;
     const customer = getCustomerCache() || {};
-    const customerPhoto = String(customer?.photo || "").trim();
-    const customerName = String(customer?.name || customer?.full_name || customer?.phone || "Профиль").trim() || "Профиль";
+    const customerPhoto = String((customer?.is_guest ? customer.restricted_photo : customer?.photo) || "").trim();
+    const customerName = customer?.is_guest ? '••••••' : String(customer?.name || customer?.full_name || customer?.phone || "Профиль").trim() || "Профиль";
     return `
       <button class="shop-bonus-level-progress-card" type="button" data-open-bonus-cards-current>
         <div class="shop-bonus-level-progress-avatar" aria-hidden="true">
           ${customerPhoto ? `<img src="${escapeHtml(customerPhoto)}" alt="" loading="lazy" />` : '<i class="fas fa-user"></i>'}
         </div>
         <div class="shop-bonus-level-progress-main">
-          <div class="shop-bonus-level-progress-name">${escapeHtml(customerName)} • <span style="font-weight:400;opacity:0.8;">${escapeHtml(level?.title || "Уровень")}</span></div>
-          <div class="shop-bonus-level-progress-track" aria-label="Прогресс до следующего уровня">
+          <div class="shop-bonus-level-progress-name${customer?.is_guest ? ' shop-private-value' : ''}">${escapeHtml(customerName)} • <span style="font-weight:400;opacity:0.8;">${escapeHtml(customer?.is_guest ? '••••' : level?.title || "Уровень")}</span></div>
+          <div class="shop-bonus-level-progress-track${customer?.is_guest ? ' shop-private-value' : ''}" aria-label="Прогресс до следующего уровня">
             <div class="shop-bonus-level-progress-fill" style="width:${escapeHtml(String(progressPercent))}%;"></div>
           </div>
         </div>
@@ -4733,8 +4736,34 @@
       window.dispatchEvent(new CustomEvent("shop:customer-profile-changed", { detail: detail }));
     } catch {}
   }
+  function syncHeaderProfilePhoto(customer) {
+    const photoUrl = str((customer?.is_guest ? customer.restricted_photo : customer?.photo) || "").trim();
+    const image = document.getElementById("shopHeaderProfileImg");
+    const fallback = document.querySelector("#shopProfileBtn .shop-header-profile-fallback");
+    const navImage = document.getElementById("shopNavProfileImg");
+    const navFallback = document.querySelector("#shopNavProfile .shop-nav-profile-fallback");
+    const pairs = [[image, fallback], [navImage, navFallback]];
+    pairs.forEach(([targetImage, targetFallback]) => {
+      if (!targetImage || !targetFallback) return;
+      if (photoUrl) {
+        targetImage.src = photoUrl;
+        targetImage.classList.remove("hidden");
+        targetFallback.classList.add("hidden");
+        return;
+      }
+      targetImage.src = "";
+      targetImage.classList.add("hidden");
+      targetFallback.classList.remove("hidden");
+    });
+  }
+
   function setCustomerToken(t) {
     try {
+      if (getCustomerToken() !== String(t || "")) {
+        localStorage.removeItem(CUSTOMER_CACHE_KEY);
+        syncHeaderProfilePhoto(null);
+        for (const key of Object.keys(sessionStorage)) if (key.startsWith(`shop-auth-status:${tenantId}:`)) sessionStorage.removeItem(key);
+      }
       if (!t) localStorage.removeItem(CUSTOMER_TOKEN_KEY);
       else localStorage.setItem(CUSTOMER_TOKEN_KEY, String(t));
     } catch {}
@@ -4745,12 +4774,16 @@
       if (!c) localStorage.removeItem(CUSTOMER_CACHE_KEY);
       else localStorage.setItem(CUSTOMER_CACHE_KEY, JSON.stringify(c));
     } catch {}
+    syncHeaderProfilePhoto(c);
     dispatchCustomerProfileChanged("cache");
   }
   function getCustomerCache() {
     try {
       const raw = localStorage.getItem(CUSTOMER_CACHE_KEY);
-      return raw ? JSON.parse(raw) : null;
+      const cached = raw ? JSON.parse(raw) : null;
+      const token = getCustomerToken();
+      if (!token || (token.startsWith("g_") && !cached?.is_guest)) return null;
+      return cached?.is_guest ? { ...cached, name: 'Гость', photo: null } : cached;
     } catch { return null; }
   }
   function normalizeReferralCode(value) {
@@ -4805,15 +4838,15 @@
     state._addressListBackMode = null;
     state._addressPendingAddress = null;
     state._addressPendingPickupStoreId = null;
+    try { window._activeOrders = []; } catch {}
+    try { window._savedActiveOrdersForBack = []; } catch {}
+    try { window._activeOrdersSourceScreen = ""; } catch {}
+    renderHomeBonusCard();
+    renderHomeActiveOrdersBlock();
     if (fullReset) {
       clearAddressDraft();
-      try { window._activeOrders = []; } catch {}
-      try { window._savedActiveOrdersForBack = []; } catch {}
-      try { window._activeOrdersSourceScreen = ""; } catch {}
       setSelectedAddress(null);
-      renderHomeActiveOrdersBlock();
       renderCatalogPromoBlock();
-      renderHomeBonusCard();
       void loadHomeBonusConfig({ force: true, skipPendingModal: true });
       if (typeof window.updateActiveOrdersBadge === "function") {
         window.updateActiveOrdersBadge({ force: true }).catch(() => {});
@@ -10530,6 +10563,7 @@
   function getHomeBonusFirstLevel(config) {
     const data = config && typeof config === "object" ? config : null;
     if (!data?.settings?.bonus_program_enabled) return null;
+    if(data.account?.is_guest && data.account.restricted_level)return data.account.restricted_level;
     const levels = Array.isArray(data.levels) ? data.levels : [];
     const accountLevelId = Number(data.account?.level_id || 0);
     if (accountLevelId > 0) {
@@ -10547,6 +10581,7 @@
 
   function buildHomeGuestBonusCardHtml(level) {
     if (!level) return "";
+    if(level.privacy_restricted)return buildBonusLevelPreviewCardHtml(level,{homeCard:true,showQr:false});
     if (getCustomerToken().startsWith("g_") && state.homeBonusConfig?.account?.is_guest && state.homeBonusConfig.account.is_joined === true) {
       return buildBonusLevelPreviewCardHtml(level, { homeCard: true, showQr: false, guestCard: true })
         .replace('class="bonus-level-preview-card"', 'class="bonus-level-preview-card shop-home-bonus-card__preview"');
@@ -12138,11 +12173,13 @@ function showProductView() {
         addresses: Array.isArray(state.addresses) ? state.addresses : [],
       };
     }
-    if (meBootstrapPromise) return meBootstrapPromise;
+    if (meBootstrapPromise && meBootstrapToken === token) return meBootstrapPromise;
 
-    meBootstrapPromise = (async () => {
+    meBootstrapToken = token;
+    const request = (async () => {
       try {
         const json = await apiJson("/api/public/me/bootstrap");
+        if (getCustomerToken() !== token || meBootstrapPromise !== request) return null;
         const payload = json?.data || {};
         const customer = payload?.customer || null;
         const addresses = Array.isArray(payload?.addresses) ? payload.addresses : [];
@@ -12152,6 +12189,7 @@ function showProductView() {
         meBootstrapToken = token;
         return { customer, addresses };
       } catch (e) {
+        if (getCustomerToken() !== token || meBootstrapPromise !== request) return null;
         if (String(e?.message || "").includes("UNAUTHORIZED")) {
           clearCustomer();
           state.addresses = [];
@@ -12159,11 +12197,12 @@ function showProductView() {
         }
         throw e;
       } finally {
-        meBootstrapPromise = null;
+        if (meBootstrapPromise === request) meBootstrapPromise = null;
       }
     })();
 
-    return meBootstrapPromise;
+    meBootstrapPromise = request;
+    return request;
   }
   window.loadShopMeBootstrap = loadMeBootstrap;
 

@@ -6,6 +6,7 @@ const multer = require("multer");
 const sharp = require("sharp");
 const webPush = require("web-push");
 const db = require("../db");
+const guestSessions = require('./helpers/customerChatSessions');
 const { isUserSessionActive } = require('./middleware/auth');
 
 const MAX_IMAGE_DATA_URL_LENGTH = 50 * 1024 * 1024;
@@ -495,6 +496,16 @@ async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, sub
   const endpoint = String(subscription.endpoint || "");
   const endpointHash = hashPushEndpoint(endpoint);
   const normalizedUserAgent = String(userAgent || "").slice(0, 255);
+  let previousPreferences = null;
+  if (actor === "in") {
+    const [[previous]] = await queryable.query(
+      `SELECT push_chat_enabled,push_important_enabled,push_orders_enabled,push_order_status_ids_json
+       FROM chat_push_subscriptions WHERE tenant_id=? AND store_id=? AND client_id=? AND actor='in'
+       ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`,
+      [Number(tenantId), Number(storeId), Number(clientId)]
+    );
+    previousPreferences = previous || null;
+  }
 
   // For customer chat subscriptions keep one active endpoint per browser profile.
   // This prevents duplicate notifications when stale endpoints remain valid.
@@ -517,8 +528,9 @@ async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, sub
 
   await queryable.query(
     `INSERT INTO chat_push_subscriptions
-      (tenant_id, store_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (tenant_id, store_id, client_id, actor, endpoint_hash, endpoint, p256dh, auth, user_agent,
+       push_chat_enabled, push_important_enabled, push_orders_enabled, push_order_status_ids_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
       store_id = VALUES(store_id),
       client_id = VALUES(client_id),
@@ -538,6 +550,10 @@ async function upsertPushSubscription(tenantId, storeId, clientId, actorKey, sub
       String(subscription.p256dh || ""),
       String(subscription.auth || ""),
       normalizedUserAgent,
+      previousPreferences?.push_chat_enabled ?? 1,
+      previousPreferences?.push_important_enabled ?? 1,
+      previousPreferences?.push_orders_enabled ?? 1,
+      previousPreferences?.push_order_status_ids_json ?? null,
     ]
   );
 }
@@ -1333,10 +1349,14 @@ function visitorHash(token) {
   return crypto.createHash("sha256").update(token).digest();
 }
 
-async function readVisitor(conn, tenantId, token, lock = false) {
+async function readVisitor(conn, tenantId, token, lock = false, allowRevokedGuest = false) {
   if (!token) return null;
-  const [[visitor]] = await conn.query(`SELECT client_id,claimed_at,active_session_id FROM chat_visitor_identities
-    WHERE tenant_id=? AND token_hash=? AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP(6))${lock ? " FOR UPDATE" : ""}`,
+  const [[visitor]] = await conn.query(`SELECT * FROM chat_visitor_identities
+    WHERE tenant_id=? AND token_hash=? AND session_deleted_at IS NULL AND session_completed_at IS NULL
+      AND (expires_at IS NULL OR expires_at>UTC_TIMESTAMP(6))
+      AND (${allowRevokedGuest?'1=1':'0=1'} OR claimed_at IS NOT NULL OR guest_session_hash IS NULL OR EXISTS (SELECT 1 FROM cust_guest_sessions g
+        WHERE g.tenant_id=chat_visitor_identities.tenant_id AND g.token_hash=chat_visitor_identities.guest_session_hash
+          AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>UTC_TIMESTAMP(6))))${lock ? " FOR UPDATE" : ""}`,
   [tenantId,visitorHash(token)]);
   return visitor || null;
 }
@@ -1348,11 +1368,24 @@ async function reserveVisitor(tenantId) {
     const clientId=crypto.randomInt(100_000_000_000_000,200_000_000_000_000);
     try{
       await db.query(`INSERT INTO chat_visitor_identities (tenant_id,token_hash,client_id,expires_at,is_client_chat)
-        VALUES (?,?,?,NULL,0)`,[tenantId,visitorHash(token),clientId]);
+        VALUES (?,?,?,DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 400 DAY),0)`,[tenantId,visitorHash(token),clientId]);
       return {token,clientId:String(clientId)};
     }catch(error){if(error.code!=="ER_DUP_ENTRY")throw error;}
   }
   throw new Error("CHAT_VISITOR_ID_COLLISION");
+}
+
+async function expireVisitorConnection(conn,tenantId,clientId){
+  return guestSessions.complete(conn,tenantId,clientId);
+}
+
+async function bindGuestChatForAuthorization(conn,tenantId,guestSessionHash,req){
+  const visitor=await readVisitor(conn,tenantId,visitorCredential(req),true);
+  if(!visitor || visitor.claimed_at)return;
+  if(visitor.guest_session_hash && !Buffer.from(visitor.guest_session_hash).equals(Buffer.from(guestSessionHash)))return;
+  await conn.query(`UPDATE chat_visitor_identities SET guest_session_hash=?,is_client_chat=1
+    WHERE tenant_id=? AND client_id=? AND claimed_at IS NULL`,[guestSessionHash,tenantId,visitor.client_id]);
+  if(visitor.session_started_at)await guestSessions.start(conn,tenantId,visitor.client_id);
 }
 
 async function customerChatOwner(req, conn=db, lock=false) {
@@ -1367,11 +1400,29 @@ async function customerChatOwner(req, conn=db, lock=false) {
 }
 
 async function lockCustomerChatOwner(req, conn) {
-  if(!req.customerChatRequest)return;
+  if(!req.customerChatRequest){
+    const source=normalizeClientId(req.params?.clientId);
+    if(!source)return null;
+    const [[visitor]]=await conn.query('SELECT claimed_customer_id,claimed_at FROM chat_visitor_identities WHERE tenant_id=? AND client_id=? FOR UPDATE',[getTenantId(req),source]);
+    if(visitor?.claimed_at && visitor.claimed_customer_id){req.chatMutationSourceId=source;return String(visitor.claimed_customer_id);}
+    if(!req.path.endsWith('/read')){
+      await guestSessions.assertWritable(conn,getTenantId(req),source);
+    }
+    return source;
+  }
   const owner=await customerChatOwner(req,conn,true);
   if(!owner || owner.id!==req.chatOwner.id){
     throw Object.assign(new Error("CHAT_IDENTITY_CHANGED"),{status:409});
   }
+  if(owner.isVisitor)await guestSessions.assertWritable(conn,getTenantId(req),owner.id);
+  return owner.id;
+}
+
+async function canonicalMutationMessageId(req,conn,tenantId,clientId,messageId){
+  if(!req.chatMutationSourceId)return messageId;
+  const [[message]]=await conn.query(`SELECT message_id FROM chat_messages WHERE tenant_id=? AND client_id=?
+    AND source_client_id=? AND source_message_id=? LIMIT 1`,[tenantId,clientId,req.chatMutationSourceId,messageId]);
+  return message?.message_id || messageId;
 }
 
 async function requireCurrentChatOwner(req,res) {
@@ -1383,7 +1434,7 @@ async function requireCurrentChatOwner(req,res) {
 }
 
 async function resolveStrongChatSession(tenantId, token, conn=db, lock=false) {
-  const [[session]]=await conn.query(`SELECT s.id,s.customer_id FROM cust_customer_sessions s
+  const [[session]]=await conn.query(`SELECT s.id,s.customer_id,c.phone FROM cust_customer_sessions s
     JOIN cust_customers c ON c.tenant_id=s.tenant_id AND c.id=s.customer_id AND c.is_active=1
     WHERE s.tenant_id=? AND s.token=? AND s.auth_strength='strong' AND s.is_active=1 AND s.revoked_at IS NULL
       AND (s.expires_at IS NULL OR s.expires_at>UTC_TIMESTAMP())
@@ -1452,12 +1503,9 @@ const CHAT_RETENTION_CANDIDATES = `
   FROM chat_threads t
   JOIN ten_tenants tenant ON tenant.id=t.tenant_id
   LEFT JOIN chat_visitor_identities v ON v.tenant_id=t.tenant_id AND v.client_id=t.client_id
-  LEFT JOIN cust_customers c ON c.tenant_id=t.tenant_id AND c.id=t.client_id
-  WHERE t.tenant_id=? AND (c.id IS NOT NULL OR v.is_client_chat IS NOT NULL)
-    AND CASE WHEN c.id IS NOT NULL OR v.is_client_chat=1
-      THEN tenant.chat_thread_ttl_days>0 AND t.updated_at<NOW(3)-INTERVAL tenant.chat_thread_ttl_days DAY
-      ELSE tenant.chat_guest_thread_ttl_days>0 AND t.updated_at<NOW(3)-INTERVAL tenant.chat_guest_thread_ttl_days DAY
-    END`;
+  WHERE t.tenant_id=? AND v.claimed_at IS NULL AND v.session_deleted_at IS NULL
+    AND v.session_completed_at IS NOT NULL AND tenant.chat_guest_thread_ttl_days>0
+    AND v.session_completed_at<=UTC_TIMESTAMP(6)-INTERVAL tenant.chat_guest_thread_ttl_days DAY`;
 
 function chatAttachmentFile(url) {
   const match = String(url || "").match(/^\/(static\/)?uploads\/chat\/([1-9][0-9]*\/[1-9][0-9]*\/\d{4}\/(?:0[1-9]|1[0-2])\/[0-9]+_[a-f0-9]{10}\.(?:webp|png|gif|avif|jpe?g))$/);
@@ -1499,35 +1547,27 @@ async function cleanExpiredChatFiles(tenantId) {
   }
 }
 
-async function cleanupExpiredChatThreads(tenantId) {
+async function deleteCompletedGuestThread(tenantId,clientId,automatic=false) {
   await ensureHiddenMessagesTable();
   await ensurePushSubscriptionsTable();
-  const [candidates] = await db.query(
-    `SELECT t.client_id ${CHAT_RETENTION_CANDIDATES} ORDER BY t.updated_at LIMIT ?`,
-    [tenantId, CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT]);
-  for (const {client_id: clientId} of candidates) {
     const conn = await db.getConnection();
     let deleted = false;
     try {
       await conn.beginTransaction();
-      // Same visitor-before-thread order as claiming and sending messages.
-      const [[policy]] = await conn.query("SELECT chat_thread_ttl_days,chat_guest_thread_ttl_days FROM ten_tenants WHERE id=? FOR UPDATE", [tenantId]);
-      const [[visitor]] = await conn.query("SELECT is_client_chat FROM chat_visitor_identities WHERE tenant_id=? AND client_id=? FOR UPDATE", [tenantId,clientId]);
-      const [[customer]] = await conn.query("SELECT id FROM cust_customers WHERE tenant_id=? AND id=?", [tenantId,clientId]);
-      const ttl = normalizeTenantThreadTtlDays(customer || Number(visitor?.is_client_chat) === 1
-        ? policy?.chat_thread_ttl_days : policy?.chat_guest_thread_ttl_days);
+      await guestSessions.assertDeletable(conn,tenantId,clientId,automatic);
       const [[live]] = await conn.query(
-        `SELECT client_id FROM chat_threads WHERE tenant_id=? AND client_id=?
-          AND ?>0 AND updated_at<NOW(3)-INTERVAL ? DAY FOR UPDATE`, [tenantId,clientId,ttl,ttl]);
-      if (live && (visitor?.is_client_chat != null || customer)) {
+        'SELECT client_id FROM chat_threads WHERE tenant_id=? AND client_id=? FOR UPDATE', [tenantId,clientId]);
+      if (live) {
         const [attachments] = await conn.query("SELECT attachment_json FROM chat_messages WHERE tenant_id=? AND client_id=? AND attachment_json IS NOT NULL", [tenantId,clientId]);
         const files = [...new Set(attachments.map(row => chatAttachmentFile(parseJsonObject(row.attachment_json)?.url)?.resource).filter(Boolean))].sort();
         for (const file of files) {
           await conn.query("INSERT IGNORE INTO chat_attachment_gc(tenant_id,path) VALUES (?,?)", [tenantId,file]);
         }
-        for (const table of ["chat_message_hidden", "chat_messages", "chat_push_subscriptions", "chat_threads", "chat_visitor_identities"]) {
+        for (const table of ["chat_message_hidden", "chat_messages", "chat_push_subscriptions", "chat_threads"]) {
           await conn.query(`DELETE FROM ${table} WHERE tenant_id=? AND client_id=?`, [tenantId, clientId]);
         }
+        await conn.query(`UPDATE chat_visitor_identities SET session_deleted_at=UTC_TIMESTAMP(6),active_session_id=NULL
+          WHERE tenant_id=? AND client_id=?`,[tenantId,clientId]);
         deleted = true;
       }
       await conn.commit();
@@ -1539,9 +1579,23 @@ async function cleanupExpiredChatThreads(tenantId) {
     }
     if (deleted) {
       clearThreadTypingState(tenantId, clientId);
-      notifyThreadChange(tenantId, clientId, new Date().toISOString());
+      const stamp=new Date().toISOString();
+      notifyThreadChange(tenantId, clientId, stamp,{skipTenantChange:true});
+      notifyTenantChange(tenantId,stamp,{messageChanged:true,removedClientId:Number(clientId)});
       scheduleTenantUnreadRefresh(tenantId);
     }
+  return deleted;
+}
+
+async function cleanupExpiredChatThreads(tenantId) {
+  await ensurePushSubscriptionsTable();
+  const completed=await guestSessions.refreshExpired(db,tenantId);
+  for(const id of completed)notifyThreadChange(tenantId,id,new Date().toISOString(),{messageChanged:true});
+  const [candidates]=await db.query(`SELECT t.client_id ${CHAT_RETENTION_CANDIDATES}
+    ORDER BY v.session_completed_at LIMIT ?`,[tenantId,CHAT_GUEST_THREAD_CLEANUP_BATCH_LIMIT]);
+  for(const {client_id:id} of candidates){
+    try{await deleteCompletedGuestThread(tenantId,id,true);}
+    catch(error){if(error.status!==409)throw error;}
   }
   await cleanExpiredChatFiles(tenantId);
 }
@@ -1557,6 +1611,24 @@ function scheduleExpiredGuestThreadsCleanup(tenantId) {
   void cleanupExpiredChatThreads(tenantId)
     .catch(error => console.error("chat-temp retention error:", error))
     .finally(() => { bucket.inFlight = false; });
+}
+
+let guestRetentionTimer=null;
+function startGuestRetentionTimer(){
+  if(guestRetentionTimer)return;
+  let running=false;
+  guestRetentionTimer=setInterval(async()=>{
+    if(running)return;
+    running=true;
+    try{
+      const [tenants]=await db.query(`SELECT DISTINCT tenant_id FROM chat_visitor_identities
+        WHERE claimed_at IS NULL AND session_deleted_at IS NULL AND session_started_at IS NOT NULL
+        UNION SELECT DISTINCT tenant_id FROM chat_attachment_gc`);
+      for(const tenant of tenants)scheduleExpiredGuestThreadsCleanup(tenant.tenant_id);
+    }catch(error){console.error('chat-temp scheduled retention error:',error.code || error.name);}
+    finally{running=false;}
+  },CHAT_GUEST_THREAD_CLEANUP_MIN_INTERVAL_MS);
+  guestRetentionTimer.unref();
 }
 
 function parseJsonObject(value) {
@@ -1740,6 +1812,7 @@ function sanitizeMessage(raw) {
   if (!raw || typeof raw !== "object") return null;
   const id = String(raw.id || "").trim().slice(0, 120);
   if (!id) return null;
+  if (id.startsWith('history:')) return null; // Administrative projections are never writable messages.
 
   const direction = normalizeMessageDirection(raw.direction, id);
   const deliveryStatusRaw = String(raw.deliveryStatus || "").toLowerCase();
@@ -2036,7 +2109,7 @@ function encodeSummariesCursor(row) {
   const updatedAt = toIsoOrEmpty(row?.updated_at);
   const clientId = normalizeClientId(row?.client_id);
   if (!updatedAt || !clientId) return "";
-  return Buffer.from(JSON.stringify({ updatedAt, clientId }), "utf8").toString("base64url");
+  return Buffer.from(JSON.stringify({ updatedAt, clientId, ...(row?.has_messages != null ? {hasMessages:Number(row.has_messages)} : {}) }), "utf8").toString("base64url");
 }
 
 function decodeSummariesCursor(value) {
@@ -2049,7 +2122,8 @@ function decodeSummariesCursor(value) {
     const updatedAtDate = new Date(updatedAt);
     const clientId = normalizeClientId(parsed?.clientId);
     if (!updatedAt || Number.isNaN(updatedAtDate.getTime()) || !clientId) throw new Error("invalid");
-    return { updatedAt: updatedAtDate, clientId };
+    if(parsed.hasMessages!==undefined && ![0,1].includes(parsed.hasMessages))throw new Error("invalid");
+    return { updatedAt: updatedAtDate, clientId, ...(parsed.hasMessages!==undefined ? {hasMessages:parsed.hasMessages} : {}) };
   } catch {
     throw Object.assign(new Error("INVALID_CURSOR"), { statusCode: 400 });
   }
@@ -2757,22 +2831,16 @@ async function persistThreadTypingState(tenantId, clientId, actorKey, typingStat
 
   await db.query(
     `
-      INSERT INTO chat_threads
-        (tenant_id, client_id, updated_at, ${colPrefix}_active, ${colPrefix}_text, ${colPrefix}_updated_at, ${colPrefix}_expires_at)
-      VALUES (?, ?, NOW(3), ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        ${colPrefix}_active = VALUES(${colPrefix}_active),
-        ${colPrefix}_text = VALUES(${colPrefix}_text),
-        ${colPrefix}_updated_at = VALUES(${colPrefix}_updated_at),
-        ${colPrefix}_expires_at = VALUES(${colPrefix}_expires_at)
+      UPDATE chat_threads SET ${colPrefix}_active=?,${colPrefix}_text=?,${colPrefix}_updated_at=?,${colPrefix}_expires_at=?
+      WHERE tenant_id=? AND client_id=?
     `,
     [
-      Number(tenantId),
-      Number(safeClientId),
       active ? 1 : 0,
       text,
       updatedAt,
       expiresAt,
+      Number(tenantId),
+      Number(safeClientId),
     ]
   );
 }
@@ -2940,6 +3008,12 @@ function mergeReactionsByActor(existingRows, nextMessages, actorKey) {
   });
 }
 
+function customerOrderCardReferences(req, message) {
+  if (!req.customerChatRequest || !message || typeof message !== 'object') return message;
+  // Persisted previews are historical snapshots, not current permission to read an order.
+  return {...message, orderCards: sanitizeOrderCards(message.orderCards).map(card => ({id:card.id}))};
+}
+
 function mapDbMessageRowToApi(row) {
   const messageId = String(row.message_id || "");
   const direction = normalizeMessageDirection(row.direction, messageId);
@@ -2993,6 +3067,7 @@ function mapSummaryRow(row, actorKey = "out") {
   return {
     client_id: Number(row.client_id),
     client_photo: String(row.client_photo || ""),
+    client_state: String(row.client_state || ""),
     updated_at: toIsoOrEmpty(row.updated_at),
     message_count: Number(row.message_count || 0),
     unread_count: Number(row.unread_count || 0),
@@ -3171,7 +3246,11 @@ async function readThreadMessagesPage(
     : 0;
   const safeActor = actorKey === "in" ? "in" : "out";
 
-  const whereBefore = safeBeforeId > 0 ? " AND id < ?" : "";
+  const [[anchor]]=safeBeforeId>0 ? await conn.query(
+    'SELECT created_at FROM chat_messages WHERE tenant_id=? AND client_id=? AND id=?',
+    [tenantId,clientId,safeBeforeId]) : [[]];
+  if(safeBeforeId>0 && !anchor)return {messages:[],hasMore:false,nextBeforeId:null,limit:safeLimit,beforeId:safeBeforeId};
+  const whereBefore = anchor ? " AND (created_at < ? OR (created_at = ? AND id < ?))" : "";
   const whereHidden = ` AND NOT EXISTS (
     SELECT 1
       FROM chat_message_hidden h
@@ -3181,7 +3260,7 @@ async function readThreadMessagesPage(
        AND h.actor = ?
   )`;
   const params = safeBeforeId > 0
-    ? [tenantId, clientId, safeActor, safeBeforeId, safeLimit + 1]
+    ? [tenantId, clientId, safeActor, anchor.created_at, anchor.created_at, safeBeforeId, safeLimit + 1]
     : [tenantId, clientId, safeActor, safeLimit + 1];
 
   const [rawRows] = await conn.query(
@@ -3190,7 +3269,7 @@ async function readThreadMessagesPage(
             delivery_status, delivered_at, read_at
        FROM chat_messages
       WHERE tenant_id = ? AND client_id = ?${whereHidden}${whereBefore}
-      ORDER BY id DESC
+      ORDER BY created_at DESC, id DESC
       LIMIT ?`,
     params
   );
@@ -3252,10 +3331,10 @@ async function readThreadMessagesAround(
                 reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
                 delivery_status, delivered_at, read_at
            FROM chat_messages
-          WHERE tenant_id = ? AND client_id = ? AND id < ?${hiddenClause}
-          ORDER BY id DESC
+          WHERE tenant_id = ? AND client_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))${hiddenClause}
+          ORDER BY created_at DESC, id DESC
           LIMIT ?`,
-        [tenantId, clientId, anchorRowId, safeActor, beforeLimit + 1]
+        [tenantId, clientId, anchorRow.created_at, anchorRow.created_at, anchorRowId, safeActor, beforeLimit + 1]
       )
     : [[]];
   const [afterRows] = afterLimit > 0
@@ -3264,10 +3343,10 @@ async function readThreadMessagesAround(
                 reaction_legacy, reaction_in, reaction_out, reply_to_json, attachment_json, order_cards_json,
                 delivery_status, delivered_at, read_at
            FROM chat_messages
-          WHERE tenant_id = ? AND client_id = ? AND id > ?${hiddenClause}
-          ORDER BY id ASC
+          WHERE tenant_id = ? AND client_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))${hiddenClause}
+          ORDER BY created_at ASC, id ASC
           LIMIT ?`,
-        [tenantId, clientId, anchorRowId, safeActor, afterLimit]
+        [tenantId, clientId, anchorRow.created_at, anchorRow.created_at, anchorRowId, safeActor, afterLimit]
       )
     : [[]];
   const rawBefore = Array.isArray(beforeRows) ? beforeRows : [];
@@ -3428,7 +3507,8 @@ async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
       tenant_id, client_id, message_id, direction, text, created_at, edited_at,
       is_read, is_pinned, reaction_legacy, reaction_in, reaction_out,
       reply_to_json, attachment_json, order_cards_json, delivery_status, delivered_at, read_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ,source_client_id,source_message_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       direction = VALUES(direction),
       text = VALUES(text),
@@ -3464,6 +3544,8 @@ async function upsertSingleThreadMessage(conn, tenantId, clientId, msg) {
       row.deliveryStatus,
       row.deliveredAt,
       row.readAt,
+      row.clientId,
+      row.messageId,
     ]
   );
 
@@ -3778,6 +3860,12 @@ async function mergeThreadIntoClient(conn, tenantId, fromClientId, toClientId) {
 async function mergeThreadIntoClientAndNotify(tenantId, fromClientId, toClientId) {
   const fromId = normalizeClientId(fromClientId);
   const toId = normalizeClientId(toClientId);
+  if(fromId && toId && fromId!==toId){
+    const [[guest]]=await db.query('SELECT 1 FROM chat_visitor_identities WHERE tenant_id=? AND client_id IN (?,?) LIMIT 1',[tenantId,fromId,toId]);
+    if(guest)throw Object.assign(new Error('CHAT_GUEST_MERGE_REQUIRES_AUTH'),{status:409});
+    const [accounts]=await db.query('SELECT id FROM cust_customers WHERE tenant_id=? AND id IN (?,?)',[tenantId,fromId,toId]);
+    if(accounts.length!==2)throw Object.assign(new Error('CHAT_GUEST_MERGE_REQUIRES_AUTH'),{status:409});
+  }
   if (!fromId || !toId || fromId === toId) {
     return {
       merged: false,
@@ -3831,39 +3919,63 @@ function notifyMergedThread(tenantId,fromId,toId,merged) {
   }
 }
 
-async function claimVisitorThread(tenantId, token, targetCustomerId, customerToken) {
-  if(!token)return null;
-  // Schema checks must not run on a second pool connection while the transaction is open.
+async function prepareVisitorThreadClaim() {
   await ensureHiddenMessagesTable();
   await ensurePushSubscriptionsTable();
-  const conn=await db.getConnection();
+}
+
+async function claimVisitorThread(tenantId, token, targetCustomerId, customerToken, transaction = null) {
+  if(!token)return null;
+  // Schema checks must not run on a second pool connection while the transaction is open.
+  if(!transaction)await prepareVisitorThreadClaim();
+  const conn=transaction?.conn || await db.getConnection();
   let fromId=null, updatedAt=null;
   try{
-    await conn.beginTransaction();
+    if(!transaction)await conn.beginTransaction();
     const verified=await resolveStrongChatSession(tenantId,customerToken,conn,true);
     if(String(verified?.customer_id)!==targetCustomerId)throw Object.assign(new Error("CHAT_IDENTITY_CHANGED"),{status:401});
-    const visitor=await readVisitor(conn,tenantId,token,true);
-    if(!visitor || visitor.claimed_at){await conn.commit();return null;}
+    const visitor=await readVisitor(conn,tenantId,token,true,true);
+    if(!visitor || visitor.claimed_at){
+      if(!transaction)await conn.commit();
+      return visitor?.claimed_at && String(visitor.claimed_customer_id)===targetCustomerId ? String(visitor.client_id) : null;
+    }
+    if(visitor.guest_session_hash || Number(visitor.is_client_chat)===1){
+      const currentProof=transaction?.guestSessionHash && visitor.guest_session_hash
+        && Buffer.from(transaction.guestSessionHash).equals(Buffer.from(visitor.guest_session_hash));
+      const [[proof]]=transaction ? [[currentProof]] : await conn.query(`SELECT public_id FROM auth_browser_requests WHERE tenant_id=?
+        AND account_type='customer' AND account_id=? AND result_session_id=? AND guest_session_hash=? LIMIT 1`,
+      [tenantId,targetCustomerId,verified.id,visitor.guest_session_hash]);
+      if(!proof){
+        if(!transaction)await conn.commit();return null;
+      }
+    }
     fromId=String(visitor.client_id);
     const [[from]]=await conn.query(
       'SELECT * FROM chat_threads WHERE tenant_id=? AND client_id=? FOR UPDATE',[tenantId,fromId]);
     if(from){
       const [[to]]=await conn.query(
         'SELECT * FROM chat_threads WHERE tenant_id=? AND client_id=? FOR UPDATE',[tenantId,targetCustomerId]);
-      updatedAt=new Date(Math.max(new Date(from.updated_at).getTime(), to ? new Date(to.updated_at).getTime() : 0));
+      updatedAt=new Date(Math.max(Date.now(),new Date(from.updated_at).getTime()+1, to ? new Date(to.updated_at).getTime()+1 : 0));
       const meta=mergeThreadMetaValues(sanitizeMetaFromDbRow(to),sanitizeMetaFromDbRow(from));
       await upsertThreadMeta(conn,tenantId,targetCustomerId,meta,updatedAt);
-      // Keep database message IDs, dates, attachments, order cards and read flags.
-      // For an existing logical message ID, the established conversation wins.
-      await conn.query(`UPDATE chat_messages src
-        LEFT JOIN chat_messages dst ON dst.tenant_id=src.tenant_id AND dst.client_id=? AND dst.message_id=src.message_id
-        SET src.client_id=? WHERE src.tenant_id=? AND src.client_id=? AND dst.id IS NULL`,
-      [targetCustomerId,targetCustomerId,tenantId,fromId]);
+      // Preserve original rows and provenance, including rare logical-ID collisions.
+      await conn.query(`UPDATE chat_messages SET source_client_id=COALESCE(source_client_id,client_id),
+        source_message_id=COALESCE(source_message_id,message_id) WHERE tenant_id=? AND client_id=?`,[tenantId,fromId]);
+      const [collisions]=await conn.query(`SELECT src.id,src.message_id FROM chat_messages src JOIN chat_messages dst
+        ON dst.tenant_id=src.tenant_id AND dst.client_id=? AND dst.message_id=src.message_id
+        WHERE src.tenant_id=? AND src.client_id=?`,[targetCustomerId,tenantId,fromId]);
+      for(const collision of collisions){
+        const renamed=`merged-${fromId}-${collision.id}`;
+        await conn.query('UPDATE chat_messages SET message_id=? WHERE tenant_id=? AND client_id=? AND id=?',[renamed,tenantId,fromId,collision.id]);
+        await conn.query('UPDATE chat_message_hidden SET message_id=? WHERE tenant_id=? AND client_id=? AND message_id=?',[renamed,tenantId,fromId,collision.message_id]);
+        await conn.query(`UPDATE chat_messages SET reply_to_json=JSON_SET(reply_to_json,'$.id',?)
+          WHERE tenant_id=? AND client_id=? AND JSON_UNQUOTE(JSON_EXTRACT(reply_to_json,'$.id'))=?`,[renamed,tenantId,fromId,collision.message_id]);
+      }
+      await conn.query('UPDATE chat_messages SET client_id=? WHERE tenant_id=? AND client_id=?',[targetCustomerId,tenantId,fromId]);
       await conn.query(`INSERT IGNORE INTO chat_message_hidden (tenant_id,client_id,message_id,actor)
         SELECT tenant_id,?,message_id,actor FROM chat_message_hidden WHERE tenant_id=? AND client_id=?`,
       [targetCustomerId,tenantId,fromId]);
       await conn.query('DELETE FROM chat_message_hidden WHERE tenant_id=? AND client_id=?',[tenantId,fromId]);
-      await conn.query('DELETE FROM chat_messages WHERE tenant_id=? AND client_id=?',[tenantId,fromId]);
       await conn.query('DELETE FROM chat_threads WHERE tenant_id=? AND client_id=?',[tenantId,fromId]);
     }
     await conn.query(`UPDATE chat_push_subscriptions SET customer_session_id=?
@@ -3871,10 +3983,29 @@ async function claimVisitorThread(tenantId, token, targetCustomerId, customerTok
     await reassignPushSubscriptionsForMergedThread(conn,tenantId,fromId,targetCustomerId);
     await conn.query(`UPDATE chat_visitor_identities SET claimed_at=UTC_TIMESTAMP(6),claimed_customer_id=?
       WHERE tenant_id=? AND token_hash=?`, [targetCustomerId,tenantId,visitorHash(token)]);
-    await conn.commit();
-  }catch(error){await conn.rollback();throw error;}
-  finally{conn.release();}
-  if(updatedAt)notifyMergedThread(tenantId,fromId,targetCustomerId,{merged:true,updated_at:updatedAt.toISOString()});
+    if(!transaction)await conn.commit();
+  }catch(error){if(!transaction)await conn.rollback();throw error;}
+  finally{if(!transaction)conn.release();}
+  if(updatedAt){
+    const notification={tenantId,fromId,toId:targetCustomerId,merged:{merged:true,updated_at:updatedAt.toISOString()}};
+    if(transaction)transaction.notifications.push(notification);
+    else notifyMergedThread(tenantId,fromId,targetCustomerId,notification.merged);
+  }
+  return fromId;
+}
+
+async function claimVisitorAfterAuthorization(conn,tenantId,customerId,customerToken,guestSessionHash,req) {
+  const notifications=[];
+  const fromId=await claimVisitorThread(tenantId,visitorCredential(req),String(customerId),customerToken,
+    {conn,guestSessionHash,notifications});
+  if(notifications.length){
+    // The response is sent only after the authentication transaction commits.
+    // A rolled-back/failed authorization must never publish a merge.
+    req.res.once('finish',()=>{
+      if(req.res.statusCode>=400)return;
+      for(const notice of notifications)notifyMergedThread(notice.tenantId,notice.fromId,notice.toId,notice.merged);
+    });
+  }
   return fromId;
 }
 
@@ -3892,6 +4023,7 @@ async function querySummaryRows(
   const idsClause = ids.length ? ` AND t.client_id IN (${ids.map(() => "?").join(",")})` : "";
   const messageIdsClause = ids.length ? ` AND client_id IN (${ids.map(() => "?").join(",")})` : "";
   const hasPagination = !ids.length
+    && limit!=null && offset!=null
     && Number.isFinite(Number(limit))
     && Number.isFinite(Number(offset));
   const paginationClause = hasPagination ? " LIMIT ? OFFSET ?" : "";
@@ -3912,9 +4044,11 @@ async function querySummaryRows(
       SELECT
         t.client_id,
         t.updated_at,
-        COALESCE(NULLIF(TRIM(t.meta_name), ''), NULLIF(TRIM(c.name), '')) AS meta_name,
-        COALESCE(NULLIF(TRIM(t.meta_phone), ''), NULLIF(TRIM(c.phone), '')) AS meta_phone,
-        c.photo AS client_photo,
+        CASE WHEN c.id IS NOT NULL THEN COALESCE(NULLIF(TRIM(c.name) COLLATE utf8mb4_unicode_ci, ''), NULLIF(TRIM(t.meta_name), ''))
+          WHEN g.token_hash IS NOT NULL THEN COALESCE(NULLIF(TRIM(pc.name) COLLATE utf8mb4_unicode_ci, ''),'Гость') ELSE 'Аноним' END AS meta_name,
+        COALESCE(NULLIF(TRIM(g.phone), ''), NULLIF(TRIM(t.meta_phone), ''), NULLIF(TRIM(c.phone) COLLATE utf8mb4_unicode_ci, '')) AS meta_phone,
+        CASE WHEN c.id IS NOT NULL THEN c.photo ELSE pc.photo END AS client_photo,
+        CASE WHEN c.id IS NOT NULL THEN 'authorized' WHEN g.token_hash IS NOT NULL THEN 'guest' ELSE 'anonymous' END AS client_state,
         t.meta_last_welcome_day,
         t.typing_in_active,
         t.typing_in_text,
@@ -3937,6 +4071,10 @@ async function querySummaryRows(
         m.delivered_at AS last_delivered_at,
         m.read_at AS last_read_at
       FROM chat_threads t
+      LEFT JOIN chat_visitor_identities v ON v.tenant_id=t.tenant_id AND v.client_id=t.client_id
+      LEFT JOIN cust_guest_sessions g ON g.tenant_id=v.tenant_id AND g.token_hash=v.guest_session_hash
+      LEFT JOIN cust_customers pc ON pc.tenant_id=t.tenant_id AND pc.id=(SELECT p.id FROM cust_customers p
+        WHERE p.tenant_id=t.tenant_id AND p.phone=g.phone COLLATE utf8mb4_general_ci AND p.is_active=1 ORDER BY p.id LIMIT 1)
       LEFT JOIN cust_customers c
         ON c.tenant_id = t.tenant_id
        AND c.id = t.client_id
@@ -4004,7 +4142,7 @@ async function querySummaryRowsForPage(tenantId, { limit, cursor = null, offset 
   const where = ["chat_threads.tenant_id = ?"];
   const params = [tenantId];
   if (safeQuery) {
-    where.push("(COALESCE(NULLIF(TRIM(chat_threads.meta_name), ''), NULLIF(TRIM(cust.name), '')) LIKE ? OR COALESCE(NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone), '')) LIKE ?)");
+    where.push("(COALESCE(NULLIF(TRIM(cust.name) COLLATE utf8mb4_unicode_ci, ''), NULLIF(TRIM(pc.name) COLLATE utf8mb4_unicode_ci, ''), IF(g.token_hash IS NOT NULL,'Гость','Аноним')) LIKE ? OR COALESCE(NULLIF(TRIM(g.phone), ''), NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone) COLLATE utf8mb4_unicode_ci, '')) LIKE ?)");
     params.push(`%${safeQuery}%`, `%${safeQueryDigits || safeQuery}%`);
   }
   if (safeCursor) {
@@ -4020,9 +4158,11 @@ async function querySummaryRowsForPage(tenantId, { limit, cursor = null, offset 
       SELECT
         chat_threads.client_id,
         chat_threads.updated_at,
-        COALESCE(NULLIF(TRIM(chat_threads.meta_name), ''), NULLIF(TRIM(cust.name), '')) AS meta_name,
-        COALESCE(NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone), '')) AS meta_phone,
-        cust.photo AS client_photo,
+        CASE WHEN cust.id IS NOT NULL THEN COALESCE(NULLIF(TRIM(cust.name) COLLATE utf8mb4_unicode_ci, ''), NULLIF(TRIM(chat_threads.meta_name), ''))
+          WHEN g.token_hash IS NOT NULL THEN COALESCE(NULLIF(TRIM(pc.name) COLLATE utf8mb4_unicode_ci, ''),'Гость') ELSE 'Аноним' END AS meta_name,
+        COALESCE(NULLIF(TRIM(g.phone), ''), NULLIF(TRIM(chat_threads.meta_phone), ''), NULLIF(TRIM(cust.phone) COLLATE utf8mb4_unicode_ci, '')) AS meta_phone,
+        CASE WHEN cust.id IS NOT NULL THEN cust.photo ELSE pc.photo END AS client_photo,
+        CASE WHEN cust.id IS NOT NULL THEN 'authorized' WHEN g.token_hash IS NOT NULL THEN 'guest' ELSE 'anonymous' END AS client_state,
         chat_threads.meta_last_welcome_day,
         chat_threads.typing_in_active,
         chat_threads.typing_in_text,
@@ -4033,6 +4173,10 @@ async function querySummaryRowsForPage(tenantId, { limit, cursor = null, offset 
         chat_threads.typing_out_updated_at,
         chat_threads.typing_out_expires_at
       FROM chat_threads
+      LEFT JOIN chat_visitor_identities v ON v.tenant_id=chat_threads.tenant_id AND v.client_id=chat_threads.client_id
+      LEFT JOIN cust_guest_sessions g ON g.tenant_id=v.tenant_id AND g.token_hash=v.guest_session_hash
+      LEFT JOIN cust_customers pc ON pc.tenant_id=chat_threads.tenant_id AND pc.id=(SELECT p.id FROM cust_customers p
+        WHERE p.tenant_id=chat_threads.tenant_id AND p.phone=g.phone COLLATE utf8mb4_general_ci AND p.is_active=1 ORDER BY p.id LIMIT 1)
       LEFT JOIN cust_customers cust
         ON cust.tenant_id = chat_threads.tenant_id
        AND cust.id = chat_threads.client_id
@@ -4163,10 +4307,21 @@ async function listSummaries(tenantId, selectedClientIds = [], actorKey = "out")
   const parsedRows = rows
     .map((row) => mapSummaryRow(row, actorKey))
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
+  await guestSessions.decorate(db,tenantId,parsedRows);
 
   if (!ids.length) return parsedRows;
 
   const byId = new Map(parsedRows.map((row) => [String(row.client_id), row]));
+  const missingIds=ids.filter(id=>!byId.has(String(id)));
+  if (missingIds.length) {
+    const [customers]=await db.query(`SELECT id,name,phone,photo FROM cust_customers
+      WHERE tenant_id=? AND id IN (${missingIds.map(()=>'?').join(',')})`,[tenantId,...missingIds]);
+    const newRows=customers.map(customer=>mapSummaryRow({
+      client_id:customer.id,client_state:'authorized',meta_name:customer.name,meta_phone:customer.phone,client_photo:customer.photo,
+    },actorKey));
+    await guestSessions.decorate(db,tenantId,newRows);
+    for(const row of newRows)byId.set(String(row.client_id),row);
+  }
   return ids.map((id) => {
     const existing = byId.get(String(id));
     if (existing) return existing;
@@ -4262,6 +4417,7 @@ async function listSummariesPage(tenantId, { limit, cursor: cursorRaw, offset = 
   const mappedRows = (Array.isArray(rawPage?.rows) ? rawPage.rows : [])
     .map((row) => mapSummaryRow(row, actorKey))
     .filter((row) => Number.isFinite(Number(row.client_id)) && Number(row.client_id) > 0);
+  await guestSessions.decorate(db,tenantId,mappedRows);
 
   return {
     rows: mappedRows,
@@ -4286,6 +4442,7 @@ async function readTenantUpdatedAt(tenantId) {
 
 function makeChatTempRouter() {
   const router = express.Router();
+  startGuestRetentionTimer();
 
   router.use(async (req, res, next) => {
     try {
@@ -4321,29 +4478,62 @@ function makeChatTempRouter() {
       return res.json({ok:true,data:{...data,...(native && issued ? {visitor_token:credential} : {})}});
     };
     try{
-      const visitor=await readVisitor(db,tenantId,token);
+      const visitor=await readVisitor(db,tenantId,token,false,Boolean(customerToken && !customerToken.startsWith('g_')));
+      if(!visitor && token){
+        const [[old]]=await db.query(`SELECT client_id FROM chat_visitor_identities
+          WHERE tenant_id=? AND token_hash=? AND claimed_at IS NULL AND session_completed_at IS NULL AND session_deleted_at IS NULL`,
+          [tenantId,visitorHash(token)]);
+        if(old && await expireVisitorConnection(db,tenantId,old.client_id)){
+          clearThreadTypingState(tenantId,old.client_id);
+          notifyThreadChange(tenantId,old.client_id,new Date().toISOString(),{messageChanged:true});
+        }
+      }
       if(customerToken && !customerToken.startsWith("g_")){
         const session=await resolveStrongChatSession(tenantId,customerToken);
         if(!session)return res.status(401).json({ok:false,error:"CHAT_IDENTITY_CHANGED"});
         const id=String(session.customer_id);
-        const credential=visitor ? token : (await reserveVisitor(tenantId)).token;
+        let credential=visitor ? token : (await reserveVisitor(tenantId)).token;
         const mergedFrom=await claimVisitorThread(tenantId,credential,id,customerToken);
+        const binding=await readVisitor(db,tenantId,credential);
+        if(binding && (!binding.claimed_at || String(binding.claimed_customer_id)!==id)){
+          if(!binding.claimed_at){
+            await expireVisitorConnection(db,tenantId,binding.client_id);
+          }
+          credential=(await reserveVisitor(tenantId)).token;
+        }
         await db.query(`UPDATE chat_visitor_identities SET active_session_id=?
           WHERE tenant_id=? AND token_hash=?`,[session.id,tenantId,visitorHash(credential)]);
-        return sendIdentity(credential,{client_id:id,is_visitor:false,merged_from:mergedFrom},!visitor);
+        return sendIdentity(credential,{client_id:id,is_visitor:false,merged_from:mergedFrom},!visitor || credential!==token);
       }
       const guest=customerToken.startsWith("g_")
         ? await require("./helpers/customerAuth").getGuest(db,tenantId,customerToken,false,Number(req.headers["x-store-id"] || 1))
         : null;
+      if(customerToken.startsWith('g_')&&!guest)return res.status(401).json({ok:false,error:'CHAT_IDENTITY_CHANGED'});
       if (visitor?.claimed_at && visitor.active_session_id) {
         await db.query("UPDATE chat_visitor_identities SET active_session_id=NULL WHERE tenant_id=? AND token_hash=?",
           [tenantId,visitorHash(token)]);
       }
-      const issued=visitor && !visitor.claimed_at ? null : await reserveVisitor(tenantId);
+      const sameGuest=!visitor?.guest_session_hash || guest && Buffer.from(visitor.guest_session_hash).equals(Buffer.from(guest.token_hash));
+      if(visitor && !visitor.claimed_at && !sameGuest)await expireVisitorConnection(db,tenantId,visitor.client_id);
+      const issued=visitor && !visitor.claimed_at && sameGuest ? null : await reserveVisitor(tenantId);
       const credential=issued?.token || token;
-      if (guest) await db.query(`UPDATE chat_visitor_identities SET is_client_chat=1
-        WHERE tenant_id=? AND token_hash=? AND claimed_at IS NULL`,[tenantId,visitorHash(credential)]);
-      return sendIdentity(credential,{client_id:String(issued?.clientId || visitor.client_id),is_visitor:true},Boolean(issued));
+      const identityConn=await db.getConnection();
+      try{
+        await identityConn.beginTransaction();
+        const current=await readVisitor(identityConn,tenantId,credential,true);
+        if(!current || current.claimed_at)throw Object.assign(new Error('CHAT_IDENTITY_CHANGED'),{status:409});
+        await identityConn.query(`UPDATE chat_visitor_identities SET guest_session_hash=?,is_client_chat=IF(?,1,is_client_chat)
+          WHERE tenant_id=? AND token_hash=? AND claimed_at IS NULL`,[guest?.token_hash || null,Boolean(guest),tenantId,visitorHash(credential)]);
+        if(current.session_started_at)await guestSessions.start(identityConn,tenantId,current.client_id);
+        await identityConn.commit();
+      }catch(error){await identityConn.rollback();throw error;}finally{identityConn.release();}
+      const profileUpdatedAt = new Date();
+      const currentClientId = String(issued?.clientId || visitor.client_id);
+      const [profileUpdate] = await db.query('UPDATE chat_threads SET updated_at=? WHERE tenant_id=? AND client_id=?',
+        [profileUpdatedAt,tenantId,currentClientId]);
+      if (profileUpdate.affectedRows) notifyThreadChange(tenantId,currentClientId,profileUpdatedAt.toISOString(),{messageChanged:true});
+      return sendIdentity(credential,{client_id:String(issued?.clientId || visitor.client_id),is_visitor:true,
+        session_started:Boolean(!issued && visitor?.session_started_at)},Boolean(issued));
     }catch(error){return next(error);}
   });
 
@@ -4401,6 +4591,21 @@ function makeChatTempRouter() {
     }catch(error){return next(error);}
   });
 
+  router.use((req,res,next)=>{
+    if(['GET','HEAD'].includes(req.method))return next();
+    const messages=Array.isArray(req.body?.messages)?req.body.messages:[];
+    const ids=Array.isArray(req.body?.message_ids)?req.body.message_ids:[];
+    let route=String(req.path);
+    try{route=decodeURIComponent(route);}catch{return res.status(400).json({ok:false,error:'BAD_MESSAGE_ID'});}
+    const projected=value=>String(value || '').startsWith('history:');
+    if(route.includes('/messages/history:') || projected(req.body?.message?.id)
+      || projected(req.body?.message?.replyTo?.id) || projected(req.body?.replyTo?.id)
+      || messages.some(message=>projected(message?.id)||projected(message?.replyTo?.id)) || ids.some(projected)){
+      return res.status(403).json({ok:false,error:'CHAT_HISTORY_READ_ONLY'});
+    }
+    next();
+  });
+
   router.post("/thread/merge", async (req, res) => {
     const tenantId = getTenantId(req);
     const fromClientId = normalizeClientId(req.body?.from_client_id || req.body?.fromClientId);
@@ -4427,6 +4632,7 @@ function makeChatTempRouter() {
       return res.json({ ok: true, data: merged });
     } catch (err) {
       console.error("chat-temp POST /thread/merge error:", err);
+      if(err.status===409)return res.status(409).json({ok:false,error:err.message});
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });
@@ -4461,6 +4667,7 @@ function makeChatTempRouter() {
       const actorKey = getRequestReactionActor(req);
       const actor = actorKey === "in" ? "in" : "out";
       const requestedActive = req.body?.typing === true || req.body?.active === true;
+      if(requestedActive)await guestSessions.assertWritable(db,tenantId,clientId);
       const requestedText = sanitizeTypingText(
         req.body?.text
         || req.body?.phrase
@@ -4819,7 +5026,7 @@ function makeChatTempRouter() {
 
   router.post("/thread/:clientId/messages", async (req, res) => {
     const tenantId = getTenantId(req);
-    const clientId = normalizeClientId(req.params.clientId);
+    let clientId = normalizeClientId(req.params.clientId);
     if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
     const actorKey = getRequestReactionActor(req);
 
@@ -4832,7 +5039,33 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
-      await lockCustomerChatOwner(req,conn);
+      clientId=await lockCustomerChatOwner(req,conn);
+      const visitorSession=await guestSessions.read(conn,tenantId,clientId,true);
+      if(visitorSession && !visitorSession.session_started_at){
+        const ordinary=message.direction==='in' && !/^(assistant-auto-|daily-welcome-)/.test(message.id);
+        if(!ordinary){
+          await conn.commit();conn.release();conn=null;
+          return res.json({ok:true,data:{client_id:Number(clientId),deferred:true}});
+        }
+        await guestSessions.start(conn,tenantId,clientId);
+      }
+      const replayOrigin=normalizeClientId(req.body?.origin_client_id);
+      if(req.customerChatRequest && replayOrigin){
+        const binding=await readVisitor(conn,tenantId,visitorCredential(req),true);
+        if(!binding?.claimed_at || String(binding.client_id)!==replayOrigin || String(binding.claimed_customer_id)!==clientId){
+          throw Object.assign(new Error('CHAT_IDENTITY_CHANGED'),{status:409});
+        }
+        req.chatMutationSourceId=replayOrigin;
+      }
+      message.id=await canonicalMutationMessageId(req,conn,tenantId,clientId,message.id);
+      if(replayOrigin && req.customerChatRequest){
+        const existing=await readSingleMessageRow(tenantId,clientId,message.id,conn);
+        if(existing){
+          const meta=await readThreadMeta(tenantId,clientId,conn);
+          await conn.commit();conn.release();conn=null;
+          return res.json({ok:true,data:{client_id:Number(clientId),updated_at:toIsoOrEmpty(meta?.updated_at),message:customerOrderCardReferences(req,mapDbMessageRowToApi(existing))}});
+        }
+      }
       const updatedAt = new Date();
 
       await ensureThreadRow(conn, tenantId, clientId, {
@@ -4880,8 +5113,8 @@ function makeChatTempRouter() {
 
   router.patch("/thread/:clientId/messages/:messageId", async (req, res) => {
     const tenantId = getTenantId(req);
-    const clientId = normalizeClientId(req.params.clientId);
-    const messageId = normalizeMessageId(req.params.messageId);
+    let clientId = normalizeClientId(req.params.clientId);
+    let messageId = normalizeMessageId(req.params.messageId);
     if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
     if (!messageId) return res.status(400).json({ ok: false, error: "MESSAGE_ID_REQUIRED" });
 
@@ -4894,7 +5127,8 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
-      await lockCustomerChatOwner(req,conn);
+      clientId=await lockCustomerChatOwner(req,conn);
+      messageId=await canonicalMutationMessageId(req,conn,tenantId,clientId,messageId);
 
       const existingRow = await readSingleMessageRow(tenantId, clientId, messageId, conn);
       if (!existingRow) {
@@ -4947,7 +5181,7 @@ function makeChatTempRouter() {
         data: {
           client_id: Number(clientId),
           updated_at: updatedAt.toISOString(),
-          message: row ? mapDbMessageRowToApi(row) : (nextMessage || existingMessage),
+          message: customerOrderCardReferences(req, row ? mapDbMessageRowToApi(row) : (nextMessage || existingMessage)),
         },
       });
     } catch (err) {
@@ -4963,7 +5197,7 @@ function makeChatTempRouter() {
 
   router.post("/thread/:clientId/messages/read", async (req, res) => {
     const tenantId = getTenantId(req);
-    const clientId = normalizeClientId(req.params.clientId);
+    let clientId = normalizeClientId(req.params.clientId);
     if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
     const ids = (Array.isArray(req.body?.message_ids) ? req.body.message_ids : [])
@@ -4978,7 +5212,8 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
-      await lockCustomerChatOwner(req,conn);
+      clientId=await lockCustomerChatOwner(req,conn);
+      for(let index=0;index<ids.length;index++)ids[index]=await canonicalMutationMessageId(req,conn,tenantId,clientId,ids[index]);
 
       const updatedAt = new Date();
       const readAt = new Date();
@@ -5052,8 +5287,8 @@ function makeChatTempRouter() {
 
   router.delete("/thread/:clientId/messages/:messageId", async (req, res) => {
     const tenantId = getTenantId(req);
-    const clientId = normalizeClientId(req.params.clientId);
-    const messageId = normalizeMessageId(req.params.messageId);
+    let clientId = normalizeClientId(req.params.clientId);
+    let messageId = normalizeMessageId(req.params.messageId);
     if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
     if (!messageId) return res.status(400).json({ ok: false, error: "MESSAGE_ID_REQUIRED" });
 
@@ -5061,7 +5296,8 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
-      await lockCustomerChatOwner(req,conn);
+      clientId=await lockCustomerChatOwner(req,conn);
+      messageId=await canonicalMutationMessageId(req,conn,tenantId,clientId,messageId);
       const updatedAt = new Date();
 
       const [result] = await conn.query(
@@ -5128,7 +5364,7 @@ function makeChatTempRouter() {
 
   router.patch("/thread/:clientId/meta", async (req, res) => {
     const tenantId = getTenantId(req);
-    const clientId = normalizeClientId(req.params.clientId);
+    let clientId = normalizeClientId(req.params.clientId);
     if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
     const sourceMeta = req.body && typeof req.body === "object"
@@ -5141,9 +5377,10 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
-      await lockCustomerChatOwner(req,conn);
+      clientId=await lockCustomerChatOwner(req,conn);
 
       const existingMetaRow = await readThreadMeta(tenantId, clientId, conn);
+      const visitorSession=await guestSessions.read(conn,tenantId,clientId,true);
       const existingMeta = sanitizeMetaFromDbRow(existingMetaRow);
       const mergedMeta = sanitizeMeta({
         ...existingMeta,
@@ -5160,7 +5397,7 @@ function makeChatTempRouter() {
       );
 
       let updatedAtIso = "";
-      if (patchKeys.length > 0 && (changed || !existingMetaRow)) {
+      if (patchKeys.length > 0 && (changed || !existingMetaRow) && (!visitorSession || visitorSession.session_started_at)) {
         const updatedAt = new Date();
         await upsertThreadMeta(conn, tenantId, clientId, mergedMeta, updatedAt);
         updatedAtIso = updatedAt.toISOString();
@@ -5216,7 +5453,7 @@ function makeChatTempRouter() {
           client_id: Number(clientId),
           updated_at: toIsoOrEmpty(metaRow?.updated_at),
           message_count: Number(totalCount || 0),
-          messages: sanitizeThread(changedRows.map(mapDbMessageRowToApi)),
+          messages: sanitizeThread(changedRows.map(mapDbMessageRowToApi)).map(message => customerOrderCardReferences(req, message)),
         },
       });
     } catch (err) {
@@ -5241,7 +5478,7 @@ function makeChatTempRouter() {
       const pageBeforeId = Number.isFinite(Number(req.query.before_id)) && Number(req.query.before_id) > 0
         ? Math.trunc(Number(req.query.before_id))
         : null;
-      const aroundId = String(req.query.around_id || "").trim().slice(0, 120);
+      const aroundId = String(req.query.around_id || "").trim().slice(0, req.customerChatRequest?120:180);
 
       const [metaRow, aroundPage, totalCount] = await Promise.all([
         readThreadMeta(tenantId, clientId),
@@ -5270,7 +5507,7 @@ function makeChatTempRouter() {
           updated_at: updatedAt,
           message_count: Number(totalCount || 0),
           meta,
-          messages: Array.isArray(page?.messages) ? page.messages : [],
+          messages: (Array.isArray(page?.messages) ? page.messages : []).map(message => customerOrderCardReferences(req, message)),
           page: {
             limit: Number(page?.limit || pageLimit),
             before_id: page?.beforeId ? Number(page.beforeId) : null,
@@ -5289,7 +5526,7 @@ function makeChatTempRouter() {
 
   router.put("/thread/:clientId", async (req, res) => {
     const tenantId = getTenantId(req);
-    const clientId = normalizeClientId(req.params.clientId);
+    let clientId = normalizeClientId(req.params.clientId);
     if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
     const actor = getRequestReactionActor(req);
@@ -5300,6 +5537,7 @@ function makeChatTempRouter() {
     try {
       conn = await db.getConnection();
       await conn.beginTransaction();
+      clientId=await lockCustomerChatOwner(req,conn);
 
       const [existingMetaRow, existingReactionRows] = await Promise.all([
         readThreadMeta(tenantId, clientId, conn),
@@ -5307,6 +5545,8 @@ function makeChatTempRouter() {
       ]);
 
       const mergedMessages = mergeReactionsByActor(existingReactionRows, inputMessages, actor);
+      const visitorSession=await guestSessions.read(conn,tenantId,clientId,true);
+      if(visitorSession && !visitorSession.session_started_at)throw Object.assign(new Error('CHAT_SESSION_NOT_STARTED'),{status:409});
       const mergedMeta = {
         ...sanitizeMetaFromDbRow(existingMetaRow),
         ...metaPatch,
@@ -5314,7 +5554,11 @@ function makeChatTempRouter() {
       const updatedAt = new Date();
 
       await upsertThreadMeta(conn, tenantId, clientId, mergedMeta, updatedAt);
-      await replaceThreadMessages(conn, tenantId, clientId, mergedMessages);
+      // Snapshot writes must not delete concurrent messages or their origin metadata.
+      for(const message of mergedMessages){
+        message.id=await canonicalMutationMessageId(req,conn,tenantId,clientId,message.id);
+        await upsertSingleThreadMessage(conn,tenantId,clientId,message);
+      }
       await conn.commit();
       conn.release();
       conn = null;
@@ -5327,7 +5571,7 @@ function makeChatTempRouter() {
           client_id: Number(clientId),
           updated_at: updatedAt.toISOString(),
           meta: sanitizeMeta(mergedMeta),
-          messages: mergedMessages,
+          messages: mergedMessages.map(message => customerOrderCardReferences(req, message)),
         },
       });
     } catch (err) {
@@ -5346,22 +5590,12 @@ function makeChatTempRouter() {
       const clientId = normalizeClientId(req.params.clientId);
       if (!clientId) return res.status(400).json({ ok: false, error: "CLIENT_ID_REQUIRED" });
 
-      const [result] = await db.query(
-        `DELETE FROM chat_threads
-          WHERE tenant_id = ? AND client_id = ?`,
-        [tenantId, clientId]
-      );
-      const deleted = Number(result?.affectedRows || 0) > 0;
-      if (deleted) {
-        await deletePushSubscriptionsForThread(tenantId, clientId).catch(() => {});
-        clearThreadTypingState(tenantId, clientId);
-        notifyThreadChange(tenantId, clientId, new Date().toISOString());
-        scheduleTenantUnreadRefresh(tenantId);
-      }
+      const deleted=await deleteCompletedGuestThread(tenantId,clientId);
 
       return res.json({ ok: true, data: { client_id: Number(clientId), deleted } });
     } catch (err) {
       console.error("chat-temp DELETE /thread error:", err);
+      if(err.status===409)return res.status(409).json({ok:false,error:err.message});
       return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
     }
   });
@@ -5769,6 +6003,27 @@ function makeChatTempRouter() {
     try {
       const tenantId = getTenantId(req);
       const actorKey = getRequestReactionActor(req);
+      const reconcileIds=String(req.query.reconcile_ids || '').split(',').filter(Boolean).map(Number);
+      if(reconcileIds.length>200 || reconcileIds.some(id=>!Number.isSafeInteger(id)||id<=0))return res.status(400).json({ok:false,error:'BAD_CLIENT_IDS'});
+      let merges=[];
+      if(reconcileIds.length){
+        [merges]=await db.query(`SELECT client_id removed_client_id,claimed_customer_id merged_into_client_id,
+          COALESCE(session_deleted_at,claimed_at) updated_at FROM chat_visitor_identities WHERE tenant_id=?
+          AND client_id IN (${reconcileIds.map(()=>'?').join(',')})
+          AND (session_deleted_at IS NOT NULL OR claimed_at IS NOT NULL AND claimed_customer_id IS NOT NULL)`,[tenantId,...reconcileIds]);
+      }
+      if(req.query.view==='customers'){
+        const limit=parsePositiveInt(req.query.limit,CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT,1,CHAT_SUMMARIES_PAGE_MAX_LIMIT);
+        const cursor=decodeSummariesCursor(req.query.cursor);
+        const offset=cursor?0:Math.max(0,Math.trunc(Number(req.query.offset)||0));
+        const includeIds=[...new Set(String(req.query.include_ids || '').split(',').filter(Boolean).map(Number))];
+        if(includeIds.length>200 || includeIds.some(id=>!Number.isSafeInteger(id)||id<=0))return res.status(400).json({ok:false,error:'BAD_CLIENT_IDS'});
+        const page=await guestSessions.groupPage(db,tenantId,{limit,cursor,offset,query:req.query.q,includeIds});
+        const rows=page.ids.length?await listSummaries(tenantId,page.ids,actorKey):[];
+        const last=page.groups[page.groups.length-1];
+        return res.json({ok:true,data:rows,merges,limit,offset,has_more:page.hasMore,
+          next_cursor:page.hasMore&&last?encodeSummariesCursor(last):null});
+      }
       const page = await listSummariesPage(tenantId, {
         limit: req.query.limit,
         cursor: req.query.cursor,
@@ -5779,6 +6034,7 @@ function makeChatTempRouter() {
       return res.json({
         ok: true,
         data: page.rows,
+        merges,
         limit: page.limit,
         offset: page.offset,
         has_more: page.hasMore,
@@ -5832,6 +6088,10 @@ async function serveChatAttachment(req, res, next) {
 }
 
 makeChatTempRouter.serveChatAttachment = serveChatAttachment;
+makeChatTempRouter.bindGuestChatForAuthorization = bindGuestChatForAuthorization;
+makeChatTempRouter.resolvePresenceChatOwner = customerChatOwner;
+makeChatTempRouter.prepareVisitorThreadClaim = prepareVisitorThreadClaim;
+makeChatTempRouter.claimVisitorAfterAuthorization = claimVisitorAfterAuthorization;
 makeChatTempRouter.handleTenantChatWidgetStateChange = handleTenantChatWidgetStateChange;
 makeChatTempRouter.disconnectTenantChatRuntime = disconnectTenantChatRuntime;
 makeChatTempRouter.setTenantChatWidgetEnabledCache = setTenantChatWidgetEnabledCache;

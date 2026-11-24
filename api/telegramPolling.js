@@ -153,6 +153,9 @@ function createTelegramPolling(db, handleUpdate, options = {}) {
       if (!claim.affectedRows) return;
       claimed = true;
       worker.claimed = true;
+      console.info('TELEGRAM_POLLING_OWNER', {
+        pid: process.pid, cwd: process.cwd(), botId: botIdentity(token), owner,
+      });
       if (signal.aborted) return;
       const [[state]] = await conn.query('SELECT next_offset FROM auth_telegram_polling WHERE bot_key=?', [key]);
       let offset = Number(state.next_offset), failures = 0;
