@@ -22402,7 +22402,9 @@
     );
 
     // Загружаем категории
+    const pickerSelection=state.discountPickerSelection;
     await loadCatalogCategories();
+    if(state.discountPickerLevel!=='products' || state.discountPickerTarget!==target || state.discountPickerSelection!==pickerSelection)return;
 
     // Показываем picker, скрываем форму
     if (isImportantMessageProductPicker) {
@@ -22464,7 +22466,9 @@
       );
 
     // Загружаем категории клиентов
+    const pickerSelection=state.discountPickerSelection;
     await loadCustomerCategories(true);
+    if(state.discountPickerLevel!=='customers' || state.discountPickerTarget!==target || state.discountPickerSelection!==pickerSelection)return;
 
     // Показываем picker, скрываем форму
     if (isImportantMessageCustomerPicker) {
@@ -25363,6 +25367,7 @@
 
 
   function switchView(viewName) {
+    if(state.currentView!==viewName && state.discountPickerLevel)closeDiscountPicker();
     state.currentView = viewName;
     if (elOnlineCount) elOnlineCount.classList.toggle('hidden', viewName !== 'clients');
 
@@ -26239,7 +26244,7 @@
   // Render: clients list
   // -----------------------------
   function getClientPresenceState(clientId) {
-    return window.AdminPresence?.getClientState?.(clientId) || 'offline';
+    return window.AdminPresence?.getMarketingClientState?.(clientId) || 'offline';
   }
 
   function getClientPresenceBadgeHtml(clientId) {
@@ -28359,10 +28364,14 @@
   }, 220);
 
   function renderMarketingPresenceSummary(counts, ready) {
-    state.onlineCount = ready ? Math.max(0, Number(counts?.identifiedOnlineClients || 0) || 0) : null;
+    state.onlineCount = ready ? Math.max(0, Number(counts?.marketingOnlineClients || 0) || 0) : null;
     if (elOnlineCount) elOnlineCount.textContent = state.onlineCount === null ? '· — онлайн' : `· ${state.onlineCount} онлайн`;
     const filterCount = elFilters?.querySelector('[data-filter="online"] .stage-count');
     if (filterCount) filterCount.textContent = state.onlineCount === null ? '—' : String(state.onlineCount);
+    if (state.discountPickerLevel === 'customers' && state.discountPickerTarget === 'important_message_customers') {
+      const audienceCount = elDiscountCustomerPickerList?.querySelector('[data-key="segment:online"]')?.closest('.option-picker-row')?.querySelector('.option-picker-price');
+      if (audienceCount) audienceCount.textContent = state.onlineCount === null ? '—' : String(state.onlineCount);
+    }
   }
 
   function bindMarketingPresence() {
@@ -28370,6 +28379,10 @@
     window.AdminPresence.subscribe((change) => {
       const ready = change.type !== 'pending' && change.type !== 'reset';
       renderMarketingPresenceSummary(change.counts, ready);
+      if(change.type==='delta' && change.marketingChanged?.length){
+        change.marketingChanged.forEach(patchClientPresence);
+        if(isPresenceSensitiveClientsList())reconcilePresenceClientsList();
+      }
 
       if (change.type === 'reset') {
         elList?.querySelectorAll('.js-client[data-client-id]').forEach((row) => {

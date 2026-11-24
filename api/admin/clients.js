@@ -1520,7 +1520,7 @@ module.exports = function makeAdminClientsRouter({ db, helpers, presenceService,
       let customFilterQueryPlan = buildClientFilterQueryPlan(defaultFilterConditions, { sort: sortRaw });
       const needsOnlineIds = onlineOnly || customFilterQueryPlan.sortPlan.onlineFirst === true;
       const onlineClientIds = new Set(needsOnlineIds && presenceService
-        ? presenceService.getOnlineClientIds({ tenantId, storeId }).map(Number)
+        ? presenceService.getMarketingClients({ tenantId, storeId }).map(client=>Number(client.clientId))
         : []);
 
       const where = ['c.tenant_id=?'];

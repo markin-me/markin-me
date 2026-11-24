@@ -6077,6 +6077,8 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       const customer = token && !token.startsWith('g_') ? await getCustomerByToken(tenantId, token, { refreshSession: false }) : null;
       if (token && !customer && !guest) return res.status(401).json({ ok: false, error: 'UNAUTHORIZED' });
       const chatOwner=!customer?await require('../chatTemp').resolvePresenceChatOwner(req):null;
+      const marketingClientId=customer ? Number(customer.id)
+        : guest && visible ? await customerAuth.ensureGuestCustomer(db,tenantId,storeId,guest.phone) : null;
 
       const presence = {
         scope: { tenantId, storeId },
@@ -6085,7 +6087,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
       };
       if (visible) {
         presenceService.touch({ ...presence, clientId: customer ? Number(customer.id) : chatOwner?.isVisitor?Number(chatOwner.id):null,
-          isCustomer:Boolean(customer),mode, visible: true });
+          isCustomer:Boolean(customer),marketingClientId,mode, visible: true });
       } else {
         presenceService.leave(presence);
       }
@@ -7773,6 +7775,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0) || 0;
+      const audienceCustomerId=customerId || (token.startsWith('g_') ? await customerAuth.marketingCustomerId(db,tenantId,token,storeId) : 0) || 0;
       const [[messageRow]] = await db.query(
         `SELECT COALESCE(SUM(CASE WHEN is_published = 1 AND COALESCE(is_hidden, 0) = 0 THEN 1 ELSE 0 END), 0) AS message_count,
                 COALESCE(MAX(CASE WHEN is_published = 1 AND COALESCE(is_hidden, 0) = 0 THEN id ELSE 0 END), 0) AS last_visible_message_id,
@@ -7783,7 +7786,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
               SELECT 1 FROM mkt_important_message_recipients mr
                WHERE mr.tenant_id=m.tenant_id AND mr.store_id=m.store_id AND mr.message_id=m.id AND mr.customer_id=?
             )))`,
-        [tenantId, storeId, customerId, customerId]
+        [tenantId, storeId, audienceCustomerId, audienceCustomerId]
       );
       let lastClaimTs = 0;
       if (customerId > 0) {
@@ -7833,6 +7836,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const token = str(req.headers['x-customer-token']);
       const customer = token ? await getCustomerByToken(tenantId, token) : null;
       const customerId = Number(customer?.id || 0) || 0;
+      const audienceCustomerId=customerId || (token.startsWith('g_') ? await customerAuth.marketingCustomerId(db,tenantId,token,storeId) : 0) || 0;
       await db.query(`
         CREATE TABLE IF NOT EXISTS mkt_important_messages (
           id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -7955,7 +7959,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
             )))
           ORDER BY is_pinned DESC, COALESCE(published_at, updated_at) DESC, id DESC
           LIMIT ?`,
-        [tenantId, storeId, customerId, customerId, limit]
+        [tenantId, storeId, audienceCustomerId, audienceCustomerId, limit]
       );
       const messageIds = (Array.isArray(rows) ? rows : [])
         .map((row) => Number(row?.id || 0))

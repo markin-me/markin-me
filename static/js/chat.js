@@ -232,6 +232,7 @@
       panel: document.querySelector(".page-col-left"),
       search: $("#chatClientsSearch"),
       list: $("#chatClientsList"),
+      scroll: $(".chat-clients-body"),
       empty: $("#chatClientsEmpty"),
       connectionStatus: $("#chatConnectionStatus"),
       mobileCloseBtn: $("#chatMobileClientsCloseBtn"),
@@ -2527,6 +2528,11 @@
       stack.style.removeProperty("--chat-mobile-thread-top-inset");
       stack.style.removeProperty("--chat-mobile-thread-bottom-inset");
       stack.style.removeProperty("--chat-scroll-down-composer-extra");
+      const footerHeight = getAdminMobileBottomOverlayHeight(getAdminMobileChatBottomOverlayNode());
+      stack.style.setProperty("--chat-desktop-footer-height", `${footerHeight}px`);
+      if (dom.center.messages) {
+        dom.center.messages.style.setProperty("padding-bottom", `${footerHeight + 20}px`, "important");
+      }
       if (messagesWrap) {
         messagesWrap.style.removeProperty("padding-bottom");
       }
@@ -2535,6 +2541,8 @@
       return;
     }
 
+    dom.center.messages?.style.removeProperty("padding-bottom");
+    stack.style.removeProperty("--chat-desktop-footer-height");
     const headerHeight = Math.max(0, Math.ceil(dom.center.headerPanel?.getBoundingClientRect().height || 0));
     const bottomOverlayNode = getAdminMobileChatBottomOverlayNode();
     const bottomOverlayHeight = getAdminMobileBottomOverlayHeight(bottomOverlayNode);
@@ -2549,7 +2557,7 @@
     if (messagesWrap) {
       // Hard fallback: reserve real footer height in the scrolling container itself.
       // Use !important because mobile chat CSS sets padding-bottom: 0 !important.
-      messagesWrap.style.setProperty("padding-bottom", `${Math.max(0, bottomOverlayHeight)}px`, "important");
+      messagesWrap.style.setProperty("padding-bottom", `${Math.max(0, bottomOverlayHeight) + 20}px`, "important");
     }
     syncAdminMobileThreadBottomInset();
     syncAdminMobileChatScrollDownPosition();
@@ -6391,7 +6399,11 @@
     const requestScope = String(state.persistentCacheNamespace || getTenantId() || "");
     const reconcileIds=cursor?[]:(state.clients || []).filter(client=>client.client_state!=='authorized')
       .map(client=>Number(client.id)).filter(id=>Number.isSafeInteger(id)&&id>0).slice(0,200);
-    const requestKey = `${requestScope}:${limit}:${cursor}:${query}:${reconcileIds.join(',')}`;
+    const online=window.AdminPresence?.getSnapshot?.().clients || [];
+    const includeIds=online.filter(client=>client.state==='chat' || client.state==='site')
+      .sort((a,b)=>(a.state==='chat'?0:1)-(b.state==='chat'?0:1) || Number(a.clientId)-Number(b.clientId))
+      .map(client=>Number(client.clientId)).filter(id=>Number.isSafeInteger(id)&&id>0).slice(0,200);
+    const requestKey = `${requestScope}:${limit}:${cursor}:${query}:${reconcileIds.join(',')}:${includeIds.join(',')}`;
     const cachedEntry = remoteClientsPageRequests.get(requestKey);
     const now = Date.now();
 
@@ -6412,6 +6424,7 @@
     if (cursor) qs.set("cursor", cursor);
     if (query) qs.set("q", query);
     qs.set('view','customers');
+    if(includeIds.length)qs.set('include_ids',includeIds.join(','));
     if (reconcileIds.length) qs.set('reconcile_ids',reconcileIds.join(','));
     const requestPromise = apiJson(`${CHAT_TEMP_API_BASE}/clients?${qs.toString()}`)
       .then((json) => {
@@ -7605,7 +7618,7 @@
   function saveClientsListScrollPosition() {
     if (!dom.left.list) return;
     const ui = ensureUiStoreState();
-    ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+    ui.clientsListScrollTop = toStoredScrollTop(dom.left.scroll.scrollTop);
     scheduleUiStatePersist();
   }
 
@@ -7614,8 +7627,8 @@
     const apply = () => {
       if (!dom.left.list) return false;
       const targetTop = toStoredScrollTop(state.store?.ui?.clientsListScrollTop);
-      const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
-      dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
+      const maxTop = Math.max(0, dom.left.scroll.scrollHeight - dom.left.scroll.clientHeight);
+      dom.left.scroll.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
       return true;
     };
     if (options.defer === true) {
@@ -7637,7 +7650,7 @@
     ui.threadScrollTopByClient = sanitizeStoredThreadScrollTopByClient(state.threadScrollTopByClient);
     ui.threadPinnedBottomByClient = sanitizeStoredThreadPinnedBottomByClient(state.threadPinnedBottomByClient);
     if (dom.left.list) {
-      ui.clientsListScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+      ui.clientsListScrollTop = toStoredScrollTop(dom.left.scroll.scrollTop);
     } else {
       ui.clientsListScrollTop = toStoredScrollTop(ui.clientsListScrollTop);
     }
@@ -10750,7 +10763,30 @@
       const qDigits = normalizePhoneDigits(q);
       return name.includes(q) || (qDigits && phone.includes(qDigits));
     });
+    const presenceRanks=new Map();
+    const messageRanks=new Map();
+    const activityRanks=new Map();
+    const rank={offline:0,site:1,chat:2};
+    for(const client of state.clients){
+      const key=client.group_key || `dialog:${client.id}`;
+      const presence=getGroupedPresenceState([client.id,getChatCustomerProfileId(client)]);
+      presenceRanks.set(key,Math.max(presenceRanks.get(key)||0,rank[presence]||0));
+      const hasMessages=Number(client.message_count)>0 || getVisibleThread(client.id).some(message=>!message.historyReadOnly);
+      if(hasMessages){
+        messageRanks.set(key,1);
+        activityRanks.set(key,Math.max(activityRanks.get(key)||0,getClientSortTimestamp(client)));
+      }
+
+    }
     bySearch.sort((a, b) => {
+      const presenceDiff=(presenceRanks.get(b.group_key || `dialog:${b.id}`)||0)-(presenceRanks.get(a.group_key || `dialog:${a.id}`)||0);
+      if(presenceDiff)return presenceDiff;
+      const aKey=a.group_key || `dialog:${a.id}`,bKey=b.group_key || `dialog:${b.id}`;
+      const messagesDiff=(messageRanks.get(bKey)||0)-(messageRanks.get(aKey)||0);
+      if(messagesDiff)return messagesDiff;
+      const threadDiff=(activityRanks.get(bKey)||0)-(activityRanks.get(aKey)||0);
+      if(threadDiff)return threadDiff;
+
       const activityDiff = getClientSortTimestamp(b) - getClientSortTimestamp(a);
       if (activityDiff) return activityDiff;
       return Number(b?.id || 0) - Number(a?.id || 0);
@@ -10820,12 +10856,20 @@
   function initClientPresence() {
     if (!window.AdminPresence || typeof window.AdminPresence.subscribe !== "function") return;
     window.AdminPresence.subscribe((change) => {
-      if (change?.type === "delta" && Number(change.clientId || 0) > 0) {
-        patchClientPresence(change.clientId);
-        return;
-      }
       if (!dom.left.list) return;
-      $$(".chat-client-row[data-presence-clients]", dom.left.list).forEach(patchClientPresenceRow);
+      const rows=change?.type==='delta' && Number(change.clientId)>0
+        ? dom.left.list.querySelectorAll(`.chat-client-row[data-presence-clients~="${cssEscape(String(change.clientId))}"]`)
+        : dom.left.list.querySelectorAll('.chat-client-row[data-presence-clients]');
+      let changed=false;
+      rows.forEach(row=>{
+        const next=getGroupedPresenceState(String(row.dataset.presenceClients || '').split(' ').filter(Boolean));
+        if(row.dataset.clientPresence!==next)changed=true;
+        patchClientPresenceRow(row);
+      });
+      if(changed)applyClientFilter();
+      const online=window.AdminPresence.getSnapshot?.().clients || [];
+      const known=new Set((state.clients || []).map(client=>Number(client.id)));
+      if(online.some(client=>!known.has(Number(client.clientId))))void syncRemoteSummariesSnapshot().catch(console.error);
     });
   }
 
@@ -11005,9 +11049,9 @@
     if (!dom.left.list) return;
     closeAllClientSwipeRows(null, { immediate: true });
     const hadClientRows = !!dom.left.list.querySelector(".chat-client-row");
-    const previousScrollTop = toStoredScrollTop(dom.left.list.scrollTop);
+    const previousScrollTop = toStoredScrollTop(dom.left.scroll.scrollTop);
     const groupOf=client=>client.group_key || `dialog:${client.id}`;
-    const all=(state.clients || []).filter(client=>Number(client.message_count)>0 || (state.store.threads?.[String(client.id)]?.length || 0)>0);
+    const all=state.clients || [];
     const groups=new Map();
     const selectedGroup=groupOf(findClientById(state.activeClientId) || {});
     for(const client of all){const key=groupOf(client);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(client);}
@@ -11061,8 +11105,8 @@
     for(const node of Array.from(dom.left.list.children))if(!keep.has(node))node.remove();
     const persistedScrollTop = toStoredScrollTop(state.store?.ui?.clientsListScrollTop);
     const targetTop = hadClientRows ? previousScrollTop : persistedScrollTop;
-    const maxTop = Math.max(0, dom.left.list.scrollHeight - dom.left.list.clientHeight);
-    dom.left.list.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
+    const maxTop = Math.max(0, dom.left.scroll.scrollHeight - dom.left.scroll.clientHeight);
+    dom.left.scroll.scrollTop = Math.max(0, Math.min(targetTop, maxTop));
     saveClientsListScrollPosition();
   }
 
@@ -18177,15 +18221,7 @@
   }
 
   function filterOpenChatClients(rows) {
-    const list = Array.isArray(rows) ? rows : [];
-    const existingThreadIds = new Set(Object.keys(state.store.threads || {}).map((k) => Number(k)));
-    const filtered = list.filter(
-      (client) =>
-        existingThreadIds.has(Number(client.id))
-        || Number(client.total_orders || 0) > 0
-        || client._isVirtualChatClient === true
-    );
-    return filtered.length ? filtered : list;
+    return Array.isArray(rows) ? rows : [];
   }
 
   function sanitizeCachedClientRows(rows) {
@@ -18314,7 +18350,7 @@
     if (typeof navigator !== "undefined" && navigator.onLine === false) return;
     const pager = ensureClientsPager();
     if (!pager.hasMore || pager.loading) return;
-    const remaining = dom.left.list.scrollHeight - dom.left.list.scrollTop - dom.left.list.clientHeight;
+    const remaining = dom.left.scroll.scrollHeight - dom.left.scroll.scrollTop - dom.left.scroll.clientHeight;
     if (remaining > CHAT_CLIENTS_LOAD_MORE_THRESHOLD_PX) return;
     loadClientsPage({ reset: false, ensureSelection: false }).catch(console.error);
   }
@@ -18325,8 +18361,8 @@
     if (state.clientsViewportPrefillDone) return;
     const pager = ensureClientsPager();
     if (!pager.hasMore || pager.loading) return;
-    const isScrollable = Number(dom.left.list.scrollHeight || 0)
-      > Number(dom.left.list.clientHeight || 0) + CHAT_CLIENTS_VIEWPORT_TOLERANCE_PX;
+    const isScrollable = Number(dom.left.scroll.scrollHeight || 0)
+      > Number(dom.left.scroll.clientHeight || 0) + CHAT_CLIENTS_VIEWPORT_TOLERANCE_PX;
     if (isScrollable) {
       state.clientsViewportPrefillDone = true;
       return;
@@ -18828,9 +18864,9 @@
         scrollMessagesToBottom({ behavior: "smooth-fast", deferIfTouchGesture: false });
       });
     }
-    if (dom.left.list && dom.left.list.dataset.scrollPersistBound !== "1") {
-      dom.left.list.dataset.scrollPersistBound = "1";
-      dom.left.list.addEventListener("scroll", () => {
+    if (dom.left.scroll && dom.left.scroll.dataset.scrollPersistBound !== "1") {
+      dom.left.scroll.dataset.scrollPersistBound = "1";
+      dom.left.scroll.addEventListener("scroll", () => {
         closeAllClientSwipeRows(null, { immediate: true });
         saveClientsListScrollPosition();
         maybeLoadMoreClientsByScroll();

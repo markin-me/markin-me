@@ -54,9 +54,37 @@ async function getGuest(db,tenantId,token,lock=false,storeId=1){
   row.addresses=typeof row.addresses_json==='string'?JSON.parse(row.addresses_json):(row.addresses_json || []);
   return row;
 }
+async function ensureGuestCustomer(db,tenantId,storeId,value){
+  const normalized=phone(value);
+  const select='SELECT id,is_active FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 2';
+  const [existing]=await db.query(select,[tenantId,normalized]);
+  if(existing.length>1)fail('CUSTOMER_PHONE_CONFLICT',409);
+  if(existing.length)return Number(existing[0].is_active)===1 ? Number(existing[0].id) : null;
+  const conn=await db.getConnection();
+  try{
+    await conn.beginTransaction();
+    await conn.query('SELECT id FROM ten_tenants WHERE id=? FOR UPDATE',[tenantId]);
+    let [rows]=await conn.query(select+' FOR UPDATE',[tenantId,normalized]);
+    if(rows.length>1)fail('CUSTOMER_PHONE_CONFLICT',409);
+    if(!rows.length){
+      await conn.query(`INSERT INTO cust_customers (tenant_id,store_id,phone,guest_bonus_only,is_active)
+        VALUES (?,?,?,1,1) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,[tenantId,storeId,normalized]);
+      [rows]=await conn.query(select,[tenantId,normalized]);
+      if(rows.length!==1)fail('CUSTOMER_PHONE_CONFLICT',409);
+    }
+    await conn.commit();
+    return Number(rows[0].is_active)===1 ? Number(rows[0].id) : null;
+  }catch(error){await conn.rollback();throw error;}
+  finally{conn.release();}
+}
+async function marketingCustomerId(db,tenantId,token,storeId=1){
+  const guest=await getGuest(db,tenantId,token,false,storeId);
+  return guest ? ensureGuestCustomer(db,tenantId,storeId,guest.phone) : null;
+}
 async function createGuest(db,tenantId,value,existingToken,storeId=1){
   await guestStoreOffset(db,tenantId,storeId);
   const normalized=phone(value),existing=await getGuest(db,tenantId,existingToken,false,storeId);
+  await ensureGuestCustomer(db,tenantId,storeId,normalized);
   const reuse=existing?.phone===normalized,token=reuse?existingToken:'g_'+crypto.randomBytes(32).toString('base64url');
   if(!reuse)await db.query(`INSERT INTO cust_guest_sessions (tenant_id,token_hash,phone,created_at,expires_at)
     VALUES (?,?,?,UTC_TIMESTAMP(),NULL)`,[tenantId,guestHash(token),normalized]);
@@ -121,4 +149,4 @@ async function promoteGuest(conn,tenantId,token,request,storeId=1){
   await conn.query('UPDATE order_orders SET customer_id=? WHERE tenant_id=? AND guest_session_hash=? AND customer_id IS NULL AND customer_phone=?',[request.account_id,tenantId,guest.token_hash,phone(owner.phone)]);
   await conn.query("UPDATE auth_browser_requests SET state='cancelled' WHERE tenant_id=? AND guest_session_hash=? AND public_id<>? AND state IN ('pending','started','confirmed')",[tenantId,guest.token_hash,request.public_id]);
 }
-module.exports={settings,validateSettings,phone,byPhone,getGuest,createGuest,revokeGuest,guestAddresses,transferGuestAddresses,promoteGuest,guestCustomer,guestStoreOffset};
+module.exports={settings,validateSettings,phone,byPhone,getGuest,createGuest,ensureGuestCustomer,marketingCustomerId,revokeGuest,guestAddresses,transferGuestAddresses,promoteGuest,guestCustomer,guestStoreOffset};

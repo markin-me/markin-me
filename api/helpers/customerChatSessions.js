@@ -109,7 +109,7 @@ async function decorate(db,tenantId,rows){
   return rows;
 }
 
-async function groupPage(db,tenantId,{limit=50,offset=0,cursor=null,query=''}={}){
+async function groupPage(db,tenantId,{limit=50,offset=0,cursor=null,query='',includeIds=[]}={}){
   // Catch legacy rows written by an older process between migration and restart.
   const [legacy]=await db.query(`SELECT v.client_id,MIN(m.created_at) started_at FROM chat_visitor_identities v
     JOIN chat_threads t ON t.tenant_id=v.tenant_id AND t.client_id=v.client_id
@@ -123,25 +123,43 @@ async function groupPage(db,tenantId,{limit=50,offset=0,cursor=null,query=''}={}
   }
   const key=`COALESCE(CONVERT(v.session_group_key USING utf8mb4) COLLATE utf8mb4_unicode_ci,IF(NULLIF(c.phone,'') IS NOT NULL,CONCAT('phone:',c.phone COLLATE utf8mb4_unicode_ci),
     CONCAT(IF(v.client_id IS NULL,IF(c.id IS NULL,'legacy:','customer:'),'visitor:'),t.client_id)))`;
-  const from=`FROM chat_threads t LEFT JOIN chat_visitor_identities v ON v.tenant_id=t.tenant_id AND v.client_id=t.client_id
+  const source=`(SELECT tenant_id,client_id,updated_at,meta_name,meta_phone,
+      (SELECT MAX(m.created_at) FROM chat_messages m WHERE m.tenant_id=chat_threads.tenant_id AND m.client_id=chat_threads.client_id) last_message_at
+      FROM chat_threads WHERE tenant_id=?
+    UNION ALL SELECT c.tenant_id,c.id,COALESCE(c.updated_at,c.created_at),NULL,NULL,NULL FROM cust_customers c
+      WHERE c.tenant_id=? AND c.is_active=1 AND NOT EXISTS (
+        SELECT 1 FROM chat_threads existing WHERE existing.tenant_id=c.tenant_id AND existing.client_id=c.id))`;
+  const from=`FROM ${source} t LEFT JOIN chat_visitor_identities v ON v.tenant_id=t.tenant_id AND v.client_id=t.client_id
     LEFT JOIN cust_customers c ON c.tenant_id=t.tenant_id AND c.id=t.client_id
     LEFT JOIN cust_guest_sessions g ON g.tenant_id=v.tenant_id AND g.token_hash=v.guest_session_hash
     LEFT JOIN cust_customers pc ON pc.tenant_id=t.tenant_id AND pc.phone=COALESCE(v.dialog_phone,g.phone) COLLATE utf8mb4_general_ci
-    WHERE t.tenant_id=? AND EXISTS (SELECT 1 FROM chat_messages m WHERE m.tenant_id=t.tenant_id AND m.client_id=t.client_id)
+    WHERE t.tenant_id=? AND (c.id IS NOT NULL OR t.last_message_at IS NOT NULL)
       AND (v.client_id IS NULL OR (v.claimed_at IS NULL AND v.session_deleted_at IS NULL AND v.session_started_at IS NOT NULL))`;
   const search=String(query || '').trim().slice(0,120);
-  const params=[tenantId];
+  const params=[tenantId,tenantId,tenantId];
   const searchClause=search?` AND (COALESCE(c.name COLLATE utf8mb4_unicode_ci,pc.name COLLATE utf8mb4_unicode_ci,t.meta_name,'') LIKE ?
     OR COALESCE(c.phone COLLATE utf8mb4_unicode_ci,v.dialog_phone,g.phone,t.meta_phone,'') LIKE ?)` : '';
   if(search)params.push(`%${search}%`,`%${search}%`);
-  const cursorClause=cursor?'WHERE (updated_at<? OR (updated_at=? AND client_id<?))':'';
+  const rankedCursor=cursor && Number.isInteger(cursor.hasMessages);
+  const cursorClause=cursor ? rankedCursor
+    ? 'WHERE (has_messages<? OR (has_messages=? AND (updated_at<? OR (updated_at=? AND client_id<?))))'
+    : 'WHERE (updated_at<? OR (updated_at=? AND client_id<?))' : '';
+  if(rankedCursor)params.push(cursor.hasMessages,cursor.hasMessages);
   if(cursor)params.push(cursor.updatedAt,cursor.updatedAt,cursor.clientId);
   params.push(limit+1,offset);
-  const [groups]=await db.query(`SELECT * FROM (SELECT ${key} group_key,MAX(t.updated_at) updated_at,MAX(t.client_id) client_id
-    ${from}${searchClause} GROUP BY group_key) grouped ${cursorClause} ORDER BY updated_at DESC,client_id DESC LIMIT ? OFFSET ?`,params);
+  const [groups]=await db.query(`SELECT * FROM (SELECT ${key} group_key,COALESCE(MAX(t.last_message_at),MAX(t.updated_at)) updated_at,MAX(t.client_id) client_id,MAX(t.last_message_at IS NOT NULL) has_messages
+    ${from}${searchClause} GROUP BY group_key) grouped ${cursorClause} ORDER BY has_messages DESC,updated_at DESC,client_id DESC LIMIT ? OFFSET ?`,params);
   const page=groups.slice(0,limit);
-  if(!page.length)return {ids:[],groups:[],hasMore:false};
-  const [members]=await db.query(`SELECT DISTINCT t.client_id ${from} AND ${key} IN (${page.map(()=>'?').join(',')})`,[tenantId,...page.map(group=>group.group_key)]);
+  const keys=new Set(page.map(group=>group.group_key));
+  if(includeIds.length){
+    const [onlineGroups]=await db.query(`SELECT DISTINCT ${key} group_key ${from}${searchClause}
+      AND t.client_id IN (${includeIds.map(()=>'?').join(',')})`,
+      [tenantId,tenantId,tenantId,...(search?[`%${search}%`,`%${search}%`]:[]),...includeIds]);
+    onlineGroups.forEach(group=>keys.add(group.group_key));
+  }
+  if(!keys.size)return {ids:[],groups:[],hasMore:false};
+  const groupKeys=[...keys];
+  const [members]=await db.query(`SELECT DISTINCT t.client_id ${from} AND ${key} IN (${groupKeys.map(()=>'?').join(',')})`,[tenantId,tenantId,tenantId,...groupKeys]);
   return {ids:members.map(row=>String(row.client_id)),groups:page,hasMore:groups.length>limit};
 }
 

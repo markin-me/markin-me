@@ -2109,7 +2109,7 @@ function encodeSummariesCursor(row) {
   const updatedAt = toIsoOrEmpty(row?.updated_at);
   const clientId = normalizeClientId(row?.client_id);
   if (!updatedAt || !clientId) return "";
-  return Buffer.from(JSON.stringify({ updatedAt, clientId }), "utf8").toString("base64url");
+  return Buffer.from(JSON.stringify({ updatedAt, clientId, ...(row?.has_messages != null ? {hasMessages:Number(row.has_messages)} : {}) }), "utf8").toString("base64url");
 }
 
 function decodeSummariesCursor(value) {
@@ -2122,7 +2122,8 @@ function decodeSummariesCursor(value) {
     const updatedAtDate = new Date(updatedAt);
     const clientId = normalizeClientId(parsed?.clientId);
     if (!updatedAt || Number.isNaN(updatedAtDate.getTime()) || !clientId) throw new Error("invalid");
-    return { updatedAt: updatedAtDate, clientId };
+    if(parsed.hasMessages!==undefined && ![0,1].includes(parsed.hasMessages))throw new Error("invalid");
+    return { updatedAt: updatedAtDate, clientId, ...(parsed.hasMessages!==undefined ? {hasMessages:parsed.hasMessages} : {}) };
   } catch {
     throw Object.assign(new Error("INVALID_CURSOR"), { statusCode: 400 });
   }
@@ -4315,9 +4316,11 @@ async function listSummaries(tenantId, selectedClientIds = [], actorKey = "out")
   if (missingIds.length) {
     const [customers]=await db.query(`SELECT id,name,phone,photo FROM cust_customers
       WHERE tenant_id=? AND id IN (${missingIds.map(()=>'?').join(',')})`,[tenantId,...missingIds]);
-    for (const customer of customers) byId.set(String(customer.id),mapSummaryRow({
+    const newRows=customers.map(customer=>mapSummaryRow({
       client_id:customer.id,client_state:'authorized',meta_name:customer.name,meta_phone:customer.phone,client_photo:customer.photo,
     },actorKey));
+    await guestSessions.decorate(db,tenantId,newRows);
+    for(const row of newRows)byId.set(String(row.client_id),row);
   }
   return ids.map((id) => {
     const existing = byId.get(String(id));
@@ -6013,7 +6016,9 @@ function makeChatTempRouter() {
         const limit=parsePositiveInt(req.query.limit,CHAT_SUMMARIES_PAGE_DEFAULT_LIMIT,1,CHAT_SUMMARIES_PAGE_MAX_LIMIT);
         const cursor=decodeSummariesCursor(req.query.cursor);
         const offset=cursor?0:Math.max(0,Math.trunc(Number(req.query.offset)||0));
-        const page=await guestSessions.groupPage(db,tenantId,{limit,cursor,offset,query:req.query.q});
+        const includeIds=[...new Set(String(req.query.include_ids || '').split(',').filter(Boolean).map(Number))];
+        if(includeIds.length>200 || includeIds.some(id=>!Number.isSafeInteger(id)||id<=0))return res.status(400).json({ok:false,error:'BAD_CLIENT_IDS'});
+        const page=await guestSessions.groupPage(db,tenantId,{limit,cursor,offset,query:req.query.q,includeIds});
         const rows=page.ids.length?await listSummaries(tenantId,page.ids,actorKey):[];
         const last=page.groups[page.groups.length-1];
         return res.json({ok:true,data:rows,merges,limit,offset,has_more:page.hasMore,
