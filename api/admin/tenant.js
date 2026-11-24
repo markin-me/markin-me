@@ -17,6 +17,7 @@ const { domainToASCII, domainToUnicode } = require('url');
 const chatTempRuntime = require('../chatTemp');
 const { getTenantBotConfig, getTenantWebhookSecret } = require('../messengerDelivery');
 const { setWebhook: setTelegramWebhook } = require('../telegramBot');
+const { requestTelegramApi, telegramErrorReason } = require('../telegramApi');
 const {
   listTemplates: listBotContentTemplates,
   resetTemplate: resetBotContentTemplate,
@@ -3560,6 +3561,21 @@ async function fetchStoreWithHours(tenantId, storeId) {
     }
   });
 
+  router.get('/telegram-connection', async (req, res, next) => {
+    try {
+      if (!await requireTenantPermissions(req, res, ['settings.system.integrations'])) return;
+      const [[tenant]] = await db.query('SELECT telegram_bot_token FROM ten_tenants WHERE id=? AND is_active=1', [req.user.tenantId]);
+      if (!tenant?.telegram_bot_token) return res.json({ ok: true, data: { state: 'not_configured', bot_name: null } });
+      try {
+        const identity = await requestTelegramApi(`https://api.telegram.org/bot${tenant.telegram_bot_token}`, 'getMe', {});
+        if (!identity.result?.is_bot || !identity.result.username) throw new Error('INVALID_BOT_IDENTITY');
+        return res.json({ ok: true, data: { state: 'verified', bot_name: identity.result.username } });
+      } catch (error) {
+        return res.json({ ok: true, data: { state: 'unavailable', bot_name: null, error: telegramErrorReason(error) } });
+      }
+    } catch (error) { next(error); }
+  });
+
   router.get('/max-connection', async (req,res,next) => {
     try {
       if (!await requireTenantPermissions(req,res,['settings.system.integrations'])) return;
@@ -4306,8 +4322,26 @@ async function fetchStoreWithHours(tenantId, storeId) {
       const nextMaxBotToken = maxBotToken !== undefined ? maxBotToken : (current.max_bot_token ?? null);
       const nextMaxMiniAppEnabled = maxMiniAppEnabled !== undefined ? maxMiniAppEnabled : (current.max_mini_app_enabled ?? 0);
       const nextMaxLoginEnabled = maxLoginEnabled !== undefined ? maxLoginEnabled : (current.max_login_enabled ?? 0);
-      const nextTelegramBotUsername = telegramBotUsername !== undefined ? telegramBotUsername : (current.telegram_bot_username ?? null);
+      let nextTelegramBotUsername = current.telegram_bot_username ?? null;
       const nextTelegramBotToken = telegramBotToken !== undefined ? telegramBotToken : (current.telegram_bot_token ?? null);
+      if (telegramBotToken !== undefined && (nextTelegramBotToken !== current.telegram_bot_token || !nextTelegramBotUsername)) {
+        nextTelegramBotUsername = null;
+        if (nextTelegramBotToken) {
+          try {
+            const identity = await requestTelegramApi(`https://api.telegram.org/bot${nextTelegramBotToken}`, 'getMe', {});
+            if (!identity.result?.is_bot || !identity.result.username) throw new Error('INVALID_BOT_IDENTITY');
+            nextTelegramBotUsername = identity.result.username;
+          } catch (error) {
+            const rejected = error.code === 'TELEGRAM_TOKEN_REJECTED' || error.httpStatus === 401;
+            const reason = telegramErrorReason(error);
+            console.warn('TENANT_TELEGRAM_IDENTITY_FAILED', {
+              tenantId, reason, httpStatus: error.httpStatus ?? null, phase: error.phase ?? null,
+            });
+            return res.status(rejected ? 400 : 502).json({ ok: false,
+              error: rejected ? 'TELEGRAM_BOT_TOKEN_INVALID' : 'TELEGRAM_BOT_IDENTITY_UNAVAILABLE', reason });
+          }
+        }
+      }
       const nextTgLoginEnabled = tgLoginEnabled !== undefined ? tgLoginEnabled : (current.tg_login_enabled ?? 0);
       const nextChatWelcomeMessage = chatWelcomeMessage !== undefined ? chatWelcomeMessage : (current.chat_welcome_message ?? null);
       const nextChatWelcomeEnabled = chatWelcomeEnabled !== undefined

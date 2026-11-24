@@ -612,15 +612,6 @@
                 </div>
                 <div class="muted" role="status" data-customer-auth-notice="tg"></div>
               </div>
-              <div class="settings-site-field">
-                <label class="field-label">ИМЯ БОТА</label>
-                <div class="control-with-action">
-                  <input class="control" type="text" id="tenantTelegramBotUsername" placeholder="@username_bot" autocomplete="off" />
-                  <button class="control-inline-btn" type="button" id="tenantTelegramBotUsernameLink" title="Открыть бота">
-                    <i class="fab fa-telegram"></i>
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -635,8 +626,15 @@
           </div>
 
           <div class="settings-site-field">
+            <label class="field-label">СТАТУС ПОДКЛЮЧЕНИЯ</label>
+            <div class="control-with-action">
+              <input class="control" type="text" id="tenantTelegramBotUsername" readonly aria-label="Имя бота Telegram" />
+              <button class="control-inline-btn" type="button" id="tenantTelegramBotUsernameLink" title="Открыть бота"><i class="fab fa-telegram"></i></button>
+            </div>
+            <span id="tenantTelegramConnectionStatus" class="field-hint" role="status" aria-live="polite"></span>
+          </div>
+          <div class="settings-site-field">
             <label class="field-label">ССЫЛКА ДЛЯ TELEGRAM MINI APP</label>
-            <span class="field-hint">Используйте эту ссылку в настройках бота:</span>
             <div class="control-with-action">
               <input class="control" type="text" id="tenantTelegramMiniAppInput" readonly />
               <button class="control-inline-btn" type="button" id="tenantTelegramMiniAppCopyBtn" title="Скопировать">
@@ -684,42 +682,32 @@
                 </div>
                 <div class="muted" role="status" data-customer-auth-notice="max"></div>
               </div>
-              <div class="settings-site-field">
-                <label class="field-label">ИМЯ БОТА MAX</label>
-                <input class="control" type="text" id="tenantMaxBotId" placeholder="" readonly />
-              </div>
             </div>
           </div>
 
           <div class="settings-site-field">
-            <label class="field-label">ТОКЕН БОТА MAX</label>
+            <label class="field-label">ТОКЕН БОТА</label>
             <div class="control-with-action">
-              <input class="control" type="password" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" aria-describedby="tenantMaxBotTokenHint" readonly onfocus="this.removeAttribute('readonly')" />
+              <input class="control" type="password" id="tenantMaxBotToken" placeholder="Введите токен" autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" />
+              <button class="control-inline-btn" type="button" id="tenantMaxBotTokenCopyBtn" title="Скопировать" aria-label="Скопировать токен бота"><i class="fas fa-copy"></i></button>
             </div>
-            <span id="tenantMaxBotTokenHint" class="field-hint">Сохранённый токен отображается маской. Для замены введите новый токен целиком.</span>
           </div>
           <div class="settings-site-field">
             <label class="field-label">СТАТУС ПОДКЛЮЧЕНИЯ</label>
+            <div class="control-with-action">
+              <input class="control" type="text" id="tenantMaxBotId" readonly aria-label="Имя бота MAX" />
+              <button class="control-inline-btn" type="button" id="tenantMaxBotIdLink" title="Открыть бота"><i class="fas fa-paper-plane"></i></button>
+            </div>
             <span id="tenantMaxConnectionStatus" class="field-hint" role="status" aria-live="polite"></span>
           </div>
           <div class="settings-site-field">
-            <label class="field-label">ССЫЛКА ДЛЯ MAX MINI APP</label>
-            <span class="field-hint">Используйте эту ссылку в настройках MAX-бота:</span>
+            <label class="field-label">ССЫЛКА ДЛЯ MINI APP</label>
             <div class="control-with-action">
               <input class="control" type="text" id="tenantMaxMiniAppInput" readonly />
               <button class="control-inline-btn" type="button" id="tenantMaxMiniAppCopyBtn" title="Скопировать">
                 <i class="fas fa-copy"></i>
               </button>
             </div>
-          </div>
-          <div class="settings-site-field">
-            <label class="field-label">MINI APP В СООБЩЕНИИ БОТА</label>
-            <span class="field-hint">Показывать кнопку перехода в MAX mini app после авторизации</span>
-            <label class="switch">
-              <input class="switch-input" type="checkbox" id="tenantMaxMiniAppEnabled" />
-              <span class="switch-ui" aria-hidden="true"></span>
-              <span class="switch-text">Включено</span>
-            </label>
           </div>
         </div>
         <div class="panel-footer" id="settingsMaxFooter">

@@ -38,12 +38,12 @@ class PresenceService {
     if (from !== OFFLINE) {
       record.counts.siteVisitors -= 1;
       if (visitor.clientId && visitor.isCustomer!==false) record.counts.identifiedClients -= 1;
-      if (visitor.clientId && visitor.isCustomer!==false && from === CHAT_ACTIVE) record.counts.chatClients -= 1;
+      if (from === CHAT_ACTIVE) record.counts.chatClients -= 1;
     }
     if (to !== OFFLINE) {
       record.counts.siteVisitors += 1;
       if (visitor.clientId && visitor.isCustomer!==false) record.counts.identifiedClients += 1;
-      if (visitor.clientId && visitor.isCustomer!==false && to === CHAT_ACTIVE) record.counts.chatClients += 1;
+      if (to === CHAT_ACTIVE) record.counts.chatClients += 1;
     }
   }
 
