@@ -646,6 +646,17 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     return String(value || "").trim() === "auto" ? "auto" : "manual";
   }
 
+  function normalizeProductPricingConfig(config) {
+    if (!config || !Array.isArray(config.sources)) return null;
+    if (config.mode === "manual") return config.sources.length === 0 ? { mode: "manual", sources: [] } : null;
+    if (config.mode !== "auto") return null;
+    const allowed = ["composition", "variants", "options"];
+    if (config.sources.some(source => !allowed.includes(source))) return null;
+    const sources = allowed.filter(source => config.sources.includes(source));
+    if (!sources.includes("composition") && !sources.includes("options")) return null;
+    return { mode: "auto", sources };
+  }
+
   function calcProductMarginPercent(costPrice, price) {
     const cost = helpers.numOrNull(costPrice);
     const sale = helpers.numOrNull(price);
@@ -1005,7 +1016,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     );
     if (!product) return null;
     const [ingredients] = await db.query(
-      `SELECT i.ingredient_id, i.quantity, i.unit_id, i.price_override,
+      `SELECT i.ingredient_id, i.quantity, i.unit_id, i.price_override, i.loss_percent,
               p.price AS ingredient_price, p.old_price AS ingredient_old_price, p.cost_price AS ingredient_cost_price,
               p.base_qty AS ingredient_base_qty,
               p.base_unit_id AS ingredient_base_unit_id,
@@ -1116,7 +1127,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       if (measureUnitId) {
         const qtyInMeasureUnit = toUnitQty(ing.quantity, fromUnitId, measureUnitId, ingredientId);
         if (qtyInMeasureUnit != null) {
-          weight += qtyInMeasureUnit;
+          weight += qtyInMeasureUnit * (1 - Number(ing.loss_percent || 0) / 100);
           hasWeight = true;
         }
       }
@@ -1185,6 +1196,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     async function walk(childId, pathIds, pathNames, depth) {
       const [parents] = await db.query(
         `SELECT p.id, p.name, p.price, p.old_price, p.cost_price, p.margin_percent, p.base_qty,
+                p.client_composition, p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
                 p.unit_id, p.base_unit_id, p.photos_json,
                 p.price_source, p.cost_price_source, p.base_qty_source,
                 u.code AS unit_code, u.short_title AS unit_short_title, u.title AS unit_title,
@@ -1223,6 +1235,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
               old_price: parent.old_price,
               margin_percent: parent.margin_percent,
               base_qty: parent.base_qty,
+              composition: parent.client_composition,
+              nutrition: normalizeProductNutritionValues({
+                protein: parent.nutrition_protein_100g, fat: parent.nutrition_fat_100g, carbs: parent.nutrition_carbs_100g,
+              }),
             },
             base_qty: parent.base_qty,
             unit_id: parent.unit_id,
@@ -1641,7 +1657,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
             Number(assignment.group_id), Number(passport.product.id));
         }
         passport.editor.option_details = optionDetails;
-        passport.editor.catalog_details_version = 2;
+        passport.editor.catalog_details_version = 3;
       }
       return res.json(payload);
     } catch (e) {
@@ -2370,6 +2386,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           fields: item?.fields && typeof item.fields === "object" ? item.fields : {},
           calculated: item?.calculated && typeof item.calculated === "object" ? item.calculated : null,
           sources: item?.sources && typeof item.sources === "object" ? item.sources : {},
+          price_source_edited: item?.price_source_edited === true,
         }))
         .filter((item) => Number.isFinite(item.product_id) && item.product_id > 0)
         .sort((a, b) => a.depth - b.depth);
@@ -2400,6 +2417,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           if (fields.price && totals?.price != null) {
             updates.push("price=?", "price_source=?");
             params.push(totals.price, normalizeProductValueSource(item.sources?.price));
+            if (item.price_source_edited) {
+              const config = normalizeProductValueSource(item.sources?.price) === "auto"
+                ? { mode: "auto", sources: ["composition"] } : { mode: "manual", sources: [] };
+              updates.push("pricing_config_json=?");
+              params.push(JSON.stringify(config));
+            }
             updates.push("old_price=?");
             params.push(totals.old_price != null && totals.old_price > totals.price ? totals.old_price : null);
           }
@@ -2413,10 +2436,16 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           updates.push("client_composition=?");
           params.push(compositionItems.join(", "));
         }
+        if (fields.nutrition) {
+          const status = await getProductNutritionStatus(tenantId, item.product_id);
+          const nutrition = status.nutrition_per_100g;
+          updates.push("nutrition_protein_100g=?", "nutrition_fat_100g=?", "nutrition_carbs_100g=?");
+          params.push(nutrition.protein, nutrition.fat, nutrition.carbs);
+        }
         if (updates.length) {
           params.push(tenantId, item.product_id);
           await db.query(
-            `UPDATE prod_products SET ${updates.join(", ")} WHERE tenant_id=? AND id=?`,
+            `UPDATE prod_products SET ${updates.join(", ")}, updated_at=CURRENT_TIMESTAMP WHERE tenant_id=? AND id=?`,
             params
           );
         }
@@ -2427,7 +2456,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const updatedRows = updatedIds.length
         ? await db.query(
             `SELECT id, name, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, margin_percent, price_source, cost_price_source,
-                    client_composition, base_qty, base_qty_source, photos_json, is_active, site_visibility, fulfillment_mode
+                    client_composition, base_qty, base_qty_source, photos_json, is_active, site_visibility, fulfillment_mode,
+                    pricing_config_json, nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, updated_at
              FROM prod_products
              WHERE tenant_id=? AND id IN (${updatedIds.map(() => "?").join(",")})`,
             [tenantId, ...updatedIds]
@@ -2458,17 +2488,27 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         ids.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
       ));
       const items = [];
-      for (const productId of productIds) {
-        const totals = await calculateProductCompositionTotals(tenantId, productId);
-        items.push({
-          product_id: productId,
-          calculated: {
-            cost_price: totals?.cost_price ?? null,
-            price: totals?.price ?? null,
-            old_price: totals?.old_price ?? null,
-            margin_percent: totals?.margin_percent ?? null,
-          },
-        });
+      for (let offset = 0; offset < productIds.length; offset += 8) {
+        const batch = await Promise.all(productIds.slice(offset, offset + 8).map(async productId => {
+          if (req.body.details_only === true) {
+            const [nutrition, composition] = await Promise.all([
+              getProductNutritionStatus(tenantId, productId),
+              collectGeneratedCompositionItems(tenantId, productId),
+            ]);
+            return { product_id: productId, details: { nutrition: nutrition.nutrition_per_100g, composition: composition.join(", ") } };
+          }
+          const totals = await calculateProductCompositionTotals(tenantId, productId);
+          return {
+            product_id: productId,
+            calculated: {
+              cost_price: totals?.cost_price ?? null,
+              price: totals?.price ?? null,
+              old_price: totals?.old_price ?? null,
+              margin_percent: totals?.margin_percent ?? null,
+            },
+          };
+        }));
+        items.push(...batch);
       }
       res.json({ ok: true, items });
     } catch (e) {
@@ -2501,12 +2541,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const [rows] = await db.query(
         `SELECT p.id, p.name, p.sku, p.description_short, p.description, p.price, p.old_price,
                 p.promo_enabled, p.promo_title, p.promo_discount_percent, p.cost_price,
-                p.unit_id, p.base_unit_id, p.base_qty, p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent, p.photos_json, p.blocks_config_json, p.is_active, p.site_visibility,
+                p.unit_id, p.base_unit_id, p.base_qty, p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent, p.photos_json, p.blocks_config_json, p.pricing_config_json, p.is_active, p.site_visibility,
                 p.fulfillment_mode, p.sale_mode, p.preorder_settings_json,
                 p.production_zone_id,
                 p.nutrition_protein_100g, p.nutrition_fat_100g, p.nutrition_carbs_100g,
                 p.client_composition, p.tech_process,
                 p.show_description_short, p.show_description, p.show_client_composition, p.show_tech_process,
+                EXISTS (SELECT 1 FROM prod_product_ingredients child_recipe
+                  WHERE child_recipe.tenant_id=p.tenant_id AND child_recipe.product_id=p.id) AS has_composition,
                 s.qty AS stock_qty
          FROM prod_products p
          LEFT JOIN prod_product_stocks s ON s.tenant_id=p.tenant_id AND s.store_id=? AND s.product_id=p.id
@@ -2650,7 +2692,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         p.price, p.old_price, p.promo_enabled, p.promo_title, p.promo_discount_percent, p.cost_price,
         p.price_source, p.cost_price_source, p.base_qty_source, p.margin_percent,
         p.unit_id, p.base_unit_id, p.base_qty,
-        p.photos_json, p.blocks_config_json,
+        p.photos_json, p.blocks_config_json, p.pricing_config_json,
         p.is_active, p.site_visibility,
         p.fulfillment_mode, p.sale_mode, p.preorder_settings_json,
         p.production_zone_id,
@@ -2866,8 +2908,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const promo_discount_percent = normalizePromoDiscountPercent(req.body.promo_discount_percent);
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const margin_percent = helpers.numOrNull(req.body.margin_percent);
-      const price_source = normalizeProductValueSource(req.body.price_source);
-      const cost_price_source = normalizeProductValueSource(req.body.cost_price_source);
+      const hasPricingConfig = Object.prototype.hasOwnProperty.call(req.body, "pricing_config_json");
+      const pricingConfig = hasPricingConfig ? normalizeProductPricingConfig(req.body.pricing_config_json) : null;
+      if (hasPricingConfig && !pricingConfig) return res.status(400).json({ ok: false, error: "BAD_PRODUCT_PRICING_CONFIG" });
+      const pricingConfigJson = pricingConfig ? JSON.stringify(pricingConfig) : null;
+      const price_source = pricingConfig?.mode ?? normalizeProductValueSource(req.body.price_source);
+      const cost_price_source = pricingConfig?.mode ?? normalizeProductValueSource(req.body.cost_price_source);
       const base_qty_source = normalizeProductValueSource(req.body.base_qty_source);
       const unit_id = helpers.numOrNull(req.body.unit_id);
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
@@ -2900,13 +2946,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
       const [result] = await db.query(
         `INSERT INTO prod_products
-          (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, is_active, site_visibility,
+          (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, pricing_config_json, is_active, site_visibility,
            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
            show_description_short, show_description, show_client_composition, show_tech_process, sale_mode, preorder_settings_json)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           tenantId, name, sku, description_short, description,
-          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
+          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, pricingConfigJson,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process, preorder.mode, preorder.settings == null ? null : JSON.stringify(preorder.settings)
@@ -2960,8 +3006,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const promo_discount_percent = normalizePromoDiscountPercent(req.body.promo_discount_percent);
       const cost_price = helpers.numOrNull(req.body.cost_price);
       const margin_percent = helpers.numOrNull(req.body.margin_percent);
-      const price_source = normalizeProductValueSource(req.body.price_source);
-      const cost_price_source = normalizeProductValueSource(req.body.cost_price_source);
+      const hasPricingConfig = Object.prototype.hasOwnProperty.call(req.body, "pricing_config_json");
+      const pricingConfig = hasPricingConfig ? normalizeProductPricingConfig(req.body.pricing_config_json) : null;
+      if (hasPricingConfig && !pricingConfig) return res.status(400).json({ ok: false, error: "BAD_PRODUCT_PRICING_CONFIG" });
+      const pricingConfigJson = pricingConfig ? JSON.stringify(pricingConfig) : null;
+      const price_source = pricingConfig?.mode ?? normalizeProductValueSource(req.body.price_source);
+      const cost_price_source = pricingConfig?.mode ?? normalizeProductValueSource(req.body.cost_price_source);
       const base_qty_source = normalizeProductValueSource(req.body.base_qty_source);
       const unit_id = helpers.numOrNull(req.body.unit_id);
       const base_unit_id = helpers.numOrNull(req.body.base_unit_id);
@@ -3016,13 +3066,13 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       await db.query(
         `UPDATE prod_products
-         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, production_zone_id=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), is_active=?, site_visibility=?,
+         SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, production_zone_id=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), pricing_config_json=COALESCE(?, pricing_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
              show_description_short=?, show_description=?, show_client_composition=?, show_tech_process=?, sale_mode=?, preorder_settings_json=?, updated_at=CURRENT_TIMESTAMP
          WHERE tenant_id=? AND id=?`,
         [
           name, sku, description_short, description,
-          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json,
+          price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, pricingConfigJson,
           is_active, site_visibility,
           nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
           show_description_short, show_description, show_client_composition, show_tech_process, preorder.mode, preorder.settings == null ? null : JSON.stringify(preorder.settings),
@@ -3050,7 +3100,16 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       if (removedPhotos.length) deletePhotoFiles(removedPhotos);
 
-      const dependent_recalc = { items: await buildDependentProductsPreview(tenantId, id) };
+      let dependent_recalc;
+      if (req.body.defer_dependent_recalc === true) {
+        const [[dependent]] = req.body.check_dependent_recalc === true ? await db.query(
+          "SELECT 1 AS has_items FROM prod_product_ingredients WHERE tenant_id=? AND ingredient_id=? LIMIT 1",
+          [tenantId, id]
+        ) : [[]];
+        dependent_recalc = { has_items: Boolean(dependent?.has_items) };
+      } else {
+        dependent_recalc = { items: await buildDependentProductsPreview(tenantId, id) };
+      }
       res.json({ ok: true, dependent_recalc });
     } catch (e) {
       console.error(e);
@@ -3450,7 +3509,9 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
                 p.name AS product_name,
                 p.price AS product_price,
                 p.photos_json AS product_photos_json,
-                p.blocks_config_json AS product_blocks_config_json
+                p.blocks_config_json AS product_blocks_config_json,
+                EXISTS (SELECT 1 FROM prod_product_ingredients child_recipe
+                  WHERE child_recipe.tenant_id=p.tenant_id AND child_recipe.product_id=p.id) AS product_has_composition
         FROM prod_option_items i
         JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.target_product_id
         WHERE i.tenant_id=? AND i.group_id=? AND i.target_type='product'
@@ -3481,7 +3542,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
         const [variantRows] = await db.query(
           `SELECT va.product_id, va.variant_group_id, va.default_value_index AS assignment_default_value_index,
                   vg.title, vg.\`values\` AS variant_values, vg.default_value_index AS group_default_value_index,
-                  u.short_title AS unit_short_title
+                  u.short_title AS unit_short_title, vg.unit_id
            FROM prod_variant_assignments va
            JOIN prod_variant_groups vg ON vg.tenant_id=va.tenant_id AND vg.id=va.variant_group_id
            LEFT JOIN prod_units u ON u.tenant_id=vg.tenant_id AND u.id=vg.unit_id
@@ -3496,6 +3557,7 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
           itemVariantMap.get(productId).push({
             group_id: Number(row.variant_group_id),
             title: row.title,
+            unit_id: row.unit_id == null ? null : Number(row.unit_id),
             values: helpers.safeJsonArray(row.variant_values),
             unit_short_title: row.unit_short_title || '',
             default_value_index: row.assignment_default_value_index ?? row.group_default_value_index,
@@ -6314,17 +6376,16 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
           return res.status(400).json({ ok: false, error: 'INVALID_ITEM_IDS' });
         }
         const locked = itemSettings.filter(setting => helpers.toBool(setting.is_locked, false));
-        if (locked.length > 1 || locked.some(setting => excludedItemIds.includes(Number(setting.option_item_id)))) {
+        if (locked.some(setting => excludedItemIds.includes(Number(setting.option_item_id)))) {
           await conn.rollback();
           return res.status(400).json({ ok: false, error: 'INVALID_LOCKED_OPTION' });
         }
-        if (locked.length) itemSettings.forEach(setting => {
-          setting.default_selected = Number(setting.option_item_id) === Number(locked[0].option_item_id) ? 1 : 0;
-        });
         const settingsById = new Map(itemSettings.map((setting) => [Number(setting.option_item_id), setting]));
         const selectedCount = groupItemRows.filter((item) => {
           if (excludedItemIds.includes(Number(item.id))) return false;
-          const own = settingsById.get(Number(item.id))?.default_selected;
+          const setting = settingsById.get(Number(item.id));
+          if (helpers.toBool(setting?.is_locked, false)) return false;
+          const own = setting?.default_selected;
           return own == null ? Boolean(item.default_selected) : helpers.toBool(own, false);
         }).length;
         if ((group?.selection_type === 'single' && selectedCount > 1) ||
@@ -6993,6 +7054,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
            i.id,
            i.ingredient_id,
            i.quantity,
+           i.loss_percent,
            i.unit_id,
            i.quantity_min,
            i.quantity_max,
@@ -7001,6 +7063,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
            i.is_variable,
            i.sort_order,
            p.name AS ingredient_name,
+           EXISTS (SELECT 1 FROM prod_product_ingredients child_recipe
+                  WHERE child_recipe.tenant_id=p.tenant_id AND child_recipe.product_id=p.id) AS ingredient_has_composition,
            p.price AS ingredient_price,
            p.old_price AS ingredient_old_price,
            p.cost_price AS ingredient_cost_price,
@@ -7087,6 +7151,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       }
 
       const quantity = helpers.numOrNull(req.body.quantity) ?? 1;
+      const lossPercent = req.body.loss_percent == null ? null : Number(req.body.loss_percent);
+      if (lossPercent != null && (!Number.isFinite(lossPercent) || lossPercent < 0 || lossPercent > 100)) {
+        return res.status(400).json({ ok: false, error: 'BAD_INGREDIENT_LOSS_PERCENT' });
+      }
       const quantityMin = helpers.numOrNull(req.body.quantity_min);
       const quantityMax = helpers.numOrNull(req.body.quantity_max);
       const quantityStep = helpers.numOrNull(req.body.quantity_step);
@@ -7107,9 +7175,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       const [result] = await db.query(
         `INSERT INTO prod_product_ingredients
-         (tenant_id, product_id, ingredient_id, quantity, unit_id, quantity_min, quantity_max, quantity_step, price_override, is_variable, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [tenantId, productId, ingredientId, quantity, unitId, quantityMin, quantityMax, quantityStep, priceOverride, isVariable, sortOrder]
+         (tenant_id, product_id, ingredient_id, quantity, unit_id, quantity_min, quantity_max, quantity_step, price_override, is_variable, sort_order, loss_percent)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [tenantId, productId, ingredientId, quantity, unitId, quantityMin, quantityMax, quantityStep, priceOverride, isVariable, sortOrder, lossPercent ?? 0]
       );
 
       res.json({ ok: true, id: result.insertId });
@@ -7137,6 +7205,10 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
       }
 
       const quantity = helpers.numOrNull(req.body.quantity) ?? 1;
+      const lossPercent = req.body.loss_percent == null ? null : Number(req.body.loss_percent);
+      if (lossPercent != null && (!Number.isFinite(lossPercent) || lossPercent < 0 || lossPercent > 100)) {
+        return res.status(400).json({ ok: false, error: 'BAD_INGREDIENT_LOSS_PERCENT' });
+      }
       const quantityMin = helpers.numOrNull(req.body.quantity_min);
       const quantityMax = helpers.numOrNull(req.body.quantity_max);
       const quantityStep = helpers.numOrNull(req.body.quantity_step);
@@ -7146,9 +7218,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
 
       await db.query(
         `UPDATE prod_product_ingredients
-         SET quantity=?, unit_id=?, quantity_min=?, quantity_max=?, quantity_step=?, price_override=?, is_variable=?, sort_order=?
+         SET quantity=?, unit_id=?, quantity_min=?, quantity_max=?, quantity_step=?, price_override=?, is_variable=?, sort_order=?, loss_percent=COALESCE(?, loss_percent)
          WHERE tenant_id=? AND product_id=? AND ingredient_id=?`,
-        [quantity, unitId, quantityMin, quantityMax, quantityStep, priceOverride, isVariable, sortOrder, tenantId, productId, ingredientId]
+        [quantity, unitId, quantityMin, quantityMax, quantityStep, priceOverride, isVariable, sortOrder, lossPercent, tenantId, productId, ingredientId]
       );
 
       res.json({ ok: true });

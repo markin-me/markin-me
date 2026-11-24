@@ -666,6 +666,86 @@
   const checkoutSettingsRequests = new Map();
   const checkoutSettingsWantedVersions = new Map();
   function checkoutSettingsScope() { return `${tenantId}:${getActiveStoreId()}:site:v1`; }
+  const storefrontCatalogScope = () => `web:v1:${checkoutSettingsScope()}:`;
+  let storefrontCatalogRevision = "0";
+  let storefrontCatalogSocketScope = "";
+  let storefrontCatalogPending = false;
+  let storefrontCatalogSyncAgain = false;
+  let storefrontCatalogReset = false;
+  let storefrontCatalogGeneration = 0;
+  const storefrontChangedProducts = new Set();
+
+  function syncStorefrontCatalogScope() {
+    const scope = storefrontCatalogScope();
+    if (storefrontCatalogSocketScope === scope) return;
+    storefrontCatalogSocketScope = scope;
+    storefrontCatalogRevision = localStorage.getItem(scope + "revision") || "0";
+    storefrontCatalogGeneration++;
+    storefrontChangedProducts.clear();
+    storefrontCatalogReset = storefrontCatalogRevision === "0";
+  }
+
+  async function storefrontPassportStorage(ids, payload = null, scope = storefrontCatalogScope(), revision = storefrontCatalogRevision) {
+    const db = await checkoutSettingsDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("catalog", payload ? "readwrite" : "readonly");
+      const store = tx.objectStore("catalog");
+      const rows = {};
+      for (const id of ids) {
+        const key = scope + "passport:" + id;
+        if (payload) {
+          if (payload[id]) store.put({ revision, ts: Date.now(), value: payload[id] }, key);
+          else store.delete(key);
+        } else {
+          const request = store.get(key);
+          request.onsuccess = () => {
+            const row = request.result;
+            if (row?.revision === revision && Date.now() - row.ts <= CATALOG_SNAPSHOT_MAX_AGE_MS) rows[id] = row.value;
+          };
+        }
+      }
+      tx.oncomplete = () => resolve(rows);
+      tx.onabort = tx.onerror = () => reject(tx.error || new Error("STOREFRONT_CATALOG_CACHE_FAILED"));
+    });
+  }
+
+  function requestStorefrontCatalogSync(socket) {
+    if (socket !== stockEventsSource || socket.readyState !== WebSocket.OPEN) return;
+    if (storefrontCatalogPending) {
+      storefrontCatalogSyncAgain = true;
+      return;
+    }
+    storefrontCatalogPending = true;
+    socket.send(JSON.stringify({ type: "catalog.sync", since: storefrontCatalogRevision }));
+  }
+
+  function applyStorefrontCatalogChanges(payload, socket) {
+    storefrontCatalogPending = false;
+    const next = String(payload.next_revision ?? storefrontCatalogRevision);
+    if (next !== storefrontCatalogRevision || payload.reset_required) storefrontCatalogGeneration++;
+    storefrontCatalogRevision = next;
+    localStorage.setItem(storefrontCatalogScope() + "revision", next);
+    storefrontCatalogReset ||= payload.reset_required === true;
+    for (const change of payload.changes || []) {
+      const id = Number(change.entity_id);
+      if (change.entity_type === "product" && id > 0) storefrontChangedProducts.add(id);
+      else if (change.entity_type !== "checkout_settings") storefrontCatalogReset = true;
+    }
+    if (payload.has_more) {
+      requestStorefrontCatalogSync(socket);
+      return;
+    }
+    const ids = [...storefrontChangedProducts];
+    const reset = storefrontCatalogReset;
+    storefrontChangedProducts.clear();
+    storefrontCatalogReset = false;
+    if (ids.length || reset) window.dispatchEvent(new CustomEvent("shop:storefront-catalog-changed", { detail: { ids, reset } }));
+    if (storefrontCatalogSyncAgain) {
+      storefrontCatalogSyncAgain = false;
+      requestStorefrontCatalogSync(socket);
+    }
+  }
+
   function checkoutSettingsDb() {
     if(checkoutSettingsDbPromise)return checkoutSettingsDbPromise;
     checkoutSettingsDbPromise=new Promise((resolve,reject)=>{
@@ -5203,7 +5283,11 @@
     product.is_available = config.is_fulfillable === true || config.is_available === true;
     product.default_variant = config.default_variant || null;
     product.catalog_default_lines = Array.isArray(config.catalog_default_lines) ? config.catalog_default_lines : [];
-    if (Number.isFinite(Number(config.display_price))) product.display_price = Number(config.display_price);
+    if (config.display_price != null && Number.isFinite(Number(config.display_price))) {
+      product.display_price = Number(config.display_price);
+      const originalPrice = Number(config.original_price);
+      product.catalog_original_price = originalPrice > product.display_price ? originalPrice : null;
+    }
     state.productCache.set(pid, product);
     // Availability must be checked against the same stock-aware ingredient
     // quantities that are rendered on the card. Keeping the configured
@@ -5547,6 +5631,10 @@
           if(isKsoCatalogCache){
             catalogSyncPending = false;
             requestKsoCatalogSync();
+          } else {
+            syncStorefrontCatalogScope();
+            storefrontCatalogPending = false;
+            requestStorefrontCatalogSync(socket);
           }
         }
         if (payload.type === "customer.ready") shopRealtimeCustomerReady = true;
@@ -5584,6 +5672,7 @@
         });
         if (isKsoCatalogCache && payload.type === 'catalog.changed') requestKsoCatalogSync();
         if (!isKsoCatalogCache && payload.type === 'catalog.changed') {
+          requestStorefrontCatalogSync(socket);
           void loadAutoAdd({ force: true }).then(() => {
             if (applyAutoAddRules()) saveCart();
             renderCart();
@@ -5592,6 +5681,7 @@
         if (isKsoCatalogCache && payload.type === 'catalog.changes') {
           void applyKsoCatalogChanges(payload, socket);
         }
+        if (!isKsoCatalogCache && payload.type === "catalog.changes") applyStorefrontCatalogChanges(payload, socket);
         if (payload.type === "stock.changed" && !isKsoCatalogCache) void applyStockChangedEvent(payload);
         if (payload.type === "stock.resync") {
           if (isKsoCatalogCache) { requestKsoCatalogSync(); return; }
@@ -8546,6 +8636,7 @@
   }
 
   function formatIngredientLineForOrder() {
+    if (document.body?.matches(".page-shop:not(.page-kso)")) return "";
     return getSharedShopProductRuntime().formatIngredientLineForOrder(...arguments);
   }
 
@@ -8799,6 +8890,7 @@
     if (current && effectiveConfig?.is_fulfillable != null &&
         (stockSource === "product_passport_batch" || stockSource === "passport_background_refresh")) {
       merged.display_price = current.display_price;
+      merged.catalog_original_price = current.catalog_original_price;
       merged.catalog_default_lines = current.catalog_default_lines;
       merged.default_variant = current.default_variant;
     }
@@ -8856,7 +8948,7 @@
       entry.product = mergedProduct;
       entry.updated_at = mergedProduct.updated_at || mergedProduct.updatedAt || entry.updated_at || null;
     }
-    ["ingredients", "variants", "optionAssignments", "optionGroups", "defaultConfig"].forEach((key) => {
+    ["ingredients", "nestedIngredients", "variants", "optionAssignments", "optionGroups", "defaultConfig"].forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         entry[key] = clonePassportValue(patch[key]);
       }

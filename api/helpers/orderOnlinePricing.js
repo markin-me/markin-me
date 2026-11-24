@@ -10,6 +10,13 @@ function applyProductPromoPricing(product, current, original, roundPrice = value
 }
 
 // Resolve selectable catalog configuration on the server, then let the existing Order calculator apply benefits/delivery.
+function usesProductPriceSource(product, source) {
+  const raw = product?.pricing_config_json;
+  const config = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (config?.mode === "manual") return false;
+  return config?.mode !== "auto" || !Array.isArray(config.sources) || config.sources.includes(source);
+}
+
 async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,roundPrice,variantPrice,conversion,availability}) {
   const prices=new Map(),products=new Map(),giftQuantities=new Map();
   const fail=()=>{const error=new Error("BAD_ITEMS");error.code="BAD_ITEMS";error.status=422;throw error;};
@@ -33,8 +40,10 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       const [excluded]=await db.query("SELECT value_index FROM prod_variant_value_exclusions WHERE tenant_id=? AND product_id=? AND variant_group_id=? AND value_index=?",[tenantId,id,group.id,index]);
       if(excluded.length)fail();
       const [tiers]=await db.query("SELECT * FROM prod_variant_discount_tiers WHERE tenant_id=? AND variant_group_id=? ORDER BY sort_order",[tenantId,group.id]);
-      price=await variantPrice(p,{...group,values,default_value_index:index,discount_tiers:tiers},conversion,roundPrice);
-      originalPrice=await variantPrice({...p,price:originalPrice},{...group,values,default_value_index:index,discount_tiers:[]},conversion,roundPrice);
+      if (usesProductPriceSource(p, "variants")) {
+        price=await variantPrice(p,{...group,values,default_value_index:index,discount_tiers:tiers},conversion,roundPrice);
+        originalPrice=await variantPrice({...p,price:originalPrice},{...group,values,default_value_index:index,discount_tiers:[]},conversion,roundPrice);
+      }
     }
     const requested=selection.ingredients_display || selection.ingredients;
     if(Array.isArray(requested) && requested.length) {
@@ -49,9 +58,9 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
           || (row.quantity_min!=null && qty<Number(row.quantity_min)) || (row.quantity_max!=null && qty>Number(row.quantity_max)))fail();
         const factor=await conversion(row.unit_id,row.ingredient_base_unit_id);if(factor==null && qty!==base)fail();
         const perUnit=row.price_override!=null?Number(row.price_override):Number(row.ingredient_price || 0)/Number(row.ingredient_base_qty || 1);
-        price+=perUnit*(qty-base)*(factor ?? 1);
+        if (usesProductPriceSource(p, "composition")) price+=perUnit*(qty-base)*(factor ?? 1);
         const originalPerUnit=row.price_override!=null?Number(row.price_override):Math.max(Number(row.ingredient_price || 0),Number(row.ingredient_old_price || 0))/Number(row.ingredient_base_qty || 1);
-        originalPrice+=originalPerUnit*(qty-base)*(factor ?? 1);
+        if (usesProductPriceSource(p, "composition")) originalPrice+=originalPerUnit*(qty-base)*(factor ?? 1);
       }
     }
     const optionSelections=Array.isArray(selection.option_items)?selection.option_items:[];
@@ -63,7 +72,7 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         AND a.assign_type='product' AND a.assign_id=s.product_id AND a.is_active=1
       JOIN prod_option_groups g ON g.tenant_id=s.tenant_id AND g.id=s.group_id AND g.is_active=1
       WHERE s.tenant_id=? AND s.product_id=? AND s.is_locked=1`, [tenantId,id]);
-    const lockedByGroup = new Map(lockedRows.map(row => [Number(row.group_id), Number(row.option_item_id)]));
+    const lockedIds = new Set(lockedRows.map(row => Number(row.option_item_id)));
     if (lockedRows.some(row => !options.has(Number(row.option_item_id)))) fail();
     const groupCounts=new Map();
     for(const [optionId,value] of options){
@@ -73,11 +82,11 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         LEFT JOIN prod_option_item_product_settings s ON s.tenant_id=oi.tenant_id AND s.option_item_id=oi.id AND s.product_id=oa.assign_id AND s.group_id=oi.group_id
         WHERE oi.tenant_id=? AND oi.id=? AND oi.is_active=1 AND oa.assign_type='product' AND oa.assign_id=?`,[tenantId,optionId,id]);
       if(!rows.length)fail();const option=rows[0];let optionPrice=Number(option.price_value || 0), originalOptionPrice=optionPrice;
-      if (lockedByGroup.has(Number(option.group_id)) && lockedByGroup.get(Number(option.group_id)) !== optionId) fail();
-      groupCounts.set(Number(option.group_id),(groupCounts.get(Number(option.group_id)) || 0)+1);
+      if (!lockedIds.has(optionId)) groupCounts.set(Number(option.group_id),(groupCounts.get(Number(option.group_id)) || 0)+1);
       const [excluded]=await db.query("SELECT id FROM prod_option_item_exclusions WHERE tenant_id=? AND product_id=? AND group_id=? AND option_item_id=? LIMIT 1",[tenantId,id,option.group_id,optionId]);
       if(excluded.length)fail();
       const optionQty=quantity(value.qty ?? value.quantity);
+      if (lockedIds.has(optionId) && optionQty !== Math.max(1, Number(option.qty_min || 1))) fail();
       if(optionQty<Number(option.qty_min || 0) || optionQty>Number(option.qty_max))fail();
       let targetId=option.target_product_id;
       if(option.target_type==='category_pick'){
@@ -101,8 +110,10 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         else fail();
         originalOptionPrice=option.price_mode==='fixed'?Math.max(optionPrice,Number(option.price_value || 0)):selectedPricing.originalPrice+(option.price_mode==='delta'?Number(option.price_value || 0):0);
       } else if(option.price_mode!=='fixed')fail();
-      price+=optionPrice*optionQty;
-      originalPrice+=Math.max(optionPrice,originalOptionPrice)*optionQty;
+      if (usesProductPriceSource(p, "options")) {
+        price+=optionPrice*optionQty;
+        originalPrice+=Math.max(optionPrice,originalOptionPrice)*optionQty;
+      }
     }
     if(blocks?.options || options.size) {
       const [groups]=await db.query(`SELECT g.id,g.is_required,COALESCE(a.min_select,g.min_select) AS minimum,
@@ -110,7 +121,6 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         FROM prod_option_assignments a JOIN prod_option_groups g ON g.tenant_id=a.tenant_id AND g.id=a.group_id AND g.is_active=1
         WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.is_active=1`,[tenantId,id]);
       for(const group of groups){const count=groupCounts.get(Number(group.id)) || 0;
-        if (lockedByGroup.has(Number(group.id))) { if (count !== 1) fail(); continue; }
         const minimum=Math.max(Number(group.minimum || 0),Number(group.is_required)===1?1:0);
         if(count<minimum || (group.selection_type==='single' && count>1) || (group.maximum!=null && count>Number(group.maximum)))fail();}
     }
@@ -367,7 +377,7 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
         AND a.assign_type='product' AND a.assign_id=s.product_id AND a.is_active=1
       JOIN prod_option_groups g ON g.tenant_id=s.tenant_id AND g.id=s.group_id AND g.is_active=1
       WHERE s.tenant_id=? AND s.product_id=? AND s.is_locked=1`, [tenantId,productId]);
-    const lockedByGroup = new Map(lockedRows.map(row => [Number(row.group_id), Number(row.option_item_id)]));
+    const lockedIds = new Set(lockedRows.map(row => Number(row.option_item_id)));
     const selectedIds = new Set(), counts = new Map();
     for (const value of configuration.option_items) {
       const id = Number(value.id), qty = Number(value.qty ?? value.quantity ?? 1);
@@ -383,8 +393,8 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
           AND NOT EXISTS (SELECT 1 FROM prod_option_item_exclusions e WHERE e.tenant_id=oi.tenant_id
             AND e.product_id=? AND e.group_id=oi.group_id AND e.option_item_id=oi.id)`, [tenantId, id, productId, productId]);
       const option = options[0];
-      if (option && lockedByGroup.has(Number(option.group_id)) && lockedByGroup.get(Number(option.group_id)) !== id) fail();
       if (!option || qty < Number(option.qty_min ?? 1) || qty > Number(option.qty_max ?? 1)) fail();
+      if (lockedIds.has(id) && qty !== Math.max(1, Number(option.qty_min || 1))) fail();
       const fixed = typeof option.configuration_json === 'string' ? JSON.parse(option.configuration_json) : option.configuration_json;
       const selected = await normalizeProductConfiguration(conn, tenantId, Number(option.target_product_id), {
         variant_group_id: value.variant_group_id ?? fixed?.variant_group_id ?? option.default_variant_group_id ?? null,
@@ -395,7 +405,7 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
         title: option.product_name, name: option.product_name, target_product_id: Number(option.target_product_id),
         product_id: Number(option.target_product_id), ...selected,
         unit_id: selected.variant_group?.unit_id ?? null });
-      counts.set(Number(option.group_id), (counts.get(Number(option.group_id)) || 0) + 1);
+      if (!lockedIds.has(id)) counts.set(Number(option.group_id), (counts.get(Number(option.group_id)) || 0) + 1);
     }
     const [groups] = await conn.query(`SELECT g.id,g.is_required,COALESCE(a.min_select,g.min_select) AS minimum,
       COALESCE(a.max_select,g.max_select) AS maximum,COALESCE(a.selection_type,g.selection_type) AS selection_type
@@ -403,7 +413,6 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
       WHERE a.tenant_id=? AND a.assign_type='product' AND a.assign_id=? AND a.is_active=1`, [tenantId, productId]);
     if (lockedRows.some(row => !selectedIds.has(Number(row.option_item_id)))) fail();
     for (const group of groups) {
-      if (lockedByGroup.has(Number(group.id))) { if (counts.get(Number(group.id)) !== 1) fail(); continue; }
       const count = counts.get(Number(group.id)) || 0;
       if (count < Math.max(Number(group.minimum || 0), Number(group.is_required) === 1 ? 1 : 0)
         || (group.selection_type === 'single' && count > 1) || (group.maximum != null && count > Number(group.maximum))) fail();
@@ -413,4 +422,4 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
   return result;
 }
 
-module.exports={applyProductPromoPricing,buildOnlineItemPrices, autoAddDate, autoAddFreeQty, loadAutoAddRuleConfig, validateAutoAddOrder, syncAutoAddOrderUsage, normalizeProductConfiguration};
+module.exports={usesProductPriceSource,applyProductPromoPricing,buildOnlineItemPrices, autoAddDate, autoAddFreeQty, loadAutoAddRuleConfig, validateAutoAddOrder, syncAutoAddOrderUsage, normalizeProductConfiguration};

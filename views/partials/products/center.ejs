@@ -250,7 +250,6 @@
 <template id="tplProductEditor">
   <form id="productEditorForm" class="form-grid" autocomplete="off">
 
-    <!-- TOP: Фото 150x150 слева, справа основные поля -->
     <div class="product-editor-top">
       <div>
         <div class="product-photo-main" id="pePhotoMainContainer">
@@ -291,33 +290,70 @@
         </div>
       </div>
 
-      <div class="product-editor-meta">
-        <div class="field-wrap">
-          <label class="field-label" for="pe_name">Название *</label>
-          <input class="control" id="pe_name" name="name" type="text" placeholder="Например: Бургер" required />
-        </div>
-
-        <div>
-          <label class="field-label">Категории</label>
-          <div class="chips" id="peCategoryChips"></div>
-        </div>
-
-        <div class="field-wrap">
-          <label class="field-label" for="pe_sku">Артикул (SKU)</label>
-          <input class="control" id="pe_sku" name="sku" type="text" placeholder="BRG-001" />
-        </div>
-      </div>
     </div>
+
+    <section class="info-card product-editor-meta">
+      <div class="kv-label">Данные товара</div>
+      <div class="field-wrap">
+        <label class="field-label" for="pe_name">Название *</label>
+        <input class="control" id="pe_name" name="name" type="text" required />
+      </div>
+      <div>
+        <span class="field-label">Категории</span>
+        <div class="product-editor-category-links" id="peCategoryChips"></div>
+      </div>
+      <input id="pe_sku" name="sku" type="hidden" />
+      <div class="form-row-2">
+        <label class="switch">
+          <input class="switch-input" type="checkbox" name="is_active" checked />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Активен</span>
+        </label>
+
+        <label class="switch">
+          <input class="switch-input" type="checkbox" name="site_visibility" checked />
+          <span class="switch-ui" aria-hidden="true"></span>
+          <span class="switch-text">Показывать на сайте</span>
+        </label>
+      </div>
+      <details class="product-data-description" id="peDescriptionAccordion">
+        <summary>Описание <i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+        <label class="product-description-label" for="pe_desc_short">Короткое описание</label>
+        <textarea class="textarea" id="pe_desc_short" name="description_short" rows="1"></textarea>
+        <label class="product-description-label" for="pe_desc">Описание</label>
+        <textarea class="textarea" id="pe_desc" name="description" rows="1"></textarea>
+      </details>
+    </section>
 
     <div class="product-nutrition-card product-price-card" id="pePriceBlock">
       <div class="product-nutrition-head">
-        <div>
-          <div class="product-nutrition-title">Цена</div>
-          <div class="product-nutrition-subtitle" id="pePriceSourceHint">Ручной ввод</div>
+        <div class="product-price-heading">
+          <div class="kv-label">Цена</div>
+          <button class="product-nutrition-warning product-price-variant-warning hidden" id="pePriceVariantWarning" type="button">!</button>
+          <div class="product-price-source-summary" id="pePriceSourceHint">Ручной ввод</div>
         </div>
-        <div class="product-price-source-toggle" role="group" aria-label="Источник цены">
-          <button class="product-price-source-btn" id="pePriceSourceAuto" type="button" data-price-source="auto">Из состава</button>
-          <button class="product-price-source-btn" id="pePriceSourceManual" type="button" data-price-source="manual">Ручное</button>
+        <div class="product-price-config">
+          <button class="btn btn-sm product-price-config-trigger" id="pePriceConfigTrigger" type="button" aria-expanded="false" aria-controls="pePriceConfigMenu">
+            Расчёт цены <i class="fas fa-chevron-down" aria-hidden="true"></i>
+          </button>
+          <div class="product-footer-more-dropdown hidden" id="pePriceConfigMenu" role="group" aria-label="Источники цены">
+            <label class="product-footer-more-dropdown-item product-price-config-choice">
+              <span class="option-item-flag-control"><input class="product-row-select-input" type="checkbox" data-product-price-source="composition" /><span class="product-row-select-box" aria-hidden="true"></span></span>
+              <span>Из состава</span>
+            </label>
+            <label class="product-footer-more-dropdown-item product-price-config-choice">
+              <span class="option-item-flag-control"><input class="product-row-select-input" type="checkbox" data-product-price-source="variants" /><span class="product-row-select-box" aria-hidden="true"></span></span>
+              <span>Из вариантов</span>
+            </label>
+            <label class="product-footer-more-dropdown-item product-price-config-choice">
+              <span class="option-item-flag-control"><input class="product-row-select-input" type="checkbox" data-product-price-source="options" /><span class="product-row-select-box" aria-hidden="true"></span></span>
+              <span>Из опций</span>
+            </label>
+            <label class="product-footer-more-dropdown-item product-price-config-choice">
+              <span class="option-item-flag-control"><input class="product-row-select-input" type="checkbox" data-product-price-source="manual" /><span class="product-row-select-box" aria-hidden="true"></span></span>
+              <span>Ручное</span>
+            </label>
+          </div>
         </div>
       </div>
       <div class="product-price-grid">
@@ -327,7 +363,7 @@
         </div>
         <div class="field-wrap product-nutrition-field product-price-field">
           <label class="field-label" for="pe_old_price">Старая цена</label>
-          <input class="control" id="pe_old_price" name="old_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+          <input class="control" id="pe_old_price" name="old_price" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="—" />
         </div>
         <div class="field-wrap product-nutrition-field product-price-field">
           <label class="field-label" for="pe_cost_price">Себест.</label>
@@ -337,57 +373,28 @@
           <label class="field-label" for="pe_margin_percent">Маржа %</label>
           <input class="control" id="pe_margin_percent" name="margin_percent" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
         </div>
+        <div class="field-wrap product-nutrition-field product-price-field">
+          <label class="field-label" for="pe_promo_discount_percent">Скидка, %</label>
+          <input class="control" id="pe_promo_discount_percent" name="promo_discount_percent" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+        </div>
       </div>
+      <input class="hidden" id="pe_promo_enabled" name="promo_enabled" type="checkbox" />
+      <input name="promo_title" type="hidden" />
     </div>
 
-    <!-- Единицы в один ряд: Норма / Ед. изм / Остаток -->
-    <div class="form-row-3">
-      <div class="field-wrap">
-        <label class="field-label" for="pe_base_qty">Норма</label>
-        <input class="control" id="pe_base_qty" name="base_qty" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="1" />
-      </div>
-      <div class="field-wrap">
-        <label class="field-label" for="pe_base_unit_id">Ед. изм</label>
-        <select class="control hidden" id="pe_base_unit_id" name="base_unit_id">
-          <option value="">—</option>
-        </select>
-        <div id="peBaseUnitSelect"></div>
-      </div>
-      <div class="field-wrap">
-        <label class="field-label" for="pe_stock">Остаток</label>
-        <input class="control" id="pe_stock" name="stock" type="text" inputmode="decimal" autocomplete="off" data-numeric-input />
-      </div>
-    </div>
-
-    <!-- Конвертер для штучных товаров: 1 штука = X [ед.] (показывается только при Ед. изм = Штука) -->
-    <div class="form-row-pcs-converter hidden" id="pePcsToUnitWrap">
-      <div class="field-wrap">
-        <label class="field-label" for="pe_pcs_to_unit_factor">1 штука =</label>
-        <input class="control" id="pe_pcs_to_unit_factor" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
-      </div>
-      <div class="field-wrap">
-        <label class="field-label" for="pe_pcs_to_unit_id">Ед.</label>
-        <select class="control" id="pe_pcs_to_unit_id">
-          <option value="">—</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="form-row-2">
-      <label class="switch">
-        <input class="switch-input" type="checkbox" name="is_active" checked />
-        <span class="switch-ui" aria-hidden="true"></span>
-        <span class="switch-text">Активен</span>
-      </label>
-
-      <label class="switch">
-        <input class="switch-input" type="checkbox" name="site_visibility" checked />
-        <span class="switch-ui" aria-hidden="true"></span>
-        <span class="switch-text">Показывать на сайте</span>
-      </label>
-    </div>
-
-    <div class="product-fulfillment-row">
+    <details class="info-card product-accounting-card">
+      <summary>
+        <span>Учёт и производство</span>
+        <span class="field-wrap product-fulfillment-mode-field product-accounting-stock-field">
+          <label class="field-label" for="pe_stock">Остаток</label>
+          <span class="product-accounting-stock">
+            <input class="control" id="pe_stock" name="stock" type="text" inputmode="decimal" autocomplete="off" data-numeric-input aria-describedby="peStockUnit" />
+            <small id="peStockUnit"></small>
+          </span>
+        </span>
+        <i class="fas fa-chevron-down" aria-hidden="true"></i>
+      </summary>
+      <div class="product-fulfillment-row">
     <div class="field-wrap product-fulfillment-mode-field">
       <label class="field-label" for="pe_fulfillment_mode">Учёт и списание</label>
       <select class="control hidden" id="pe_fulfillment_mode" name="fulfillment_mode">
@@ -450,126 +457,28 @@
         <div class="product-preorder-weekdays"><b>Дни получения</b><div id="pePreorderWeekdays"></div><small>Не выбраны — доступны все дни недели.</small></div>
       </div>
     </section>
-
-    <div class="product-nutrition-card" id="peNutritionBlock">
-      <div class="product-nutrition-head">
-        <div>
-          <div class="product-nutrition-title">КБЖУ</div>
-          <div class="product-nutrition-subtitle">Значения на 100 г</div>
-        </div>
-        <div class="product-nutrition-actions">
-          <button class="product-nutrition-warning hidden" id="peNutritionWarning" type="button" title="КБЖУ не заполнено">!</button>
-          <div class="product-nutrition-badge">100 г</div>
-        </div>
-      </div>
-      <div class="product-nutrition-grid">
-        <div class="field-wrap product-nutrition-field">
-          <label class="field-label" for="pe_nutrition_kcal">Ккал</label>
-          <input class="control" id="pe_nutrition_kcal" type="text" inputmode="decimal" autocomplete="off" placeholder="0" readonly />
-        </div>
-        <div class="field-wrap product-nutrition-field">
-          <label class="field-label" for="pe_nutrition_protein">Белки</label>
-          <input class="control" id="pe_nutrition_protein" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
-        </div>
-        <div class="field-wrap product-nutrition-field">
-          <label class="field-label" for="pe_nutrition_fat">Жиры</label>
-          <input class="control" id="pe_nutrition_fat" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
-        </div>
-        <div class="field-wrap product-nutrition-field">
-          <label class="field-label" for="pe_nutrition_carbs">Углеводы</label>
-          <input class="control" id="pe_nutrition_carbs" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
-        </div>
-      </div>
-    </div>
-
-    <div class="info-card info-accordion" id="peDescriptionAccordion" data-product-block="description">
-      <div class="acc-item">
-        <button class="stage-item acc-trigger" type="button" data-acc-trigger>
-          <span class="stage-meta stage-text">
-            <b>Описание</b>
-          </span>
-          <span class="acc-chevron"><i class="fas fa-chevron-down"></i></span>
-        </button>
-        <div class="acc-panel" data-acc-panel>
-          <div class="acc-panel-inner">
-            <div class="product-description-field">
-              <div class="product-description-field-head">
-                <label class="product-description-label" for="pe_desc_short">Короткое описание</label>
-                <label class="product-description-switch">
-                  <input class="switch-input" id="pe_show_description_short" name="show_description_short" type="checkbox" checked />
-                  <span class="switch-ui" aria-hidden="true"></span>
-                  <span class="product-description-switch-text">Витрина</span>
-                </label>
-              </div>
-              <textarea class="textarea" id="pe_desc_short" name="description_short" rows="3"></textarea>
-            </div>
-
-            <div class="product-description-field">
-              <div class="product-description-field-head">
-                <label class="product-description-label" for="pe_desc">Описание</label>
-                <label class="product-description-switch">
-                  <input class="switch-input" id="pe_show_description" name="show_description" type="checkbox" checked />
-                  <span class="switch-ui" aria-hidden="true"></span>
-                  <span class="product-description-switch-text">Витрина</span>
-                </label>
-              </div>
-              <textarea class="textarea" id="pe_desc" name="description" rows="5"></textarea>
-            </div>
-
-            <div class="product-description-field">
-              <div class="product-description-field-head">
-                <label class="product-description-label" for="pe_client_composition">Состав</label>
-                <div class="product-description-actions">
-                  <button class="btn btn-sm" type="button" id="peGenerateCompositionBtn">Сгенерировать</button>
-                  <label class="product-description-switch">
-                    <input class="switch-input" id="pe_show_client_composition" name="show_client_composition" type="checkbox" checked />
-                    <span class="switch-ui" aria-hidden="true"></span>
-                    <span class="product-description-switch-text">Витрина</span>
-                  </label>
-                </div>
-              </div>
-              <textarea class="textarea" id="pe_client_composition" name="client_composition" rows="4"></textarea>
-            </div>
-
-            <div class="product-description-field">
-              <div class="product-description-field-head">
-                <label class="product-description-label" for="pe_tech_process">Тех процесс</label>
-                <label class="product-description-switch">
-                  <input class="switch-input" id="pe_show_tech_process" name="show_tech_process" type="checkbox" checked />
-                  <span class="switch-ui" aria-hidden="true"></span>
-                  <span class="product-description-switch-text">Витрина</span>
-                </label>
-              </div>
-              <textarea class="textarea" id="pe_tech_process" name="tech_process" rows="5"></textarea>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    </details>
 
     <div class="info-card product-options-card" id="peVariantBlock" data-product-block="variants">
-      <div class="option-section-header">
-        <div class="kv-label">Варианты товара</div>
-        <div class="option-actions">
-          <button class="btn btn-sm btn-icon" type="button" id="peVariantManageBtn" title="Добавить">
-            <i class="fas fa-plus"></i>
-          </button>
-        </div>
-      </div>
+      <button class="btn product-variant-add hidden" type="button" id="peVariantManageBtn">
+        <span>Варианты товара</span>
+        <i class="fas fa-plus" aria-hidden="true"></i>
+      </button>
       <div class="info-accordion" id="peVariantAccordion"></div>
     </div>
 
     <div class="info-card product-options-card" id="peOptionBlock" data-product-block="options">
-      <div class="option-section-header">
-        <div class="kv-label">Опции</div>
-        <div class="option-actions">
-          <button class="btn btn-sm hidden" type="button" id="peOptionOrderResetBtn" title="Вернуть общий порядок опций">Сбросить порядок</button>
-          <button class="btn btn-sm btn-icon" type="button" id="peOptionManageBtn" title="Добавить">
-            <i class="fas fa-plus"></i>
-          </button>
-        </div>
+      <div class="product-option-block-head">
+        <button class="btn product-option-toggle hidden" type="button" aria-expanded="false" aria-controls="peOptionAccordion">
+          <span>Опции</span>
+          <span class="product-option-summary-names"></span>
+          <small class="product-option-summary-more"></small>
+          <span class="product-option-toggle-label">Раскрыть</span>
+        </button>
+        <button class="btn product-option-add" type="button" id="peOptionManageBtn" aria-label="Добавить опцию"><span>Опции</span><i class="fas fa-plus" aria-hidden="true"></i></button>
       </div>
-      <div class="info-accordion" id="peOptionAccordion"></div>
+      <button class="btn btn-sm hidden" type="button" id="peOptionOrderResetBtn" title="Вернуть общий порядок опций">Сбросить порядок</button>
+      <div class="info-accordion hidden" id="peOptionAccordion"></div>
     </div>
 
     <div class="inline-backdrop hidden" id="peOptionBackdrop"></div>
@@ -593,52 +502,117 @@
     <div class="info-card product-ingredients-card" id="peIngredientBlock" data-product-block="ingredients">
       <div class="option-section-header">
         <div class="kv-label">Состав</div>
-        <div class="option-actions" style="display: flex; align-items: center; gap: 12px;">
-          <div style="position: relative;">
-            <span class="ingredient-control-label">Себест.</span>
-            <span class="chip" id="peIngredientCostTotal" style="width: 80px; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; margin-top: 0;">0 ₽</span>
+        <div class="product-composition-norm-controls">
+          <div class="field-wrap">
+            <label class="field-label" for="pe_base_unit_id">Ед. изм</label>
+            <select class="control hidden" id="pe_base_unit_id" name="base_unit_id">
+              <option value="">—</option>
+            </select>
+            <div id="peBaseUnitSelect"></div>
           </div>
-          <div style="position: relative;">
-            <span class="ingredient-control-label">Цена</span>
-            <span class="chip" id="peIngredientPriceTotal" style="width: 80px; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; margin-top: 0;">0 ₽</span>
+          <div class="field-wrap product-composition-norm-field">
+            <label class="field-label" for="pe_base_qty">Норма</label>
+            <input class="control" id="pe_base_qty" name="base_qty" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="1" />
+            <button class="btn btn-icon product-composition-norm-recalc hidden" type="button" data-composition-norm-recalc="pe_base_qty" aria-label="Пересчитать состав" title="Пересчитать состав" aria-expanded="false" aria-controls="peCompositionNormMenu">
+              <i class="fas fa-sync-alt" aria-hidden="true"></i>
+            </button>
           </div>
-          <div style="position: relative;">
-            <span class="ingredient-control-label">Вес</span>
-            <span class="chip" id="peIngredientWeightTotal" style="width: 80px; height: 34px; padding: 0 10px; border-radius: 8px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; margin-top: 0;">—</span>
+          <div class="form-row-pcs-converter hidden" id="pePcsToUnitWrap">
+            <div class="field-wrap product-composition-norm-field">
+              <label class="field-label" for="pe_pcs_to_unit_factor">1 штука =</label>
+              <input class="control" id="pe_pcs_to_unit_factor" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+              <button class="btn btn-icon product-composition-norm-recalc hidden" type="button" data-composition-norm-recalc="pe_pcs_to_unit_factor" aria-label="Пересчитать состав" title="Пересчитать состав" aria-expanded="false" aria-controls="peCompositionNormMenu">
+                <i class="fas fa-sync-alt" aria-hidden="true"></i>
+              </button>
+            </div>
+            <select class="hidden" id="pe_pcs_to_unit_id" aria-hidden="true" tabindex="-1">
+              <option value="">—</option>
+            </select>
+            <button type="button" class="ingredient-unit-switch product-composition-piece-unit" id="pePcsWeightUnitToggle" title="Сменить единицу веса" aria-label="Сменить единицу веса">г</button>
           </div>
-          <button class="btn btn-sm btn-icon" type="button" id="peIngredientAddBtn" title="Добавить">
-            <i class="fas fa-plus"></i>
-          </button>
         </div>
+        <button class="product-composition-toggle" id="peCompositionToggle" type="button" aria-expanded="false" aria-controls="peCompositionBody" aria-label="Раскрыть состав">
+          <i class="fas fa-chevron-down" aria-hidden="true"></i>
+        </button>
       </div>
-      <div class="info-accordion" id="peIngredientAccordion"></div>
-    </div>
-
-    <div class="info-card product-options-card" id="pePromotionsBlock" data-product-block="promotions">
-      <div class="option-section-header">
-        <div class="kv-label">Участие в акциях <button class="btn btn-icon btn-sm" type="button" id="pePromoInfo" aria-label="Как рассчитывается скидка" title="Как рассчитывается скидка"><i class="fas fa-info-circle" aria-hidden="true"></i></button></div>
-      </div>
-      <div class="product-promo-editor">
-        <label class="switch-row product-promo-switch">
-          <span class="switch switch-compact">
-            <input class="switch-input" id="pe_promo_enabled" name="promo_enabled" type="checkbox" />
-            <span class="switch-ui" aria-hidden="true"></span>
-          </span>
-          <span>Акция включена</span>
+      <div class="product-footer-more-dropdown hidden" id="peCompositionNormMenu">
+        <label class="product-footer-more-dropdown-item product-composition-norm-auto">
+          <span class="option-item-flag-control"><input class="product-row-select-input" id="peCompositionNormAuto" type="checkbox" /><span class="product-row-select-box" aria-hidden="true"></span></span>
+          <span>Автоматически из состава</span>
         </label>
-        <div class="form-row-2">
-          <div class="field-wrap">
-            <label class="field-label" for="pe_promo_title">Название скидки</label>
-            <input class="control" id="pe_promo_title" name="promo_title" type="text" autocomplete="off" placeholder="Например, скидка на гарнир" />
+        <div class="product-footer-more-dropdown-sep" role="separator"></div>
+        <div class="product-composition-norm-question">Что пересчитать?</div>
+        <button class="product-footer-more-dropdown-item" type="button" data-composition-recalc-mode="loss">Пересчитать потери</button>
+        <button class="product-footer-more-dropdown-item" type="button" data-composition-recalc-mode="recipe">Пересчитать техкарту</button>
+        <button class="product-footer-more-dropdown-item" type="button" data-composition-recalc-mode="cancel">Отмена</button>
+      </div>
+      <div class="hidden" id="peCompositionBody">
+      <div class="product-ingredient-table">
+        <div class="product-ingredient-row product-ingredient-table-head" id="peIngredientSearch">
+          <button class="btn btn-sm btn-icon product-ingredient-search-toggle hidden" id="peIngredientSearchToggle" type="button" title="Поиск товара" aria-label="Поиск товара" aria-expanded="false" aria-controls="peIngredientSearchInput peIngredientSearchResults"><i class="fas fa-search" aria-hidden="true"></i></button>
+          <span class="product-ingredient-column-name" title="Наименование ингредиента">Наименование</span><span class="product-ingredient-money" title="Себестоимость">Себест.</span><span class="product-ingredient-money" title="Цена">Цена</span><span class="product-ingredient-centered" title="Затраченное количество">Затрачено</span><span class="product-ingredient-centered" title="Процент потерь" aria-label="Процент потерь">%</span><span class="product-ingredient-centered product-ingredient-output" title="Количество на выходе">Выход</span>
+          <input class="control product-ingredient-search-input hidden" type="search" id="peIngredientSearchInput" placeholder="Поиск по названию" aria-label="Поиск товара для состава" autocomplete="off" aria-controls="peIngredientSearchResults" />
+          <button class="btn btn-sm btn-icon product-ingredient-search-toggle product-ingredient-add hidden" type="button" id="peIngredientAddBtn" title="Добавить из каталога" aria-label="Добавить из каталога"><i class="fas fa-plus" aria-hidden="true"></i></button>
+          <div id="peIngredientSearchResults" class="product-ingredient-results hidden" aria-live="polite"></div>
+        </div>
+        <div class="info-accordion" id="peIngredientAccordion"></div>
+        <div class="info-accordion" id="peOptionCompositionRows"></div>
+        <div class="product-ingredient-row product-ingredient-totals">
+          <span class="product-ingredient-total-label">Итого</span>
+          <span class="product-ingredient-number product-ingredient-money" id="peIngredientCostTotal">0 ₽</span>
+          <span class="product-ingredient-number product-ingredient-money" id="peIngredientPriceTotal">0 ₽</span>
+          <span class="product-ingredient-number product-ingredient-centered" id="peIngredientGrossTotal">—</span>
+          <span class="product-ingredient-quantity product-ingredient-total-loss">
+            <input class="control" id="peIngredientLossTotal" type="number" min="0" max="100" step="any" placeholder="—" aria-label="Итоговый процент потерь" disabled />
+            <small>%</small>
+          </span>
+          <span class="product-ingredient-quantity product-ingredient-total-output">
+            <input class="control" id="peIngredientWeightTotal" type="number" min="0" step="any" placeholder="—" aria-label="Итоговый выход" disabled />
+            <small id="peIngredientWeightTotalUnit"></small>
+          </span>
+        </div>
+      </div>
+      <div class="product-nutrition-inline" id="peNutritionBlock">
+        <div class="product-nutrition-head">
+          <span>КБЖУ</span>
+          <button class="product-nutrition-warning hidden" id="peNutritionWarning" type="button" title="КБЖУ не заполнено">!</button>
+          <button class="product-nutrition-badge" type="button" id="peNutritionMode" aria-label="100 г. Переключить на порцию">100 г</button>
+        </div>
+        <div class="product-nutrition-grid">
+          <div class="field-wrap product-nutrition-field">
+            <label class="field-label" for="pe_nutrition_kcal">Ккал</label>
+            <input class="control" id="pe_nutrition_kcal" type="text" inputmode="decimal" autocomplete="off" placeholder="0" readonly />
           </div>
-          <div class="field-wrap">
-            <label class="field-label" for="pe_promo_discount_percent">Скидка %</label>
-            <input class="control" id="pe_promo_discount_percent" name="promo_discount_percent" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+          <div class="field-wrap product-nutrition-field">
+            <label class="field-label" for="pe_nutrition_protein">Белки</label>
+            <input class="control" id="pe_nutrition_protein" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+          </div>
+          <div class="field-wrap product-nutrition-field">
+            <label class="field-label" for="pe_nutrition_fat">Жиры</label>
+            <input class="control" id="pe_nutrition_fat" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
+          </div>
+          <div class="field-wrap product-nutrition-field">
+            <label class="field-label" for="pe_nutrition_carbs">Углеводы</label>
+            <input class="control" id="pe_nutrition_carbs" type="text" inputmode="decimal" autocomplete="off" data-numeric-input placeholder="0" />
           </div>
         </div>
       </div>
-      <div class="info-accordion" id="peDiscountAccordion"></div>
-      <div class="empty-hint hidden" id="peDiscountEmpty">Товар не участвует в акциях</div>
+      <details class="product-ingredient-text">
+        <summary>Техпроцесс <i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+        <textarea class="textarea" id="pe_tech_process" name="tech_process" rows="1" aria-label="Техпроцесс"></textarea>
+      </details>
+      <div class="product-client-composition">
+        <details class="product-ingredient-text">
+          <summary>
+            <span>Состав</span>
+            <button class="btn btn-sm" type="button" id="peGenerateCompositionBtn">Сгенерировать</button>
+            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+          </summary>
+          <input type="hidden" id="pe_client_composition" name="client_composition" />
+          <div class="textarea product-client-composition-editor" id="peClientCompositionEditor" role="textbox" aria-multiline="true" aria-label="Состав для витрины"></div>
+        </details>
+      </div>
+      </div>
     </div>
 
     <div class="inline-backdrop hidden" id="peIngredientBackdrop"></div>

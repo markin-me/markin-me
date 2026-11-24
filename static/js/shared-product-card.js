@@ -352,24 +352,16 @@ function catalogMoneyNoKopeks(value) {
   }
 
 function catalogCenterHtml(product, qty, calculatedPrice = null, cartAggregate = null) {
-    const old = Number(product.old_price || 0);
-    let price = calculatedPrice != null
-      ? calculatedPrice
-      : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
-    const scaledOld = runtime.scaleProductBasePriceForCurrentUnit(product, price, old);
-    let showOld = scaledOld > 0 && scaledOld > price;
-
-    // Обработка скидок из API (бейдж теперь на картинке, здесь только цена)
-    if (product.discount && product.discount.discount_amount > 0) {
-      const originalPrice = Number(product.original_price || price);
-      const discountedPrice = Number(product.discounted_price || price);
-      
-      // Отображаем старую цену зачёркнутой
-      if (!showOld && originalPrice > discountedPrice) {
-        showOld = true;
-        price = discountedPrice;
-      }
-    }
+    const catalogOriginal = product.catalog_original_price;
+    const baseDisplayPrice = catalogOriginal != null ? product.display_price : calculatedPrice;
+    const calculated = baseDisplayPrice ?? product.display_price ?? product.price ?? 0;
+    const hasMarketingDiscount = Number(product.discount?.discount_amount) > 0 && product.discounted_price != null;
+    const price = hasMarketingDiscount ? Number(product.discounted_price) : Number(calculated);
+    const original = hasMarketingDiscount ? product.original_price : catalogOriginal;
+    const oldPrice = original != null
+      ? Number(original)
+      : runtime.scaleProductBasePriceForCurrentUnit(product, price, Number(product.old_price || 0));
+    const showOld = runtime.roundPrice(oldPrice) > runtime.roundPrice(price);
 
     if (qty > 0) {
       const aggregate = cartAggregate && typeof cartAggregate === "object"
@@ -387,7 +379,6 @@ function catalogCenterHtml(product, qty, calculatedPrice = null, cartAggregate =
       return `<span class="sp-cart-total${totalClass}">${runtime.escapeHtml(totalText)}</span>`;
     }
     if (showOld) {
-      const oldPrice = product.discount ? Number(product.original_price) : scaledOld;
       return `<span class="sp-price-stack"><span class="sp-old-price">${runtime.catalogMoneyNoKopeks(oldPrice)} ₽</span><span class="sp-current-price">${runtime.catalogMoneyNoKopeks(price)} ₽</span></span>`;
     }
     return `<span class="sp-current-price">${runtime.catalogMoneyNoKopeks(price)} ₽</span>`;
@@ -425,12 +416,12 @@ function getCatalogProductDiscountBadge(product, calculatedPrice = null) {
       return runtime.formatCatalogDiscountBadgeAmount(apiDiscountAmount);
     }
 
-    const currentPriceRaw = calculatedPrice != null
-      ? Number(calculatedPrice)
-      : (product.display_price != null ? Number(product.display_price) : Number(product.price || 0));
+    const catalogOriginal = product.catalog_original_price;
+    const currentPriceRaw = Number((catalogOriginal != null ? product.display_price : calculatedPrice)
+      ?? product.display_price ?? product.price ?? 0);
     const currentPrice = runtime.roundPrice(Number.isFinite(currentPriceRaw) ? currentPriceRaw : 0);
-    const originalPriceRaw = product.original_price != null
-      ? Number(product.original_price)
+    const originalPriceRaw = catalogOriginal != null
+      ? Number(catalogOriginal)
       : runtime.scaleProductBasePriceForCurrentUnit(product, currentPrice, Number(product.old_price || 0));
     const originalPrice = runtime.roundPrice(Number.isFinite(originalPriceRaw) ? originalPriceRaw : 0);
     if (!(originalPrice > currentPrice && currentPrice >= 0)) return "";
