@@ -466,7 +466,7 @@
   const CHECKOUT_DRAFT_KEY = `shop_checkout_draft_t${tenantId}`;
   const ADDRESS_DRAFT_KEY = `shop_address_draft_t${tenantId}`;
   const AUTO_ADD_DISMISSED_KEY = `shop_auto_add_dismissed_t${tenantId}_s${getActiveStoreId()}`;
-  const CATALOG_SNAPSHOT_VERSION = document.body.classList.contains('page-kso') ? 2 : 3;
+  const CATALOG_SNAPSHOT_VERSION = document.body.classList.contains('page-kso') ? 2 : 4;
   const isKsoCatalogCache = document.body.classList.contains('page-kso');
   const CATALOG_SNAPSHOT_MAX_AGE_MS = (isKsoCatalogCache ? 7 * 24 : 6) * 60 * 60 * 1000;
   const CATALOG_SNAPSHOT_KEY = `shop_catalog_snapshot_v${CATALOG_SNAPSHOT_VERSION}_t${tenantId}_s${getActiveStoreId()}`;
@@ -7237,12 +7237,13 @@
         rule.current_free_limit = null;
         if (isNewRule) rule.current_free_limit = Math.min(window.SharedProductRuntime.autoAddFreeQty(rule, baseTotal), freeBudget,
           item?.auto_add_customer_qty == null ? Infinity : Math.max(0, Number(item.auto_add_customer_qty)));
-        const desired = isNewRule
+        const paidDesired = isNewRule ? window.SharedProductRuntime.autoAddDesiredQty(rule, baseTotal, Number(item?.qty || 0)) : null;
+        const desired = paidDesired ?? (isNewRule
           ? (Number(group.add_automatically ?? 1) === 0
             ? Math.min(rule.current_free_limit, Math.max(Number(group.first_free) === 1 ? 1 : 0, Number(item?.qty || 0)))
             : rule.current_free_limit)
-          : Math.max(minQty, defaultQty);
-        if (isNewRule) freeBudget -= desired;
+          : Math.max(minQty, defaultQty));
+        if (isNewRule && group.pricing_mode !== 'product') freeBudget -= desired;
         const keepDormantZeroQty = Number(group.allow_customer_remove) !== 0 && Number(item?.auto_add || 0) === 1 && Math.max(0, Number(item?.qty || 0)) <= 0;
 
         if (!item && desired > 0) {
@@ -7268,6 +7269,7 @@
         if (!item) return;
         if (isNewRule) {
           item.auto_add_rule_version = 1;
+          item.auto_add_pricing_mode = group.pricing_mode || 'free';
           const configuration = typeof rule.configuration_json === 'string' ? JSON.parse(rule.configuration_json) : rule.configuration_json;
           if (configuration) {
             if (item.variant_group_id !== configuration.variant_group_id || item.variant_value_index !== configuration.variant_value_index
@@ -7883,6 +7885,7 @@
         auto_add_rule_version: Number(item.auto_add_rule_version || 0),
       };
       const autoRule = Number(item.auto_add) === 1 ? getAutoRuleByProductId(pid) : null;
+      resolvedItem.auto_add_pricing_mode = autoRule?.group?.pricing_mode || item.auto_add_pricing_mode || "free";
       resolvedItem.is_unavailable = autoRule?.configuration_json ? autoRule.configuration_available !== true : isResolvedCartItemUnavailable(resolvedItem);
       if (includeUnavailable || !resolvedItem.is_unavailable) items.push(resolvedItem);
     }
@@ -8725,7 +8728,10 @@
     const element = document.createElement("details");
     element.className = "shop-packaging-accordion cart-packaging-accordion";
     const summary = document.createElement("summary");
-    summary.textContent = "\u0423\u043f\u0430\u043a\u043e\u0432\u043a\u0430";
+    const chevron = document.createElement("i");
+    chevron.className = "fas fa-chevron-right order-packaging-chevron";
+    chevron.setAttribute("aria-hidden", "true");
+    summary.append(chevron, document.createTextNode(" Упаковка"));
     const list = document.createElement("div");
     list.className = "cart-sub-details";
     element.append(summary, list);
@@ -9039,6 +9045,7 @@
       : { ...product };
     const effectiveConfig = getUpsellDefaultConfigCacheEntry(pid)?.data;
     if (current && effectiveConfig?.is_fulfillable != null &&
+        Number(effectiveConfig.variant_value_index) !== Number(product.default_variant?.variant_value_index) &&
         (stockSource === "product_passport_batch" || stockSource === "passport_background_refresh")) {
       merged.display_price = current.display_price;
       merged.catalog_original_price = current.catalog_original_price;
@@ -14689,7 +14696,8 @@ async function initAddresses() {
       const nameB = String(b?.product?.name || "");
       return nameA.localeCompare(nameB, "ru", { sensitivity: "base" });
     });
-    return normal.concat(auto);
+    return normal.concat(auto.filter(item => !window.SharedOrderItems.isPaidAutoAddItem(item)),
+      auto.filter(item => window.SharedOrderItems.isPaidAutoAddItem(item)));
   }
 
   function isFavoriteUnauthorizedError(err) {
@@ -15088,7 +15096,8 @@ async function initAddresses() {
     const bindInteractive = opts?.bindInteractive !== false;
     const activeItems = cartItemsResolved();
     const items = sortCartItemsForDisplay(cartItemsResolved(state.cart, { includeUnavailable: true }))
-      .sort((a, b) => Number(a?.is_unavailable === true) - Number(b?.is_unavailable === true));
+      .sort((a, b) => Number(window.SharedOrderItems.isPaidAutoAddItem(a)) - Number(window.SharedOrderItems.isPaidAutoAddItem(b))
+        || Number(a?.is_unavailable === true) - Number(b?.is_unavailable === true));
     const comboIdsForPrefetch = activeItems
       .filter((item) => item && item.type === "combo")
       .map((item) => Number(item.combo_id || 0))
@@ -15522,7 +15531,7 @@ async function initAddresses() {
           return;
         }
         if (isUnavailable) return;
-        if (isGiftReward || (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1)) {
+        if (isGiftReward || (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1 && group?.pricing_mode !== 'product')) {
           openProductDetails(product.id, { cartKey: key, prefillItem: item, readOnly: true,
             giftQuantity: Number(item.auto_add_rule_version) === 1 ? getAutoAddGiftQuantityContext(product.id, item.auto_add_group_id, key) : null });
           return;
@@ -15599,7 +15608,7 @@ async function initAddresses() {
       if (autoFreeQtyHint > 0) {
         optionParts.push(`Бесплатно: ${autoFreeQtyHint} шт.`);
       }
-      if (pricing.isAuto && Number(group?.rule_version) === 1) {
+      if (pricing.isAuto && Number(group?.rule_version) === 1 && group.pricing_mode !== 'product') {
         const gift = getAutoAddGiftBenefits().find(value => value.product_id === Number(product.id) && value.group_id === Number(group.id));
         if (gift?.available_qty > 0) optionParts.push(`Ещё доступно бесплатно: ${gift.available_qty} шт.`);
       }
@@ -15644,7 +15653,7 @@ async function initAddresses() {
         plusEnabled: allowQty && !plusBlockedByLimit,
       });
       syncCartRowMinusButton(btnMinus, qty);
-      if (pricing.isAuto && Number(group?.rule_version) === 1) {
+      if (pricing.isAuto && Number(group?.rule_version) === 1 && group.pricing_mode !== 'product') {
         const canDecrease = qty > 1 ? allowQty || allowRemove : allowRemove;
         btnMinus.disabled = !canDecrease;
         btnMinus.classList.toggle('is-disabled', !canDecrease);
@@ -15707,7 +15716,6 @@ async function initAddresses() {
           const currentHasDiscount = Number(currentPricing.discountAmount || 0) > 0;
           const currentShowOld =
             !isGiftReward &&
-            !currentPricing.isAuto &&
             (currentHasDiscount || (currentOldUnit > 0 && currentOldUnit > currentPricing.unitPrice));
           const currentOriginalLineTotal = isGiftReward
             ? 0
@@ -15731,7 +15739,7 @@ async function initAddresses() {
         const plusBlockedNow = !allowQty || isCartQtyPlusBlocked(key, newQty);
         btnPlus.disabled = plusBlockedNow;
         btnPlus.classList.toggle("is-disabled", plusBlockedNow);
-        const minusDisabledNow = newQty <= 0 || (pricing.isAuto && Number(group?.rule_version) === 1
+        const minusDisabledNow = newQty <= 0 || (pricing.isAuto && Number(group?.rule_version) === 1 && group.pricing_mode !== 'product'
           ? !(newQty > 1 ? allowQty || allowRemove : allowRemove) : !allowQty);
         btnMinus.disabled = minusDisabledNow;
         btnMinus.classList.toggle("is-disabled", minusDisabledNow);
@@ -15747,7 +15755,7 @@ async function initAddresses() {
       });
       btnMinus.addEventListener("click", async (e) => {
         e.stopPropagation();
-        const isAutoGift = pricing.isAuto && Number(group?.rule_version) === 1;
+        const isAutoGift = pricing.isAuto && Number(group?.rule_version) === 1 && group.pricing_mode !== 'product';
         if ((!allowQty && !(isAutoGift && allowRemove)) || btnMinus.disabled || btnMinus.classList.contains("is-disabled")) return;
         const currentQty = Number(getCartItemByKey(key)?.qty || 0);
         if (isAutoGift && currentQty <= 1) {
@@ -15770,7 +15778,7 @@ async function initAddresses() {
       });
       if (!allowQty) {
         btnPlus.disabled = true;
-        if (!(pricing.isAuto && Number(group?.rule_version) === 1 && allowRemove)) {
+        if (!(pricing.isAuto && Number(group?.rule_version) === 1 && group.pricing_mode !== 'product' && allowRemove)) {
           btnMinus.disabled = true;
           pill.classList.add("is-disabled");
         }
@@ -15781,7 +15789,7 @@ async function initAddresses() {
 
       q.appendChild(qtyControlNode);
       const hasDiscount = pricing.discountAmount > 0;
-      const showOld = !isGiftReward && !pricing.isAuto && (hasDiscount || (oldUnit > 0 && oldUnit > pricing.unitPrice));
+      const showOld = !isGiftReward && (hasDiscount || (oldUnit > 0 && oldUnit > pricing.unitPrice));
       const originalLineTotal = isGiftReward
         ? 0
         : hasDiscount
@@ -15868,7 +15876,7 @@ async function initAddresses() {
         bottomBadges.classList.add("has-preorder");
         bottomBadges.appendChild(preorderBadge);
       }
-      if (isGiftReward || (pricing.isAuto && Number(group?.rule_version) === 1)) {
+      if (isGiftReward || (pricing.isAuto && Number(group?.rule_version) === 1 && group.pricing_mode !== 'product')) {
         const giftBadge = document.createElement('span');
         giftBadge.className = 'sp-card-bogo-badge cart-bogo-badge';
         giftBadge.setAttribute('aria-label', '\u041f\u043e\u0434\u0430\u0440\u043e\u043a');

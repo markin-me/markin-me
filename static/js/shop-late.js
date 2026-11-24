@@ -378,7 +378,7 @@ function productPassportHasDetails(productId) {
 }
 
 function hasScopedProductOptionGroups(passport) {
-  return passport?.dependencies_included === true && passport?.component_assignments_included === true && passport.packaging_assignments_included === true && Array.isArray(passport?.optionGroups) && passport.optionGroups.every(group =>
+  return Object.prototype.hasOwnProperty.call(passport?.product || {}, "cost_price") && passport?.dependencies_included === true && passport?.component_assignments_included === true && passport.packaging_assignments_included === true && Array.isArray(passport?.optionGroups) && passport.optionGroups.every(group =>
     typeof group.is_packaging === "boolean" && typeof group.is_component_default === "boolean" &&
     (group.is_component === null || typeof group.is_component === "boolean") &&
     (!group.is_packaging || (typeof group.hide_packaging_price === "boolean" && group.packaging_item_count === group.items?.length)) &&
@@ -508,9 +508,6 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
     });
   if (!ids.length) return;
 
-  const existingTasks = Array.from(new Set(ids.map((id) => productPassportInflightById.get(id))
-    .filter(task => task && (opts.background || (!task.background && (ids.length !== 1 || task.productCount === 1))))));
-  if (existingTasks.length) await Promise.all(existingTasks);
   ids = ids.filter((id) => {
     if (opts.force) return true;
     const passport = typeof getProductPassport === "function" ? getProductPassport(id) : null;
@@ -519,6 +516,7 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
   });
   if (!ids.length) return;
 
+  const previousTasks = new Map(ids.map(id => [id, productPassportInflightById.get(id)]));
   const batchKey = (opts.background ? "background:" : "foreground:") + productDetailsBatchKey(ids);
   if (batchKey && productPassportBatchInflight.has(batchKey)) {
     await productPassportBatchInflight.get(batchKey);
@@ -549,7 +547,15 @@ async function preloadProductPassportsBatch(productIds, opts = {}) {
           applyProductPassportPayload(id, cached[id]);
         }
       }
-      const missing = ids.filter(id => opts.force || !productPassportHasDetails(id));
+      let missing = ids.filter(id => opts.force || !productPassportHasDetails(id));
+      const existingTasks = [...new Set(missing.map(id => previousTasks.get(id))
+        .filter(existing => existing && existing !== task && (opts.background ||
+          (!existing.background && (ids.length !== 1 || existing.productCount === 1)))))];
+      if (existingTasks.length) {
+        await Promise.all(existingTasks);
+        if (generation !== storefrontCatalogGeneration) continue;
+        missing = ids.filter(id => opts.force || !productPassportHasDetails(id));
+      }
       const chunks = Array.from({ length: Math.ceil(missing.length / 100) }, (_, index) => missing.slice(index * 100, (index + 1) * 100));
       const endpoint = isKsoCatalogCache ? '/api/public/products/batch/passports' : '/api/public/products/batch/full-passports';
       const responses = await Promise.all(chunks.map(chunk => apiJson(endpoint, {

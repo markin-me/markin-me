@@ -487,6 +487,7 @@ optionGroups.forEach((group) => {
 
   let refreshPackagingUi = () => {};
   let updateActionText = () => {
+    if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration || !container.isConnected) return;
     refreshPackagingUi();
     if (!actionBtnRef) return;
     if (isReadOnlyView) {
@@ -512,7 +513,6 @@ optionGroups.forEach((group) => {
     const optionTotal = Number(optionPricingTotals.currentTotal || 0);
     const optionOriginalComparableTotal = Number(optionPricingTotals.originalComparableTotal || 0);
     const variantUnitPrice = runtime.getVariantUnitPrice(product, variants, variantState);
-    const basePrice = Number(variantUnitPrice || 0) + optionTotal;
     const ingredientPricing = calculateIngredientPricing();
     const ingredientsPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.currentDiff || 0) : 0; // Разница от базового состава
     const ingredientsOriginalPriceDiff = runtime.usesProductPriceSource(product, "composition") ? Number(ingredientPricing.originalDiff || ingredientsPriceDiff) : 0;
@@ -520,19 +520,29 @@ optionGroups.forEach((group) => {
     const baseOriginalComparable = oldBase > Number(variantUnitPrice || 0)
       ? runtime.roundPrice(oldBase + ingredientsOriginalPriceDiff)
       : runtime.roundPrice(Number(variantUnitPrice || 0) + ingredientsOriginalPriceDiff);
-    const unitPrice = runtime.applyProductPromoPricing(product, basePrice + ingredientsPriceDiff,
-      baseOriginalComparable + optionOriginalComparableTotal);
+    const resolvedItems = getResolvedCart();
+    const pricing = runtime.computeItemPricing({
+      product, product_id: Number(product.id), qty: Number(qty || 1),
+      option_items: selectedItems, ingredients: buildCurrentIngredientQuantities(),
+      ingredient_price_diff: ingredientsPriceDiff,
+      variant_group_id: variantState.groupId, variant_value_index: variantState.selectedIndex,
+      variant_unit_price: variantUnitPrice, unit_price_override: null, auto_add: 0,
+    }, {
+      nonAutoTotal: runtime.computeNonAutoTotal(resolvedItems),
+      autoEligibleTotal: runtime.computeAutoEligibleTotal(resolvedItems),
+    });
+    const unitPrice = pricing.unitPrice;
 
     // Скидка считается как на бэке, tenant-round применяется к итоговой цене.
-    const discountAmount = calculateProductDiscountAmount(unitPrice, product.discount);
-    const discountedUnitPrice = runtime.roundPrice(Math.max(0, unitPrice - discountAmount));
+    const discountAmount = pricing.discountAmount;
+    const discountedUnitPrice = pricing.unitPrice;
 
     // total = unit * qty
-    const totalPrice = runtime.roundPrice(discountedUnitPrice * Number(qty || 1));
-    const totalBeforeDiscount = runtime.roundPrice(unitPrice * Number(qty || 1));
+    const totalPrice = pricing.lineTotal;
+    const totalBeforeDiscount = runtime.roundPrice(totalPrice + discountAmount);
     
     // Зачёркнутая цена: либо скидка, либо product.old_price из БД
-    const totalOldFromDb = runtime.roundPrice((baseOriginalComparable + optionOriginalComparableTotal) * Number(qty || 1));
+    const totalOldFromDb = runtime.roundPrice(Math.max(pricing.parts.baseUnit, baseOriginalComparable + optionOriginalComparableTotal) * Number(qty || 1));
     
     // Приоритет: если есть скидка — показываем цену до скидки, иначе old_price
     const hasApiDiscount = discountAmount > 0;
@@ -541,9 +551,7 @@ optionGroups.forEach((group) => {
       ? runtime.roundPrice(totalBeforeDiscount + optionOldDelta * Number(qty || 1))
       : totalOldFromDb;
     const showOld = totalOld > 0 && totalOld > totalPrice;
-    const originalUnitComparable = hasApiDiscount
-      ? runtime.roundPrice(unitPrice + optionOldDelta)
-      : runtime.roundPrice(baseOriginalComparable + optionOriginalComparableTotal);
+    const originalUnitComparable = runtime.roundPrice(totalOld / Number(qty || 1));
 
     actionBtnRef.innerHTML = `
       <span class="shop-pd-action-prices">
@@ -1229,6 +1237,7 @@ optionGroups.forEach((group) => {
     // Обновляем функцию updateActionText для синхронизации с мобильной кнопкой
     const originalUpdateActionText = updateActionText;
     updateActionText = () => {
+      if (Number(container.__shopProductRenderGeneration || 0) !== renderGeneration || !container.isConnected) return;
       originalUpdateActionText();
       if (runtime.elMobileProductPrice && runtime.elMobileProductLabel) {
         if (!available) {

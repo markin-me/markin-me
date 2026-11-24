@@ -672,9 +672,10 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     if (config.sources.some(source => !allowed.includes(source))) return null;
     const sources = allowed.filter(source => config.sources.includes(source));
     if (!sources.includes("composition") && !sources.includes("options")) return null;
+    if (config.composition_cost != null && (typeof config.composition_cost !== "number" || !Number.isFinite(config.composition_cost) || config.composition_cost < 0)) return null;
     if (config.composition_price != null && (typeof config.composition_price !== "number" || !Number.isFinite(config.composition_price) || config.composition_price < 0)) return null;
     if (config.target_margin != null && (typeof config.target_margin !== "number" || !Number.isFinite(config.target_margin) || config.target_margin >= 100)) return null;
-    return { mode: "auto", sources, ...(config.composition_price != null ? { composition_price: config.composition_price } : {}),
+    return { mode: "auto", sources, ...(config.composition_cost != null ? { composition_cost: config.composition_cost } : {}), ...(config.composition_price != null ? { composition_price: config.composition_price } : {}),
       ...(config.target_margin != null ? { target_margin: config.target_margin } : {}) };
   }
 
@@ -5230,6 +5231,7 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
     });
     return { title, description, min, max, items,
       isActive: bool(body.is_active, 'is_active'), firstFree: bool(body.first_free, 'first_free'),
+      pricingMode: body.pricing_mode == null || body.pricing_mode === 'free' ? 'free' : body.pricing_mode === 'product' ? 'product' : invalid('pricing_mode'),
       addAutomatically: bool(body.add_automatically ?? 1, 'add_automatically'),
       availableToGuests: bool(body.available_to_guests ?? 1, 'available_to_guests'),
       allowQty: bool(body.allow_customer_qty, 'allow_customer_qty'), allowRemove: bool(body.allow_customer_remove, 'allow_customer_remove'),
@@ -5258,9 +5260,9 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         if (products.length !== productIds.length) { await conn.rollback(); return res.status(400).json({ ok: false, error: 'PRODUCT_NOT_FOUND' }); }
       }
       const columns = ['title', 'description', 'is_active', 'sort_order', 'min_cart_amount', 'max_cart_amount',
-        'allow_customer_qty', 'allow_customer_remove', 'rule_version', 'first_free', 'total_issue_limit', 'schedule_json', 'add_automatically', 'available_to_guests'];
+        'allow_customer_qty', 'allow_customer_remove', 'rule_version', 'first_free', 'total_issue_limit', 'schedule_json', 'add_automatically', 'available_to_guests', 'pricing_mode'];
       const values = [rule.title, rule.description, rule.isActive, rule.sort, rule.min, rule.max,
-        rule.allowQty, rule.allowRemove, 1, rule.firstFree, rule.limit, JSON.stringify(rule.schedule), rule.addAutomatically, rule.availableToGuests];
+        rule.allowQty, rule.allowRemove, 1, rule.firstFree, rule.limit, JSON.stringify(rule.schedule), rule.addAutomatically, rule.availableToGuests, rule.pricingMode];
       if (id == null) {
         const [result] = await conn.query(`INSERT INTO prod_auto_add_groups (tenant_id,${columns.join(',')}) VALUES (?,${columns.map(() => '?').join(',')})`, [tenantId, ...values]);
         id = Number(result.insertId);
@@ -5273,8 +5275,8 @@ router.patch('/admin/options/groups/:id', async (req, res) => {
         await conn.query(`INSERT INTO prod_auto_add_items
           (tenant_id,group_id,product_id,schedule_slot,default_qty,min_qty,max_qty,price_override,
            free_first_qty,free_per_amount,free_per_amount_qty,max_free_qty,is_active,sort_order,configuration_json)
-          VALUES (?,?,?,?,0,0,NULL,NULL,?,?,1,?,1,?,?)`,
-        [tenantId, id, item.productId, item.slot, rule.firstFree, item.step, item.maxFree, item.sortOrder, configuration == null ? null : JSON.stringify(configuration)]);
+          VALUES (?,?,?,?,?,0,NULL,NULL,?,?,1,?,1,?,?)`,
+        [tenantId, id, item.productId, item.slot, rule.pricingMode === 'product' ? 1 : 0, rule.firstFree, item.step, item.maxFree, item.sortOrder, configuration == null ? null : JSON.stringify(configuration)]);
       }
       await conn.commit();
       return res.json({ ok: true, id });

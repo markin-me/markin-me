@@ -46,7 +46,7 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
     const [rows]=await db.query("SELECT * FROM prod_products WHERE tenant_id=? AND id=? AND is_active=1",[tenantId,id]);
     if(!rows.length || (!allowHidden && Number(rows[0].site_visibility) !== 1))fail();products.set(id,rows[0]);return rows[0];
   }
-  async function configuredPrice(id,selection,depth=0,includePackaging=true,allowHidden=false,costing=false,respectSources=false) {
+  async function configuredPrice(id,selection,depth=0,includePackaging=true,allowHidden=false,costing=false,respectSources=false,storedConfiguration=false,marginBaseOnly=false) {
     if(depth>4)fail();const p=await product(id,allowHidden);
     if (includePackaging) packagedIds.add(Number(id));
     let price=Number(costing ? (!respectSources || usesProductPriceSource(p, "composition") ? p.cost_price : 0) : p.price || 0);
@@ -73,7 +73,7 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       }
       if ((!costing || respectSources) ? usesProductPriceSource(p, "variants") : true) {
         const variantProduct = costing ? { ...p, price } : p;
-        price=await variantPrice(variantProduct,{...group,values,default_value_index:index,discount_tiers:costing?[]:tiers},conversion,roundPrice);
+        price=await variantPrice(variantProduct,{...group,values,default_value_index:index,discount_tiers:costing?[]:tiers},conversion,costing ? value => Number(value) : roundPrice);
         originalPrice=await variantPrice({...p,price:originalPrice},{...group,values,default_value_index:index,discount_tiers:[]},conversion,roundPrice);
       }
     }
@@ -82,7 +82,13 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       const [rows]=await db.query(`SELECT i.*,p.price AS ingredient_price,p.cost_price AS ingredient_cost_price,p.old_price AS ingredient_old_price,p.base_qty AS ingredient_base_qty,p.base_unit_id AS ingredient_base_unit_id
         FROM prod_product_ingredients i JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
         WHERE i.tenant_id=? AND i.product_id=?`,[tenantId,id]);
-      const selected=new Map();for(const entry of requested){const key=Number(entry.ingredient_id || entry.product_id);if(selected.has(key))fail();selected.set(key,Number(entry.qty ?? entry.quantity));}
+      const selected=new Map();for(const entry of requested){
+        const key=Number(entry.ingredient_id || entry.product_id);
+        // Stored option configurations reference the current recipe; only variable quantities are overrides.
+        const ingredient=rows.find(row=>Number(row.ingredient_id)===key);
+        if(storedConfiguration && (!ingredient || Number(ingredient.is_variable)!==1))continue;
+        if(selected.has(key))fail();selected.set(key,Number(entry.qty ?? entry.quantity));
+      }
       if([...selected.keys()].some(key=>!rows.some(row=>Number(row.ingredient_id)===key)))fail();
       for(const row of rows){
         const base=Number(row.quantity || 0),qty=selected.has(Number(row.ingredient_id))?selected.get(Number(row.ingredient_id)):base;
@@ -95,6 +101,7 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         if (usesProductPriceSource(p, "composition")) originalPrice+=originalPerUnit*(qty-base)*(factor ?? 1);
       }
     }
+    let extraOptionPrice = 0, extraOptionOriginalPrice = 0;
     const optionSelections=Array.isArray(selection.option_items)?selection.option_items:[];
     const options=new Map();for(const value of optionSelections){const key=Number(value.id);if(options.has(key))fail();options.set(key,value);}
     for(const id of selection.option_item_ids || [])if(!options.has(Number(id)))options.set(Number(id),{id:Number(id)});
@@ -147,7 +154,7 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
           ingredients: configuration.ingredients, ingredients_display: configuration.ingredients,
           option_items: configuration.option_items || value.option_items,
           option_item_ids: configuration.option_item_ids || value.option_item_ids } : value, depth+1,
-          Number(option.is_packaging) !== 1 && Number(option.is_component_default) !== 1, Number(option.is_packaging) === 1, costing);
+          Number(option.is_packaging) !== 1 && Number(option.is_component_default) !== 1, Number(option.is_packaging) === 1, costing, false, Boolean(configuration));
         const selectedPrice=selectedPricing.price;
         if(costing)optionPrice=selectedPrice;
         else if(option.price_mode==='from_target')optionPrice=selectedPrice;
@@ -157,7 +164,11 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         originalOptionPrice=option.price_mode==='fixed'?Math.max(optionPrice,Number(option.price_value || 0)):selectedPricing.originalPrice+(option.price_mode==='delta'?Number(option.price_value || 0):0);
       } else if(option.price_mode!=='fixed')fail();
       else if(costing)optionPrice=0;
-      if ((costing && !respectSources) || usesProductPriceSource(p, "options")) {
+      if (((costing && !respectSources) || usesProductPriceSource(p, "options")) && (!marginBaseOnly || Number(option.is_packaging) === 1)) {
+        if (!costing && Number(option.is_packaging) !== 1) {
+          extraOptionPrice += optionPrice * optionQty;
+          extraOptionOriginalPrice += Math.max(optionPrice, originalOptionPrice) * optionQty;
+        }
         price+=optionPrice*optionQty;
         originalPrice+=Math.max(optionPrice,originalOptionPrice)*optionQty;
       }
@@ -179,9 +190,9 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
     if(config?.mode === 'auto' && config.target_margin != null) {
       const margin = Number(config.target_margin);
       if(!Number.isFinite(margin) || margin >= 100)fail();
-      const cost = await configuredPrice(id,selection,depth,includePackaging,allowHidden,true,true);
-      price = cost.price / (1 - margin / 100) * variantAdjustment;
-      originalPrice = price;
+      const cost = await configuredPrice(id,selection,depth,includePackaging,allowHidden,true,true,storedConfiguration,true);
+      price = cost.price / (1 - margin / 100) * variantAdjustment + extraOptionPrice;
+      originalPrice = price - extraOptionPrice + extraOptionOriginalPrice;
     }
     if(!Number.isFinite(price)||price<0||!Number.isFinite(originalPrice))fail();return {price:applyProductPromoPricing(p,price,originalPrice,roundPrice),originalPrice:roundPrice(Math.max(price,originalPrice))};
   }
@@ -202,9 +213,9 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       prices.set(item,{name:combos[0].title,categoryId:categories[0]?.id || null,unitPrice:roundPrice(sum*(1-discount/100)),lineTotal:roundPrice(roundPrice(sum*(1-discount/100))*qty),baseLineTotal:roundPrice(sum*qty)});
     } else {
       const autoGift = Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1;
-      if (autoGift) await product(item.product_id);
-      const configured = autoGift ? null : await configuredPrice(item.product_id,item);
-      let unitPrice=autoGift ? 0 : configured.price,gift=false;
+      const configured = await configuredPrice(item.product_id,item);
+      const configuredCost = autoGift ? await configuredPrice(item.product_id,item,0,true,false,true) : null;
+      let unitPrice=configured.price,gift=false;
       if(Number(item.is_gift_reward)===1){
         const [rows]=await db.query("SELECT reward_payload_json FROM mkt_discount_rewards WHERE tenant_id=? AND customer_id=? AND id=? AND reward_type='gift' AND status='available'",[tenantId,customerId,item.gift_reward_id]);
         if(!rows.length)fail();const payload=typeof rows[0].reward_payload_json==='string'?JSON.parse(rows[0].reward_payload_json || '{}'):rows[0].reward_payload_json || {};
@@ -214,7 +225,8 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         giftQuantities.set(giftKey,giftQty);
         gift=true;unitPrice=0;
       }
-      prices.set(item,{unitPrice,originalPrice:gift ? 0 : configured?.originalPrice ?? 0,lineTotal:roundPrice(unitPrice*qty),gift});
+      prices.set(item,{unitPrice,originalPrice:gift ? 0 : configured.originalPrice,
+        costPrice:configuredCost?.price ?? null,lineTotal:roundPrice(unitPrice*qty),gift});
     }
   }
   if (!validateAvailability) return prices;
@@ -244,6 +256,7 @@ function autoAddDate(group, { timezone = 0, scheduledAt = null, createdAt = null
 function autoAddFreeQty(rule, group, baseTotal, hasBaseItems = true) {
   if (!hasBaseItems || (group.min_cart_amount != null && baseTotal < Number(group.min_cart_amount))
     || (group.max_cart_amount != null && baseTotal > Number(group.max_cart_amount))) return 0;
+  if (group.pricing_mode === 'product') return 0;
   let qty = Number(group.first_free) === 1 ? 1 : 0;
   if (Number(rule.free_per_amount) > 0) qty += Math.floor(Math.round(baseTotal * 100) / Math.round(Number(rule.free_per_amount) * 100));
   if (rule.max_free_qty != null) qty = Math.min(qty, Number(rule.max_free_qty));
@@ -363,9 +376,17 @@ async function validateAutoAddOrder(conn, { tenantId, storeId, orderId = null, i
     const key = `${gid}:${item.product_id}`, previous = used.get(key) || 0;
     const free = Number(item.auto_add_free_qty);
     if (!Number.isInteger(free) || free < 0 || free > qty || previous + free > allowed || free !== expectedFree.get(item)) throw Object.assign(new Error('AUTO_ADD_PRICING_CHANGED'), { code: 'AUTO_ADD_PRICING_CHANGED', status: 409 });
-    if (qty !== free) throw Object.assign(new Error('AUTO_ADD_INVALID'), { code: 'AUTO_ADD_INVALID', status: 422 });
+    if (group.pricing_mode !== 'product' && qty !== free) throw Object.assign(new Error('AUTO_ADD_INVALID'), { code: 'AUTO_ADD_INVALID', status: 422 });
+    if (group.pricing_mode === 'product' && Number(group.allow_customer_qty) !== 1 && qty !== Math.max(1, Number(rule.default_qty || 1))) {
+      throw Object.assign(new Error('AUTO_ADD_INVALID'), { code: 'AUTO_ADD_INVALID', status: 422 });
+    }
+    if (group.pricing_mode === 'product' && (!baseItems.length || baseTotal < Number(group.min_cart_amount || 0)
+        || (group.max_cart_amount != null && baseTotal > Number(group.max_cart_amount)))) {
+      throw Object.assign(new Error('AUTO_ADD_RULE_CHANGED'), { code: 'AUTO_ADD_RULE_CHANGED', status: 409 });
+    }
     used.set(key, previous + free);
     item.auto_add_rule_version = 1;
+    item.auto_add_pricing_mode = group.pricing_mode || 'free';
   }
 }
 

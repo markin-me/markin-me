@@ -4708,6 +4708,7 @@ function buildAutoAddGroupDetails(groupId) {
   function getAutoAddGroupFormValues() {
     return {
       title: (autoAddGroupTitleInput?.value || "").trim(),
+      pricing_mode: $("#autoAddPricingMode")?.checked ? "product" : "free",
       description: (autoAddGroupDescInput?.value || "").trim() || null,
       sort_order: autoAddGroupSortInput?.value ? Number(autoAddGroupSortInput.value) : 0,
       is_active: autoAddGroupIsActiveInput?.checked ? 1 : 0,
@@ -4724,6 +4725,14 @@ function buildAutoAddGroupDetails(groupId) {
       allow_customer_qty: autoAddAllowCustomerQtyInput?.checked ? 1 : 0,
       allow_customer_remove: autoAddAllowCustomerRemoveInput?.checked ? 1 : 0,
     };
+  }
+
+  function syncAutoAddPricingMode() {
+    const paid = $("#autoAddPricingMode")?.checked === true;
+    $("#autoAddFirstFree")?.closest('label')?.classList.toggle('hidden', paid);
+    $("#autoAddTotalIssueLimit")?.closest('.field-wrap')?.classList.toggle('hidden', paid);
+    autoAddGroupInfo?.querySelectorAll('[data-auto-item-field="free_per_amount"], [data-auto-item-field="max_free_qty"]')
+      .forEach(input => input.parentElement.classList.toggle('hidden', paid));
   }
 
   function syncAutoAddDraftGroupFromForm() {
@@ -4747,6 +4756,7 @@ function buildAutoAddGroupDetails(groupId) {
 
   function setAutoAddGroupFormDisabled(disabled) {
     if (autoAddGroupTitleInput) autoAddGroupTitleInput.disabled = disabled;
+    $("#autoAddPricingMode").disabled = disabled;
     if (autoAddGroupDescInput) autoAddGroupDescInput.disabled = disabled;
     if (autoAddGroupSortInput) autoAddGroupSortInput.disabled = disabled;
     if (autoAddGroupIsActiveInput) autoAddGroupIsActiveInput.disabled = disabled;
@@ -4761,6 +4771,7 @@ function buildAutoAddGroupDetails(groupId) {
   function fillAutoAddGroupForm(group) {
     if (!autoAddGroupForm || !group) return;
     if (autoAddGroupTitleInput) autoAddGroupTitleInput.value = group.title || "";
+    $("#autoAddPricingMode").checked = group.pricing_mode === "product";
     if (autoAddGroupDescInput) autoAddGroupDescInput.value = group.description || "";
     if (autoAddGroupSortInput) autoAddGroupSortInput.value = group.sort_order ?? 0;
     if (autoAddGroupIsActiveInput) autoAddGroupIsActiveInput.checked = Number(group.is_active || 0) === 1;
@@ -4867,6 +4878,7 @@ function buildAutoAddGroupDetails(groupId) {
     }).join("");
 
     bindAutoAddItemsListEvents();
+    syncAutoAddPricingMode();
   }
 
   function bindAutoAddItemsListEvents() {
@@ -5519,6 +5531,7 @@ function buildAutoAddGroupDetails(groupId) {
 
     if (autoAddItemsAddBtn) autoAddItemsAddBtn.classList.toggle("hidden", !editable);
     renderAutoAddSchedule();
+    syncAutoAddPricingMode();
     renderAutoAddHeader();
 
     if (state.autoAddPanel.mode === "view") {
@@ -7547,6 +7560,7 @@ function openAutoAddGroupModal({ mode, group } = {}) {
           const passport = window.CatalogRepository.getProductPassport(id);
           if (!window.CatalogRepository.isOrderReadyPassport(passport) || passport.editor?.variants_visibility_respected !== true) return;
           configureSelectionSource();
+          await window.SharedProductDetails.prepareSelections([id], { pricingOnly: true, costing: true });
           const presentation = window.SharedProductDetails.getSelectionPresentation(id);
           if (!presentation) throw new Error(`PRODUCT_PASSPORT_UNAVAILABLE:${id}`);
           const config = typeof passport.product.pricing_config_json === "string" ? JSON.parse(passport.product.pricing_config_json) : passport.product.pricing_config_json;
@@ -16563,6 +16577,7 @@ const isViewMode = state.comboPanel.mode === "view";
       if (config?.mode === "manual") return { mode: "manual", sources: [] };
       if (config?.mode !== "auto" || !Array.isArray(config.sources)) return null;
       return { mode: "auto", sources: Object.keys(priceSourceLabels).filter(source => config.sources.includes(source)),
+        ...(config.composition_cost != null ? { composition_cost: Number(config.composition_cost) } : {}),
         ...(config.composition_price != null ? { composition_price: Number(config.composition_price) } : {}),
         ...(config.target_margin != null ? { target_margin: Number(config.target_margin) } : {}) };
     }
@@ -16908,6 +16923,7 @@ const isViewMode = state.comboPanel.mode === "view";
           }
           let productId = product && product.id;
           let saveResult = null;
+          const ingredientsToSave = new Map(Array.from(draftIngredients, ([id, ingredient]) => [id, deepClone(ingredient)]));
           let catalogSavePatch = null;
           const dependentRecalcChanges = isEdit && product
             ? buildProductDependentRecalcChanges(product, payload, initialIngredientsSnapshot, draftIngredients)
@@ -17080,8 +17096,8 @@ const isViewMode = state.comboPanel.mode === "view";
           }
 
           // Save ingredients from draft
-          if (!isEdit && draftIngredients.size > 0) {
-            for (const ing of draftIngredients.values()) {
+          if (!isEdit && ingredientsToSave.size > 0) {
+            for (const ing of ingredientsToSave.values()) {
               try {
                 await apiAddProductIngredient(productId, {
                   ingredient_id: ing.ingredient_id,
@@ -17096,7 +17112,8 @@ const isViewMode = state.comboPanel.mode === "view";
                 });
               } catch (e) {
                 console.error('Failed to save ingredient', e);
-                // Не критично для отдельных ингредиентов
+                alert('Ошибка при сохранении состава: ' + (e.message || 'Неизвестная ошибка'));
+                return false;
               }
             }
           }
@@ -17114,7 +17131,7 @@ const isViewMode = state.comboPanel.mode === "view";
               sort_order: Number(ing.sort_order || 0),
             });
 
-            const currentIds = new Set(Array.from(draftIngredients.keys()));
+            const currentIds = new Set(Array.from(ingredientsToSave.keys()));
             const initialIds = new Set(Array.from(initialIngredientsSnapshot.keys()));
             const toAdd = Array.from(currentIds).filter((id) => !initialIds.has(id));
             const toRemove = Array.from(initialIds).filter((id) => !currentIds.has(id));
@@ -17122,7 +17139,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
             try {
               for (const ingredientId of toAdd) {
-                const ing = draftIngredients.get(ingredientId);
+                const ing = ingredientsToSave.get(ingredientId);
                 if (!ing) continue;
                 await apiAddProductIngredient(productId, {
                   ingredient_id: ing.ingredient_id,
@@ -17131,7 +17148,7 @@ const isViewMode = state.comboPanel.mode === "view";
               }
 
               for (const ingredientId of toUpdate) {
-                const ing = draftIngredients.get(ingredientId);
+                const ing = ingredientsToSave.get(ingredientId);
                 const snapshot = initialIngredientsSnapshot.get(ingredientId);
                 if (!ing || !snapshot) continue;
                 const normalizedCurrent = normalizeIngredient(ing);
@@ -17149,11 +17166,12 @@ const isViewMode = state.comboPanel.mode === "view";
               snapshotIngredients();
             } catch (e) {
               console.error('Failed to save ingredients', e);
-              alert('Ошибка при сохранении состава');
+              alert('Ошибка при сохранении состава: ' + (e.message || 'Неизвестная ошибка'));
+              return false;
             }
           }
 
-          const savedIngredientsForCache = Array.from(draftIngredients.values()).map((ing) => deepClone(ing));
+          const savedIngredientsForCache = Array.from(ingredientsToSave.values()).map((ing) => deepClone(ing));
           let savedProductForView = {
             ...(product || {}),
             ...payload,
@@ -17205,6 +17223,17 @@ const isViewMode = state.comboPanel.mode === "view";
             });
             savedEditorPassport = getEditorReadyProductPassport(productId);
             if (!savedEditorPassport) throw new Error('PRODUCT_EDITOR_DATA_UNAVAILABLE');
+            const storedIngredients = new Map((savedEditorPassport.ingredients || []).map(row => [Number(row.ingredient_id), row]));
+            if (storedIngredients.size !== ingredientsToSave.size || [...ingredientsToSave].some(([id, row]) => {
+              const stored = storedIngredients.get(id);
+              return !stored || Math.abs(Number(stored.quantity) - Number(row.quantity)) > 0.001
+                || Number(stored.unit_id) !== Number(row.unit_id || row.ingredient_unit_id);
+            })) throw new Error('Сохранённые веса состава не совпадают с введёнными');
+            const rawConfig = savedEditorPassport.product?.pricing_config_json;
+            const storedConfig = typeof rawConfig === 'string' ? JSON.parse(rawConfig) : rawConfig;
+            if (payload.pricing_config_json?.target_margin != null && Number(storedConfig?.target_margin) !== Number(payload.pricing_config_json.target_margin)) {
+              throw new Error('Не подтвердилось сохранение маржи состава');
+            }
             return savedEditorPassport;
           };
           const existingCachedDetails = getCachedProductDetails(productId);
@@ -17901,8 +17930,9 @@ const isViewMode = state.comboPanel.mode === "view";
     wrapper.addEventListener("change", markEditorCalculationDirty, true);
     wrapper.addEventListener("click", markEditorCalculationDirty, true);
     if (!isCreate) {
-      wrapper.classList.add("product-editor-pricing-pending");
-      ui.priceBlock?.setAttribute("aria-busy", "true");
+      const pendingCalculation = isCompositionPriceMode();
+      wrapper.classList.toggle("product-editor-pricing-pending", pendingCalculation);
+      ui.priceBlock?.setAttribute("aria-busy", String(pendingCalculation));
       if (window.CatalogRepository?.readEditorPriceSnapshot) {
         void ensureSelectionRounding().then(() => window.CatalogRepository.readEditorPriceSnapshot(product.id, { rounding: selectionRounding })).then(values => {
           if (!values || !wrapper.isConnected || editorCalculationDirty || editorInitialCalculationComplete) return;
@@ -17911,6 +17941,19 @@ const isViewMode = state.comboPanel.mode === "view";
           wrapper.classList.remove("product-editor-pricing-pending");
           ui.priceBlock?.setAttribute("aria-busy", "false");
         }).catch(error => console.warn("Product editor price cache read failed", product.id, error));
+      }
+    }
+
+    function showEditorCalculationError() {
+      wrapper.classList.remove("product-editor-pricing-pending");
+      ui.priceBlock?.setAttribute("aria-busy", "false");
+      if (isCompositionPriceMode()) {
+        for (const key of editorPriceFields) {
+          if (!ui[key] || key === "baseQtyInput" || key === "pcsToUnitFactorInput") continue;
+          ui[key].value = "";
+          ui[key].placeholder = "Недоступно";
+        }
+        if (ui.priceSourceHint) ui.priceSourceHint.textContent = "Не удалось подготовить расчёт";
       }
     }
 
@@ -18129,7 +18172,10 @@ const isViewMode = state.comboPanel.mode === "view";
         if (document.activeElement !== ui.normPriceInput) ui.normPriceInput.value = formatNumberForInputFixed(value, 2);
         ui.normPriceInput.readOnly = isView;
         const cost = totals.cost;
-        if (ui.normCostInput) ui.normCostInput.value = cost == null ? "" : formatNumberForInputFixed(cost, 2);
+        if (ui.normCostInput && document.activeElement !== ui.normCostInput) {
+          const displayedCost = draft.valueSources.base_qty === "manual" ? calcTotalCostFromIngredientsGlobal() : cost;
+          ui.normCostInput.value = displayedCost == null ? "" : formatNumberForInputFixed(displayedCost, 2);
+        }
         if (ui.normMarginInput) {
           ui.normMarginInput.readOnly = isView;
           if (document.activeElement !== ui.normMarginInput) {
@@ -18169,8 +18215,10 @@ const isViewMode = state.comboPanel.mode === "view";
       const cost = scale(compositionCost, false) + options.cost;
       const targetMargin = getEffectiveTargetMargin();
       const variantFactor = window.SharedProductDetails.getVariantPriceFactor({ ...base, pricing_config_json: draft.pricingConfig }, pricedVariant, index);
-      const current = targetMargin != null ? (cost / (1 - targetMargin / 100)) * variantFactor : scale(compositionPrice) + options.price;
-      const original = targetMargin != null ? current : scale(compositionOldPriceBase) + options.oldPrice;
+      const packaging = getCompositionPackagingTotals();
+      const marginBasePrice = (scale(compositionCost, false) + packaging.cost) / (1 - Number(targetMargin) / 100) * variantFactor;
+      const current = targetMargin != null ? marginBasePrice + options.price - packaging.price : scale(compositionPrice) + options.price;
+      const original = targetMargin != null ? marginBasePrice + options.oldPrice - packaging.oldPrice : scale(compositionOldPriceBase) + options.oldPrice;
       const price = window.SharedProductDetails.applyProductPromoPricing({
         promo_enabled: isProductPromoEnabled() ? 1 : 0, promo_discount_percent: getProductPromoDiscountPercent(),
       }, current, original);
@@ -18240,6 +18288,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
       pricingConfigEdited = true;
       draft.pricingConfig = { mode: isAuto ? "auto" : "manual", sources: [...sources],
+        ...(isAuto && draft.pricingConfig?.composition_cost != null ? { composition_cost: draft.pricingConfig.composition_cost } : {}),
         ...(isAuto && draft.pricingConfig?.composition_price != null ? { composition_price: draft.pricingConfig.composition_price } : {}),
         ...(isAuto && draft.pricingConfig?.target_margin != null ? { target_margin: draft.pricingConfig.target_margin } : {}) };
       draft.valueSources.cost_price = draft.pricingConfig.mode;
@@ -22349,6 +22398,7 @@ const isViewMode = state.comboPanel.mode === "view";
 
     // Функция для расчёта общей себестоимости из ингредиентов (доступна на уровне openProductModal)
     function calcTotalCostFromIngredientsGlobal() {
+      if (draft.valueSources.base_qty === "manual" && draft.pricingConfig?.composition_cost != null) return Number(draft.pricingConfig.composition_cost);
       let total = 0;
       let hasValidCost = false;
       if (draftIngredients && draftIngredients.size > 0) {
@@ -23963,6 +24013,7 @@ const isViewMode = state.comboPanel.mode === "view";
         input?.closest(".field-wrap")?.classList.toggle("hidden", portion);
       });
       if (normAutoCheckbox) normAutoCheckbox.checked = automatic;
+      if (ui.normCostInput) ui.normCostInput.readOnly = isView || automatic;
       if (ui.baseQtyInput) ui.baseQtyInput.readOnly = isView || isCompositionPortionUnit();
       if (ui.pcsToUnitFactorInput) ui.pcsToUnitFactorInput.readOnly = isView;
       normRecalcButtons.forEach(button => {
@@ -23995,13 +24046,27 @@ const isViewMode = state.comboPanel.mode === "view";
     function setManualCompositionNormPrice(value) {
       draft.valueSources.base_qty = "manual";
       const sources = getSelectedPriceSources();
-      draft.pricingConfig = { mode: "auto", sources: sources.includes("composition") ? sources : [...new Set([...sources, "composition", "variants"])], composition_price: value };
+      draft.pricingConfig = { mode: "auto", sources: sources.includes("composition") ? sources : [...new Set([...sources, "composition", "variants"])], composition_price: value,
+        ...(draft.pricingConfig?.composition_cost != null ? { composition_cost: draft.pricingConfig.composition_cost } : {}) };
       pricingConfigEdited = true;
       draft.valueSources.price = "auto";
       draft.valueSources.cost_price = "auto";
       syncNormRecalcButtons();
       syncPriceSourceMode({ applyValues: true });
     }
+
+    ui.normCostInput?.addEventListener("input", () => {
+      if (isView || draft.valueSources.base_qty !== "manual") return;
+      const value = parseNumberFromInput(ui.normCostInput.value);
+      if (value == null || !Number.isFinite(value) || value < 0) return;
+      const sources = getSelectedPriceSources();
+      draft.pricingConfig = { ...draft.pricingConfig, mode: "auto",
+        sources: [...new Set([...sources, "composition", "variants", "options"])], composition_cost: value };
+      pricingConfigEdited = true;
+      draft.valueSources.price = "auto";
+      draft.valueSources.cost_price = "auto";
+      syncPriceSourceMode({ applyValues: true, refreshNutrition: false });
+    });
 
     ui.normPriceInput?.addEventListener("input", () => {
       if (isView) return;
@@ -24025,7 +24090,7 @@ const isViewMode = state.comboPanel.mode === "view";
       draft.valueSources.cost_price = "auto";
       syncPriceSourceMode({ applyValues: true, refreshNutrition: false });
     });
-    [ui.normPriceInput, ui.normMarginInput].forEach(input => input?.addEventListener("blur", () => {
+    [ui.normCostInput, ui.normPriceInput, ui.normMarginInput].forEach(input => input?.addEventListener("blur", () => {
       const value = parseNumberFromInput(input.value);
       if (value != null && Number.isFinite(value)) input.value = formatNumberForInputFixed(value, 2);
     }));
@@ -24033,10 +24098,11 @@ const isViewMode = state.comboPanel.mode === "view";
     if (!isView && normRecalcMenu) {
       normAutoCheckbox?.addEventListener("change", () => {
         const currentPrice = getCompositionNormPrice();
+        const currentCost = calcTotalCostFromIngredientsGlobal();
         draft.valueSources.base_qty = normAutoCheckbox.checked ? "auto" : "manual";
         const sources = getSelectedPriceSources();
         draft.pricingConfig = { mode: "auto", sources: sources.includes("composition") ? sources : [...new Set([...sources, "composition", "variants"])],
-          ...(!normAutoCheckbox.checked ? { composition_price: currentPrice } : {}),
+          ...(!normAutoCheckbox.checked ? { composition_price: currentPrice, ...(currentCost != null ? { composition_cost: currentCost } : {}) } : {}),
           ...(draft.pricingConfig?.target_margin != null ? { target_margin: draft.pricingConfig.target_margin } : {}) };
         pricingConfigEdited = true;
         draft.valueSources.price = "auto";
@@ -24198,12 +24264,12 @@ const isViewMode = state.comboPanel.mode === "view";
         pricingReferenceDataReady = conversions !== false;
         return loadIngredients();
       });
+      const initialBasicValues = new Map(Array.from(form.elements || []).map(control => [
+        control.name, control.type === "checkbox" ? control.checked : control.value,
+      ]));
       const basicReady = (async () => {
         if (!(await waitForAdvancedHydration()) || !product?.id) return;
-        const initialValues = new Map(Array.from(form.elements || []).map((control) => [
-          control.name,
-          control.type === "checkbox" ? control.checked : control.value,
-        ]));
+        const initialValues = initialBasicValues;
         const detail = editorPassport?.product || (await apiGetProduct(product.id))?.data;
         if (!detail || typeof detail !== "object") return;
         const existing = getCachedProductDetails(product.id);
@@ -24289,11 +24355,15 @@ const isViewMode = state.comboPanel.mode === "view";
             .catch(error => console.warn("Product editor price cache write failed", product.id, error));
         }
       } else {
-        ui.priceBlock?.setAttribute("aria-busy", "false");
+        showEditorCalculationError();
         if (ui.priceSourceHint) ui.priceSourceHint.textContent = "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u0442\u044c \u0440\u0430\u0441\u0447\u0451\u0442";
       }
       requestAnimationFrame(refreshOpenAccordions);
-    })().finally(() => {
+    })().catch(error => {
+      advancedHydrationFailed = true;
+      showEditorCalculationError();
+      console.error("Product editor calculation preparation failed", product?.id, error);
+    }).finally(() => {
       if (hydrationForegroundToken != null) window.CatalogRepository?.endForegroundWork?.(hydrationForegroundToken);
     });
   }
@@ -26896,6 +26966,7 @@ const isViewMode = state.comboPanel.mode === "view";
       });
       autoAddGroupForm.addEventListener("change", () => {
         syncAutoAddDraftGroupFromForm();
+        syncAutoAddPricingMode();
         persistAutoAddEditState();
         renderAutoAddHeader();
       });

@@ -28377,3 +28377,10 @@ body.page-shop:not(.page-kso) .shop-packaging-accordion[open]>summary>.shop-pack
 .is-restricted-order :is(.shop-profile-order-photo, .shop-company-chat-order-card__photo) {
   filter: blur(2px);
 }
+
+/* Cart and order packaging retain the compact administrative accordion layout. */
+body.page-shop:not(.page-kso) .cart-packaging-accordion>summary{justify-content:flex-start;text-align:left;gap:5px;font-size:12px;font-weight:600}
+body.page-shop:not(.page-kso) .cart-packaging-accordion>summary::before,
+body.page-shop:not(.page-kso) .cart-packaging-accordion>summary::after{content:none;display:none}
+body.page-shop:not(.page-kso) .cart-packaging-accordion>summary>.order-packaging-chevron{font-size:10px;transition:transform .15s}
+body.page-shop:not(.page-kso) .cart-packaging-accordion[open]>summary>.order-packaging-chevron{transform:rotate(90deg)}

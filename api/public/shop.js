@@ -16641,7 +16641,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       'id', 'product_id', 'parent_product_id', 'ingredient_id', 'ingredient_name',
       'quantity', 'qty', 'unit_id', 'unit_code', 'unit_title', 'unit_short_title',
       'quantity_min', 'quantity_max', 'quantity_step', 'price_override', 'is_variable',
-      'sort_order', 'ingredient_price', 'ingredient_fulfillment_mode',
+      'sort_order', 'ingredient_price', 'ingredient_cost_price', 'ingredient_fulfillment_mode',
       'ingredient_base_unit_id', 'ingredient_base_qty', 'ingredient_unit_id',
       'nutrition_per_100g', 'nutrition_incomplete', 'unit_to_grams_factor',
       'ingredient_photos_json',
@@ -16650,7 +16650,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
   function sanitizePublicProductPassport(passport) {
     const product = pickPublicFields(passport?.product, [
-      'id', 'name', 'description_short', 'description', 'price', 'old_price',
+      'id', 'name', 'description_short', 'description', 'price', 'old_price', 'cost_price',
       'display_price', 'catalog_original_price', 'catalog_default_lines', 'default_variant', 'has_options', 'has_variants', 'has_ingredients', 'original_price', 'discounted_price',
       'promo_enabled', 'promo_title', 'promo_discount_percent', 'pricing_config_json',
       'unit_id', 'base_unit_id', 'base_qty', 'fulfillment_mode', 'sale_mode', 'preorder_settings_json',
@@ -16704,6 +16704,38 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
   async function buildFullProductPassportsPayload(tenantId, storeId, ids, options = {}) {
+    if (options.includeInactiveHidden || options.fresh) return buildFullProductPassportsBatch(tenantId, storeId, ids, options);
+    const revision = await catalogSync.getManifest({ db, tenantId, storeId });
+    const keys = new Map(ids.map(id => [id, makePublicCacheKey('product-full-passport-v1', { tenantId, storeId, revision, id })]));
+    const ready = new Map(), waiting = new Map(), missing = [];
+    for (const id of ids) {
+      const key = keys.get(id), cached = getPublicCache(key);
+      if (cached) ready.set(id, cached);
+      else if (publicResponseInflight.has(key)) waiting.set(id, publicResponseInflight.get(key));
+      else missing.push(id);
+    }
+    if (missing.length) {
+      const batch = buildFullProductPassportsBatch(tenantId, storeId, missing, { ...options, catalogRevision: revision });
+      for (const id of missing) {
+        const key = keys.get(id);
+        const task = batch.then(result => {
+          const passport = result.payload.data[String(id)];
+          if (passport) setPublicCache(key, passport, 5 * 60 * 1000);
+          return passport;
+        }).finally(() => {
+          if (publicResponseInflight.get(key) === task) publicResponseInflight.delete(key);
+        });
+        publicResponseInflight.set(key, task);
+        waiting.set(id, task);
+      }
+    }
+    await Promise.all([...waiting].map(async ([id, task]) => ready.set(id, await task)));
+    const data = Object.fromEntries([...ready].filter(([, passport]) => passport).map(([id, passport]) => [String(id), passport]));
+    const versions = Object.fromEntries(Object.entries(data).map(([id, passport]) => [id, passport.product?.updated_at || passport.updated_at || null]));
+    return { payload: { ok: true, data, versions }, cacheStatus: missing.length ? 'MISS' : waiting.size ? 'WAIT' : 'HIT' };
+  }
+
+  async function buildFullProductPassportsBatch(tenantId, storeId, ids, options = {}) {
       const sortedIds = [...ids].sort((a, b) => a - b);
       const [productsStamp, assignmentsStamp, groupsStamp] = await Promise.all([
         readPublicTableStamp('prod_products', 'tenant_id=? AND id IN (?)', [tenantId, sortedIds]),
@@ -16713,7 +16745,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
       const includeInactiveHidden = options.includeInactiveHidden === true;
       const cacheKey = makePublicCacheKey(
         includeInactiveHidden ? 'admin-products-batch-full-passports-v1' : 'products-batch-full-passports-v10',
-        { tenantId, storeId, ids: sortedIds, productsStamp, assignmentsStamp, groupsStamp }
+        { tenantId, storeId, ids: sortedIds, productsStamp, assignmentsStamp, groupsStamp, catalogRevision: options.catalogRevision }
       );
       const cached = includeInactiveHidden || options.fresh ? null : getPublicCache(cacheKey);
       if (cached) return { payload: cached, cacheStatus: 'HIT' };
@@ -19726,9 +19758,47 @@ window.location.replace(${JSON.stringify(redirectUrl)});
   }
 
   router.validateCheckoutPreorders = validateCheckoutPreorders;
-  router.validateAutoAddOrder = (conn, context) => validateAutoAddOrder(conn, {
-    ...context, availability: (tenantId, ids) => buildPublicProductAvailabilityMap(tenantId, context.storeId, ids),
-  });
+  async function populateAutoAddFinancialSnapshots(conn, context) {
+    const autoItems = context.items.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1);
+    if (!autoItems.length) return;
+    const [tenants] = await conn.query('SELECT price_rounding_mode,price_rounding_precision FROM ten_tenants WHERE id=? LIMIT 1', [context.tenantId]);
+    const rounding = tenants[0];
+    if (!rounding) throw new Error('TENANT_ROUNDING_UNAVAILABLE');
+    const round = value => {
+      const factor = Number(rounding.price_rounding_precision) === 0 ? 1 : 100;
+      if (rounding.price_rounding_mode === 'up') return Math.ceil(value * factor) / factor;
+      if (rounding.price_rounding_mode === 'down') return Math.floor(value * factor) / factor;
+      if (rounding.price_rounding_mode === 'nearest') return Math.round(value * factor) / factor;
+      return Number(value);
+    };
+    const selections = autoItems.map(item => ({ ...item,
+      option_items: item.option_items || item.options || [],
+      variant_group_id: item.variant_group_id ?? item.variants?.[0]?.variant_group_id ?? item.variants?.[0]?.group_id,
+      variant_value_index: item.variant_value_index ?? item.variants?.[0]?.variant_value_index ?? item.variants?.[0]?.value_index,
+    }));
+    const prices = await buildOnlineItemPrices({ db: conn, ...context, items: selections, roundPrice: round,
+      variantPrice: computeDisplayPriceForProduct, conversion: getConversionFactorMap(context.tenantId, conn), validateAvailability: false });
+    for (const [index, item] of autoItems.entries()) {
+      const pricing = prices.get(selections[index]), qty = Number(item.qty), free = Number(item.auto_add_free_qty);
+      const baseTotal = round(pricing.unitPrice * qty);
+      const amount = round(pricing.unitPrice * free);
+      item.price = pricing.unitPrice;
+      item.unit_price_before_discount = pricing.unitPrice;
+      item.old_price = pricing.originalPrice > pricing.unitPrice ? pricing.originalPrice : null;
+      item.cost_price = pricing.costPrice;
+      item.cost_total = round(pricing.costPrice * qty);
+      item.auto_add_discount = { discount_type: 'percent', discount_value: 100, free_qty: free, amount };
+      if (amount > 0) item.discount = { id: null, title: 'Автодобавление', discount_type: 'percent', discount_value: 100,
+        free_qty: free, amount: round(Math.max(0, baseTotal - Number(item.line_total || 0))), original_line_total: baseTotal };
+    }
+  }
+
+  router.validateAutoAddOrder = async (conn, context) => {
+    await validateAutoAddOrder(conn, {
+      ...context, availability: (tenantId, ids) => buildPublicProductAvailabilityMap(tenantId, context.storeId, ids),
+    });
+    await populateAutoAddFinancialSnapshots(conn, context);
+  };
 
   function getStoreLocalTimestamp(offsetValue) {
     const offsetHours = Number.isNaN(Number(offsetValue)) ? 0 : Number(offsetValue);
@@ -25458,6 +25528,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
           auto_add_group_id: it.auto_add_group_id || null,
           auto_add_rule_version: Number(it.auto_add_rule_version || 0),
           auto_add_free_qty: Number(it.auto_add_free_qty || 0),
+          auto_add_pricing_mode: isNewAuto ? newAutoGroup.pricing_mode || 'free' : null,
           ...(isNewAuto ? { ingredients: (typeof autoRule.configuration_json === 'string' ? JSON.parse(autoRule.configuration_json) : autoRule.configuration_json)?.ingredients || (Array.isArray(it.ingredients) ? it.ingredients : []),
             variant_group_id: it.variant_group_id ?? null, variant_value_index: it.variant_value_index ?? null,
             variant_label: it.variant_label || null,
@@ -26189,8 +26260,11 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         )
       );
 
+      await populateAutoAddFinancialSnapshots(db, { tenantId, storeId, items: normItems });
       if (useClientPricingSnapshotMode) {
         orderDiscountAmount = roundPrice(Number(pricingSnapshotSummary?.discount_total || 0));
+      } else {
+        addOrderDiscountAmount(normItems.reduce((sum, item) => sum + Number(item.auto_add_discount?.amount || 0), 0));
       }
       const generatedDiscountEntries = useClientPricingSnapshotMode
         ? normalizeStoredCheckoutDiscountEntries(pricingSnapshotSummary?.discount_breakdown, {
@@ -26229,7 +26303,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         bonus_level_id: req.body?.bonus_level_id,
       });
 
-      const itemsJson = JSON.stringify(normItems);
+      let itemsJson = JSON.stringify(normItems);
       if (useClientPricingSnapshotMode) {
         total = roundPrice(Number(pricingSnapshotSummary?.items_total || total));
       }
@@ -26432,6 +26506,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         if(authGuest && !await customerAuth.getGuest(conn,tenantId,token,true,storeId))throw new MessengerAuthError('UNAUTHORIZED',401);
         const preorderSnapshot = await validateCheckoutPreorders(conn, { tenantId, storeId: orderStoreId, items: normItems, timeOptionCode, scheduledAt, methodCode, timezone: storeTimezone });
         await router.validateAutoAddOrder(conn, { tenantId, storeId: orderStoreId, items: normItems, scheduledAt, timezone: storeTimezone, authenticated: Boolean(authCustomer) });
+        itemsJson = JSON.stringify(normItems);
         if (stockDeductMode === 'on_create' && (!isOnline || total===0)) {
           const deductionResult = await applyStockDeductionForOrderItems({
             db: conn,
@@ -26785,7 +26860,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         `SELECT id, title, description, sort_order,
                 min_cart_amount, max_cart_amount, include_auto_in_total,
                 max_items_qty, allow_customer_qty, allow_customer_remove,
-                rule_version, first_free, total_issue_limit, issued_qty, schedule_json, add_automatically, available_to_guests
+                rule_version, first_free, total_issue_limit, issued_qty, schedule_json, add_automatically, available_to_guests, pricing_mode
          FROM prod_auto_add_groups
          WHERE tenant_id=? AND is_active=1
          ORDER BY sort_order ASC, id ASC`,
@@ -26804,6 +26879,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
         allow_customer_remove: Number(g.allow_customer_remove ?? 1),
         rule_version: Number(g.rule_version),
         first_free: Number(g.first_free),
+        pricing_mode: g.pricing_mode || 'free',
         add_automatically: Number(g.add_automatically),
         available_to_guests: Number(g.available_to_guests),
         total_issue_limit: g.total_issue_limit == null ? null : Number(g.total_issue_limit),
