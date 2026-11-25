@@ -115,6 +115,15 @@
     const retryButton=document.createElement('button');retryButton.type='button';retryButton.className=recovery?'btn hidden':'btn btn-primary';retryButton.textContent='Продолжить';retryButton.disabled=employee?!/^7\d{10}$/.test(employeePhone.value.replace(/\D/g,'')):!/^7\d{10}$/.test(identity.value.replace(/\D/g,''));root.insertBefore(retryButton,form);
     const phoneInput=employee?employeePhone:identity;
     const customerError=error=>{
+      if (employee && !recovery && error.message === 'EMPLOYEE_TENANT_AMBIGUOUS') {
+        customerStep('methods');
+        methods.classList.remove('hidden');
+        buttons.forEach(button=>button.classList.add('hidden'));
+        alternative.classList.remove('hidden');
+        resendButton.classList.add('hidden');switchButton.classList.add('hidden');
+        message.textContent='Номер указан в нескольких организациях. Используйте логин и пароль или откройте вход на сайте своей организации.';
+        return;
+      }
       if (employee && !recovery && Array.isArray(error.payload?.channels)) {
         customerStep('methods');methods.classList.remove('hidden');
         alternative.classList.remove('hidden');resendButton.classList.add('hidden');switchButton.classList.add('hidden');

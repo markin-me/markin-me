@@ -10,7 +10,7 @@ const {
   getAccountChannels,
   unlinkAccountChannel,
   browserBinding, createBrowserRequest, consumeBrowserRequest, proveBrowserEmployee,
-  issueCodeChallenge, verifyEmployeeBrowserCode,
+  issueCodeChallenge, verifyEmployeeBrowserCode, resolveEmployeeBrowserTenant,
 } = require('./messengerAuth');
 const { buildProviderLink, deliverCode, getTenantChannelAvailability, getTenantBotConfig, assertBrowserProviderReady } = require('./messengerDelivery');
 
@@ -23,24 +23,33 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   router.use('/messenger-browser',(req,res,next)=>{res.set('Cache-Control','no-store');next();});
   // Context is fixed by this employee router, never taken from the browser body.
   const browserTenant = req => Number(req._resolvedTenant?.id || (process.env.DB_NAME === 'a1186497_test' && ['localhost','127.0.0.1','::1'].includes(req.hostname) ? 1 : 0));
+  async function employeeRequestTenant(req, requestId = req.body.request_id) {
+    const tenantId = await resolveEmployeeBrowserTenant(db, { requestId, binding: req.cookies?.messenger_browser });
+    const hostTenant = browserTenant(req);
+    if (hostTenant && hostTenant !== tenantId) throw new MessengerAuthError('REQUEST_INVALID', 403);
+    return tenantId;
+  }
   async function employeeByPhone(tenantId, phone) {
     const [users]=await db.query(`SELECT u.*,t.name tenant_name,t.slug tenant_slug FROM app_users u
       JOIN ten_tenants t ON t.id=u.tenant_id AND t.is_active=1
-      WHERE u.tenant_id=? AND u.is_active=1 AND u.employee_status='active'
-        AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)`,[tenantId]);
+      WHERE (?=0 OR u.tenant_id=?) AND u.is_active=1 AND u.employee_status='active'
+        AND EXISTS(SELECT 1 FROM user_roles ur JOIN tenant_roles tr ON tr.id=ur.role_id AND tr.tenant_id=ur.tenant_id WHERE ur.tenant_id=u.tenant_id AND ur.user_id=u.id)`,[tenantId,tenantId]);
     const matches=users.filter(user=>helpers.normalizePhone(user.phone)===phone);
+    if (!tenantId && new Set(matches.map(user => Number(user.tenant_id))).size > 1) {
+      throw new MessengerAuthError('EMPLOYEE_TENANT_AMBIGUOUS', 409);
+    }
     return matches.length===1?matches[0]:null;
   }
   router.post('/phone-flow/start',async(req,res)=>{
     try{
       if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
-      const tenantId=browserTenant(req),phone=helpers.normalizePhone(req.body.phone);
-      if(!tenantId)throw new MessengerAuthError('TENANT_REQUIRED',400);
+      const phone=helpers.normalizePhone(req.body.phone);
       if(!/^7\d{10}$/.test(phone))throw new MessengerAuthError('PHONE_REQUIRED',400);
+      const employee=await employeeByPhone(browserTenant(req),phone);
+      if(!employee)throw new MessengerAuthError('EMPLOYEE_NOT_FOUND',404);
+      const tenantId=Number(employee.tenant_id);
       const providers=[];
       for(const provider of ['max','tg'])try{await getTenantBotConfig(db,tenantId,provider);providers.push(provider);}catch(error){if(error.code!=='TENANT_BOT_UNAVAILABLE')throw error;}
-      const employee=await employeeByPhone(tenantId,phone);
-      if(!employee)throw new MessengerAuthError('EMPLOYEE_NOT_FOUND',404);
       const channels=await getAccountChannels(db,{tenantId,accountType:'employee',accountId:employee.id},{includePrivate:true});
       const available=providers.filter(provider=>channels.some(channel=>channel.provider===provider&&channel.verifiedAt));
       if(!available.length)return res.json({ok:true,mode:'unverified',channels:providers,employee_exists:true,relink_required:true});
@@ -71,7 +80,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   router.post('/phone-flow/verify',async(req,res)=>{
     try{
       if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
-      res.json(await verifyEmployeeBrowserCode(db,{tenantId:browserTenant(req),requestId:req.body.request_id,binding:req.cookies?.messenger_browser,code:req.body.code,onVerified:async(conn,r)=>{
+      res.json(await verifyEmployeeBrowserCode(db,{tenantId:await employeeRequestTenant(req),requestId:req.body.request_id,binding:req.cookies?.messenger_browser,code:req.body.code,onVerified:async(conn,r)=>{
       const [users]=await conn.query('SELECT u.*,t.name tenant_name,t.slug tenant_slug FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id WHERE u.id=? AND u.tenant_id=?',[r.account_id,r.tenant_id]);
       const auth=users[0]&&await buildSuccessfulAuth(users[0],{id:r.tenant_id,name:users[0].tenant_name,slug:users[0].tenant_slug},conn);
       if(!auth?.body?.ok)throw new MessengerAuthError(auth?.body?.error||'ACCOUNT_NOT_AVAILABLE',auth?.status||403);
@@ -81,8 +90,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   router.post('/messenger-browser/start', async (req,res) => {
     try {
       if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
-      const tenantId=browserTenant(req);
-      if (!tenantId) throw new MessengerAuthError('TENANT_REQUIRED',400);
+      let tenantId=browserTenant(req);
       const provider=String(req.body.provider || '');
       const purpose=req.body.purpose||'login';
       const requestedPhone=purpose==='login'?helpers.normalizePhone(req.body.phone):null;
@@ -91,8 +99,10 @@ module.exports = function makeAuthRouter({ db, helpers }) {
       if(purpose==='login'){
         loginEmployee=await employeeByPhone(tenantId,requestedPhone);
         if(!loginEmployee)throw new MessengerAuthError('EMPLOYEE_NOT_FOUND',404);
+        tenantId=Number(loginEmployee.tenant_id);
         if((await getAccountChannels(db,{tenantId,accountType:'employee',accountId:loginEmployee.id},{includePrivate:true})).some(channel=>channel.provider===provider&&channel.verifiedAt))throw new MessengerAuthError('EMPLOYEE_CODE_REQUIRED',409);
       }
+      if (!tenantId) throw new MessengerAuthError('TENANT_REQUIRED',400);
       await assertBrowserProviderReady(await getTenantBotConfig(db,tenantId,provider));
       const request=await createBrowserRequest(db,{tenantId,accountType:'employee',provider,binding:browserBinding(req,res),ipAddress:req.ip,purpose,requestedPhone});
       if(purpose==='login'){
@@ -104,7 +114,8 @@ module.exports = function makeAuthRouter({ db, helpers }) {
   router.post('/messenger-browser/status', async (req,res) => {
     try {
       if(process.env.NODE_ENV==='production'&&!req.secure)throw new MessengerAuthError('HTTPS_REQUIRED',426);
-      const value=await consumeBrowserRequest(db,{tenantId:browserTenant(req),accountType:'employee',requestId:req.body.request_id,
+      const tenantId=await employeeRequestTenant(req);
+      const value=await consumeBrowserRequest(db,{tenantId,accountType:'employee',requestId:req.body.request_id,
         binding:req.cookies?.messenger_browser,cancel:req.body.cancel===true,onVerified:async(conn,r)=>{
           await getTenantBotConfig(conn,r.tenant_id,r.provider);
           const [users]=await conn.query(`SELECT u.*,t.name tenant_name,t.slug tenant_slug FROM app_users u JOIN ten_tenants t ON t.id=u.tenant_id WHERE u.id=? AND u.tenant_id=? AND t.is_active=1`,[r.account_id,r.tenant_id]);
@@ -122,7 +133,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
           if(!auth.body.ok)throw new MessengerAuthError(auth.body.error,auth.status);
           return auth.body;
         }});
-      if(value.password_reset){revokeUserStreams(browserTenant(req),value.revokedUserId);delete value.revokedUserId;}
+      if(value.password_reset){revokeUserStreams(tenantId,value.revokedUserId);delete value.revokedUserId;}
       res.json(value);
     } catch(e){sendMessengerError(res,e);}
   });
@@ -475,7 +486,7 @@ module.exports = function makeAuthRouter({ db, helpers }) {
         if (user.employee_status !== 'active' || Number(user.is_active) !== 1) return res.status(403).json({ ok: false, error: 'USER_BLOCKED' });
         if (Number(user.tenant_active) !== 1) return res.status(403).json({ ok: false, error: 'TENANT_BLOCKED' });
         if(req.body.messenger_request_id){
-          if(Number(user.tenant_id)!==browserTenant(req))throw new MessengerAuthError('INVALID_CREDENTIALS',401);
+          if(Number(user.tenant_id)!==await employeeRequestTenant(req,req.body.messenger_request_id))throw new MessengerAuthError('INVALID_CREDENTIALS',401);
           if(Number(user.must_change_password))throw new MessengerAuthError('PASSWORD_CHANGE_REQUIRED',403);
           return res.json(await proveBrowserEmployee(db,{tenantId:user.tenant_id,accountId:user.id,
             requestId:req.body.messenger_request_id,binding:req.cookies?.messenger_browser,passwordHash:user.password_hash,authVersion:user.auth_version}));

@@ -1161,6 +1161,19 @@ async function assertBrowserSchema(db) {
   if(required.some(name=>!columns.some(c=>c.Field===name)))throw new MessengerAuthError('BROWSER_CONTACT_MIGRATION_REQUIRED',503);
 }
 
+async function resolveEmployeeBrowserTenant(db, { requestId, binding }) {
+  if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(requestId)
+      || typeof binding !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(binding)) {
+    throw new MessengerAuthError('REQUEST_INVALID', 403);
+  }
+  const [rows] = await db.query(`SELECT r.tenant_id FROM auth_browser_requests r
+    JOIN ten_tenants t ON t.id=r.tenant_id AND t.is_active=1
+    WHERE r.public_id=? AND r.account_type='employee' AND r.browser_hash=? LIMIT 1`,
+  [requestId, tokenHash(binding)]);
+  if (!rows.length) throw new MessengerAuthError('REQUEST_INVALID', 403);
+  return Number(rows[0].tenant_id);
+}
+
 async function findPhoneCustomer(conn,tenantId,phone) {
   const [rows]=await conn.query('SELECT id,phone,is_active FROM cust_customers WHERE tenant_id=? AND phone=? LIMIT 2 FOR UPDATE',[tenantId,phone]);
   const matches=rows.filter(c=>require('./helpers').normalizePhone(c.phone)===phone);
@@ -1659,6 +1672,7 @@ async function verifyEmployeeBrowserCode(db,options){
 module.exports = {
   verifyCustomerBrowserCode,
   verifyEmployeeBrowserCode,
+  resolveEmployeeBrowserTenant,
   assertBrowserSchema,
   browserBinding, createBrowserRequest, browserBotAction, consumeBrowserRequest, proveBrowserEmployee,
   completeBotLoginRequest,
