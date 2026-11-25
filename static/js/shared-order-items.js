@@ -67,12 +67,18 @@
     return name === "\u043f\u0440\u0438\u0431\u043e\u0440\u044b";
   }
 
+  function isPaidAutoAddItem(item) {
+    return Number(item && item.auto_add || 0) === 1 && item.auto_add_pricing_mode === "product";
+  }
+
   function sortAutoAddToEnd(items) {
     return (Array.isArray(items) ? items : [])
       .map(function (item, index) {
         return { item: item, index: index };
       })
       .sort(function (left, right) {
+        var paidOrder = Number(isPaidAutoAddItem(left.item)) - Number(isPaidAutoAddItem(right.item));
+        if (paidOrder) return paidOrder;
         var leftAuto = isAutoAddItem(left.item);
         var rightAuto = isAutoAddItem(right.item);
         if (leftAuto && !rightAuto) return 1;
@@ -555,7 +561,7 @@
       if (line) detailLines.push(line);
     });
 
-    if (Number(item && item.auto_add_rule_version) === 1) {
+    if (Number(item && item.auto_add_rule_version) === 1 && !isPaidAutoAddItem(item)) {
       var freeQty = Math.min(getItemQty(item), Math.max(0, Number(item.auto_add_free_qty || 0)));
       var paidQty = getItemQty(item) - freeQty;
       detailLines.unshift(String(freeQty) + " бесплатно" + (paidQty > 0 ? " · " + String(paidQty) + " по каталогу" : ""));
@@ -621,7 +627,7 @@
         "</div>" +
         '<div class="cart-footer">' +
           '<div class="cart-footer-left">' + quickPrintHtml +
-            (isGiftRewardItem(item) || (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1)
+            (isGiftRewardItem(item) || (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1 && item.auto_add_pricing_mode !== 'product')
               ? '<span class="sp-card-bogo-badge cart-bogo-badge" aria-label="Подарок" title="Подарок"><i class="fas fa-gift" aria-hidden="true"></i></span>' : '') + "</div>" +
           '<div class="cart-footer-right">' + priceHtml + "</div>" +
         "</div>" +
@@ -651,6 +657,7 @@
   }, true);
 
   window.SharedOrderItems = Object.assign({}, window.SharedOrderItems, {
+    isPaidAutoAddItem: isPaidAutoAddItem,
     getOrderItemDisplayPricing: getOrderItemDisplayPricing,
     buildReadonlyOrderDisplayPricingList: buildReadonlyOrderDisplayPricingList,
     renderReadonlyOrderItem: renderReadonlyOrderItem,

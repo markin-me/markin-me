@@ -10,7 +10,7 @@
         .reduce((sum, item) => sum + Math.max(0, Number(item.qty || 0)), 0);
       return [Number(group.id), group.remaining_qty == null ? Infinity : Math.max(0, Number(group.remaining_qty) + Number(issuedByGroup[Number(group.id)] || 0) - reserved)];
     }));
-    return rules.filter(rule => Number(rule.group?.rule_version) === 1).map(rule => {
+    return rules.filter(rule => Number(rule.group?.rule_version) === 1 && rule.group?.pricing_mode !== 'product').map(rule => {
       const group = rule.group, pid = Number(rule.product_id), gid = Number(group.id);
       if (Number(group.first_free) !== 1 && !(Number(rule.free_per_amount) > 0)) return null;
       const product = getProduct(pid) || rule.product;
@@ -74,8 +74,16 @@
         return true;
       });
     },
+    autoAddDesiredQty(rule, baseTotal, currentQty = 0) {
+      const group = rule.group;
+      if (group?.pricing_mode !== 'product') return null;
+      if (baseTotal < Number(group.min_cart_amount || 0) || (group.max_cart_amount != null && baseTotal > Number(group.max_cart_amount))) return 0;
+      const initial = Number(group.add_automatically ?? 1) === 1 ? Math.max(1, Number(rule.default_qty || 1)) : 0;
+      return Number(group.allow_customer_qty) === 1 ? Math.max(initial, Number(currentQty || 0)) : initial;
+    },
     autoAddFreeQty(rule, baseTotal) {
       const group = rule.group;
+      if (group?.pricing_mode === 'product') return 0;
       if (baseTotal < Number(group.min_cart_amount || 0) || (group.max_cart_amount != null && baseTotal > Number(group.max_cart_amount))) return 0;
       let qty = Number(group.first_free) === 1 ? 1 : 0;
       if (Number(rule.free_per_amount) > 0) qty += Math.floor(Math.round(baseTotal * 100) / Math.round(Number(rule.free_per_amount) * 100));

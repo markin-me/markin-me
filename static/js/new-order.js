@@ -1013,7 +1013,9 @@
 
         <div class="new-order-right-cart">
           <div class="new-order-right-cart-list">
-            ${cartItems.length ? cartItems.map((item, itemIndex) => {
+            ${cartItems.length ? cartItems.map((item, itemIndex) => ({ item, itemIndex }))
+              .sort((a, b) => Number(window.SharedOrderItems.isPaidAutoAddItem(a.item)) - Number(window.SharedOrderItems.isPaidAutoAddItem(b.item)))
+              .map(({ item, itemIndex }) => {
               const type = String(item?.type || "product");
               const qty = Math.max(1, Number(item?.qty || 1));
               const isGiftReward = isGiftRewardCartItem(item);
@@ -1208,12 +1210,12 @@
                     ` : `
                     <div class="qty-pill qty-pill--muted new-order-right-cart-qty" data-qty-wrap>
                       <button
-                        class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable || Number(item?.auto_add_rule_version) === 1) ? " is-disabled" : ""}"
+                        class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable || (Number(item?.auto_add_rule_version) === 1 && item.auto_add_pricing_mode !== 'product')) ? " is-disabled" : ""}"
                         type="button"
                         data-action="right-cart-qty-minus"
                         data-order-id="${Number(active?.id || 0)}"
                         data-cart-item-id="${Number(item?.id || 0)}"
-                        ${qtyEditable && Number(item?.auto_add_rule_version) !== 1 ? "" : "disabled aria-disabled=\"true\""}
+                        ${qtyEditable && (Number(item?.auto_add_rule_version) !== 1 || item.auto_add_pricing_mode === 'product') ? "" : "disabled aria-disabled=\"true\""}
                       >−</button>
                       <span class="qty-pill__center" data-qty-value>${qty}</span>
                       <button
@@ -1228,7 +1230,7 @@
                     `}
                   </div>
                   <div class="new-order-right-cart-item-main">
-                    <div class="new-order-right-cart-item-title">${Number(item?.auto_add) === 1 && Number(item?.auto_add_rule_version) === 1 ? '<i class="fas fa-gift" aria-label="Подарок"></i> ' : ''}${qty} × ${escapeHtml(title)}</div>
+                    <div class="new-order-right-cart-item-title">${Number(item?.auto_add) === 1 && (Number(item?.auto_add_rule_version) === 1 && item.auto_add_pricing_mode !== 'product') ? '<i class="fas fa-gift" aria-label="Подарок"></i> ' : ''}${qty} × ${escapeHtml(title)}</div>
                     ${(() => {
                       const preorder = item.type === 'combo'
                         ? preorderAvailability?.data?.combos?.find(combo => Number(combo.combo_id) === Number(item.combo_id))
@@ -3104,10 +3106,21 @@
     const priceOverride = (rule.price_override != null && Number(rule.price_override) > 0)
       ? Number(rule.price_override)
       : parts.baseProductUnit;
-    const unitPrice = roundPrice(priceOverride + parts.optionTotal + parts.ingredientDiff);
+    const presentation = Number(group?.rule_version) === 1
+      ? window.SharedProductDetails.getSelectionPresentation(next.product_id, {
+          variant_group_id: next.pricing?.variant_group?.id || next.pricing?.variant_group?.variant_group_id,
+          variant_value_index: Number(next.variant?.selected_index || 0),
+          option_items: (next.option_items || []).map(row => ({ ...row, variant_value_index: row.variantIndex ?? row.variant_value_index })),
+          ingredients: (next.ingredients || []).map(row => ({ ...row, quantity: row.qty ?? row.quantity })),
+        }) : null;
+    const unitPrice = roundPrice(presentation ? presentation.price : priceOverride + parts.optionTotal + parts.ingredientDiff);
+    if (presentation) next.old_price = presentation.oldPrice || null;
     const qty = Math.max(0, Number(next?.qty || 0));
     const freeQty = calcRightAutoFreeQty(rule, baseTotal);
     const paidQty = Math.max(0, qty - freeQty);
+    const autoDiscount = roundPrice(unitPrice * Math.min(qty, freeQty));
+    next.auto_add_discount = { discount_type: 'percent', discount_value: 100, free_qty: Math.min(qty, freeQty), amount: autoDiscount };
+    next.auto_add_pricing_mode = group?.pricing_mode || 'free';
     next.auto_add = 1;
     next.auto_add_group_id = Number(next?.auto_add_group_id || rule.group_id || 0) || null;
     next.auto_add_free_qty = Math.max(0, Math.min(qty, freeQty));
@@ -3115,12 +3128,12 @@
     next.unit_price_before_discount = unitPrice;
     next.unit_price = unitPrice;
     next.sum = roundPrice(unitPrice * paidQty);
+    next.old_line_total = roundPrice(Math.max(unitPrice, Number(next.old_price || 0)) * qty);
     if (next.pricing && typeof next.pricing === "object") {
       next.pricing = {
         ...next.pricing,
         unit_before_discount: unitPrice,
-        discount_amount: 0,
-        discount: null,
+        auto_add_discount: next.auto_add_discount,
       };
     }
     return next;
@@ -3301,12 +3314,13 @@
         const isNewRule = Number(group.rule_version) === 1;
         rule.current_free_limit = null;
         if (isNewRule) rule.current_free_limit = Math.min(window.SharedProductRuntime.autoAddFreeQty(rule, baseTotal), freeBudget, selected?.auto_add_customer_qty ?? Infinity);
-        const desiredQty = isNewRule
+        const paidDesired = isNewRule ? window.SharedProductRuntime.autoAddDesiredQty(rule, baseTotal, Number(selected?.qty || 0)) : null;
+        const desiredQty = paidDesired ?? (isNewRule
           ? (Number(group.add_automatically ?? 1) === 0
             ? Math.min(rule.current_free_limit, Math.max(Number(group.first_free) === 1 ? 1 : 0, Number(selected?.qty || 0)))
             : rule.current_free_limit)
-          : Math.max(minQty, defaultQty);
-        if (isNewRule) freeBudget -= desiredQty;
+          : Math.max(minQty, defaultQty));
+        if (isNewRule && group.pricing_mode !== 'product') freeBudget -= desiredQty;
 
         if (!selected && desiredQty > 0) {
           const created = buildPlainAutoAddCartItem(pid, desiredQty, Boolean(rule.configuration_json && rule.configuration_available));
@@ -3335,7 +3349,7 @@
             selected.option_items = (configuration.option_items || []).map(row => ({ ...row, label: row.title,
               variantIndex: row.variant_value_index, basePrice: 0, variantDiff: 0 }));
           }
-          if (!selected.auto_add_gift) {
+          if (!selected.auto_add_gift && group.pricing_mode !== 'product') {
             const extraQty = Math.max(0, Number(selected.qty || 0) - desiredQty);
             if (extraQty) {
               const regular = { ...selected, id: Date.now() + Math.floor(Math.random() * 10000), qty: extraQty, auto_add: 0, auto_add_group_id: null, auto_add_rule_version: 0 };
@@ -3357,6 +3371,7 @@
         }
         if (maxQty != null && nextQty > maxQty) nextQty = maxQty;
 
+        selected.auto_add_pricing_mode = group.pricing_mode || 'free';
         selected.qty = nextQty;
         if (nextQty <= 0) {
           cartItems = cartItems.filter((entry) => entry !== selected);
@@ -3434,7 +3449,7 @@
       const previous = previousItems.find(row => Number(row.id) === Number(item.id));
       const extra = previous ? Number(item.qty) - Number(previous.qty) : 0;
       if (extra < 0) item.auto_add_customer_qty = Math.max(0, Number(item.qty));
-      if (!(extra > 0) || opts.claimAutoGift === true) continue;
+      if (!(extra > 0) || opts.claimAutoGift === true || getRightAutoRuleByProductId(item.product_id)?.group?.pricing_mode === 'product') continue;
       const regular = buildPlainAutoAddCartItem(item.product_id, extra);
       if (!regular) return false;
       regular.auto_add = 0;
@@ -7143,6 +7158,9 @@
         auto_add_rule_version: Number(item?.auto_add_rule_version || 0),
         auto_add_customer_qty: item?.auto_add_customer_qty == null ? null : Number(item.auto_add_customer_qty),
         auto_add_free_qty: Number(item?.auto_add_free_qty || 0),
+        auto_add_pricing_mode: item.auto_add_pricing_mode || null,
+        unit_price_before_discount: Number(item.unit_price || 0),
+        auto_add_discount: item.auto_add_discount || null,
         line_total: lineTotal,
         original_line_total: originalLineTotal,
         bonus_redeem_line_amount: bonusRedeemLineAmount,
@@ -24107,6 +24125,8 @@
       auto_add_rule_version: Number(orderItem?.auto_add_rule_version || 0),
       auto_add_customer_qty: orderItem?.auto_add_customer_qty == null ? null : Number(orderItem.auto_add_customer_qty),
       auto_add_free_qty: Number(orderItem?.auto_add_free_qty || 0),
+      auto_add_pricing_mode: orderItem.auto_add_pricing_mode || null,
+      auto_add_discount: orderItem.auto_add_discount || null,
       is_gift_reward: Number(orderItem?.is_gift_reward || 0) === 1 ? 1 : 0,
       gift_reward_id: Number(orderItem?.gift_reward_id || 0) > 0 ? Number(orderItem.gift_reward_id) : null,
       category_id: Number(orderItem?.category_id || orderItem?._category_id || orderItem?.product_category_id || 0) || null,
@@ -24149,6 +24169,8 @@
     cartItem.auto_add = Number(orderItem?.auto_add || 0) === 1 ? 1 : 0;
     cartItem.auto_add_rule_version = Number(orderItem?.auto_add_rule_version || 0);
     cartItem.auto_add_free_qty = Number(orderItem?.auto_add_free_qty || 0);
+    cartItem.auto_add_pricing_mode = orderItem.auto_add_pricing_mode || null;
+    cartItem.auto_add_discount = orderItem.auto_add_discount || null;
     cartItem.auto_add_group_id = cartItem.auto_add === 1 && Number(orderItem?.auto_add_group_id || 0) > 0
       ? Number(orderItem.auto_add_group_id)
       : null;

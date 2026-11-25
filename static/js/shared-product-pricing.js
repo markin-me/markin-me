@@ -302,7 +302,7 @@ function computeItemPricing(item, totals) {
       isAutoItem = true;
     }
 
-    if (!isAutoItem && Number(item?.product?.promo_enabled) === 1) {
+    if ((!isAutoItem || Number(rule?.group?.rule_version) === 1) && Number(item?.product?.promo_enabled) === 1) {
       const optionPricing = runtime.getSelectedOptionItemsPricingTotals(item.option_items || [], item.product);
       const originalBase = Math.max(parts.baseProductUnit, runtime.scaleProductBasePriceForCurrentUnit(
         item.product, parts.baseProductUnit, Number(item.product.old_price || 0)));
@@ -375,6 +375,12 @@ function computeItemPricing(item, totals) {
       lineTotal = runtime.roundPrice(lineTotal - simpleDiscountAmount);
     }
 
+    if (isAutoItem && freeQty > 0) {
+      const autoDiscount = runtime.roundPrice(unitPrice * freeQty);
+      discountAmount = runtime.roundPrice(discountAmount + autoDiscount);
+      discountInfo = { id: null, title: "Автодобавление", discount_type: "percent", discount_value: 100,
+        discount_amount: autoDiscount, free_qty: freeQty, original_line_total: runtime.roundPrice(unitPrice * qty) };
+    }
     benefitsExcludedLineTotal = runtime.roundPrice(Math.min(lineTotal, Math.max(0, benefitsExcludedLineTotal)));
     return { lineTotal, unitPrice, paidQty, freeQty, isAuto: isAutoItem, parts, discountAmount, discountInfo, benefitsExcludedLineTotal };
   }

@@ -34,7 +34,7 @@
     const ids = normalizeIds(productIds);
     const incomplete = ids.filter(id => {
       const passport = getPassport(id);
-      return !passport || !['order', 'preorder'].includes(passport.product?.sale_mode)
+      return !passport || !Object.prototype.hasOwnProperty.call(passport.product || {}, "cost_price") || !['order', 'preorder'].includes(passport.product?.sale_mode)
         || !Array.isArray(passport.optionGroups || passport.options)
         || !Array.isArray(passport.ingredients) || !Array.isArray(passport.variants);
     });
@@ -431,7 +431,7 @@
       'option_groups', 'optionAssignments', 'defaultConfig', 'nestedIngredients', 'units', 'unitConversions',
       'productUnitLinks', 'stock', 'availability'].every(key => previous[key] === current[key]));
   }
-  async function prepareSelections(ids, { pricingOnly = false } = {}) {
+  async function prepareSelections(ids, { pricingOnly = false, costing = false } = {}) {
     let pending = normalizeIds(ids);
     const visited = new Set();
     do {
@@ -448,7 +448,7 @@
         const passport = getPassport(id), details = selectionDetails.get(id)?.details;
         const selected = new Set((passport.defaultConfig?.option_items || []).map(item => Number(item.id)));
         return [...(pricingOnly ? [] : passport.ingredients || []).map(row => row.ingredient_id),
-          ...(details.optionGroups || []).filter(group => !pricingOnly || (!group.is_packaging
+          ...(details.optionGroups || []).filter(group => !pricingOnly || costing || (!group.is_packaging
             && Number(group.is_component ?? group.is_component_default) === 1))
             .flatMap(group => (group.items || []).filter(item => !pricingOnly || selected.has(Number(item.id)))
               .map(row => row.target_product_id || row.product_id))];
@@ -476,13 +476,16 @@
       const variable = ingredient.is_variable == null || Number(ingredient.is_variable) === 1;
       return { ...ingredient, ingredient_id: Number(ingredient.ingredient_id),
         ingredient_name: ingredient.ingredient_name || choice?.ingredient_name || choice?.name || '',
-        qty: Number(choice?.quantity ?? choice?.qty ?? ingredient.quantity ?? 0),
+        qty: Number(variable ? choice?.quantity ?? choice?.qty ?? ingredient.quantity ?? 0 : ingredient.quantity ?? 0),
         qty_min: Number(variable ? ingredient.quantity_min ?? 0 : ingredient.quantity),
         qty_max: Number(variable ? ingredient.quantity_max ?? ingredient.quantity : ingredient.quantity),
         qty_step: Number(ingredient.quantity_step || 1),
         unit_label: ingredient.unit_short_title || ingredient.unit_title || ingredient.unit_code || choice?.unit_label || '',
       };
     });
+    configuration.ingredients = ingredients.map(ingredient => ({
+      ingredient_id: ingredient.ingredient_id, quantity: ingredient.qty,
+    }));
     const group = (details.variants || []).find(row => Number(row.id || row.variant_group_id) === Number(configuration.variant_group_id)) || details.variants?.[0];
     const labels = variantGroup => (variantGroup?.values || []).map(value => {
       const label = String(value ?? '').trim(), unit = variantGroup.unit_short_title || variantGroup.unit_code || '';
@@ -567,7 +570,7 @@
       group ? [{ ...group, discount_tiers: [] }] : [], { selectedIndex: index });
     for (const ingredient of respectSources && !ui.usesProductPriceSource(product, "composition") ? [] : passport.ingredients || []) {
       const selected = (chosen.ingredients || []).find(row => Number(row.ingredient_id) === Number(ingredient.ingredient_id));
-      if (!selected) continue;
+      if (!selected || (ingredient.is_variable != null && Number(ingredient.is_variable) !== 1)) continue;
       const selectedQuantity = Number(selected.quantity ?? selected.qty ?? ingredient.quantity);
       const baseQuantity = Number(ingredient.quantity || 0);
       if (selectedQuantity === baseQuantity) continue;
@@ -597,7 +600,7 @@
         Number(optionGroup?.is_component ?? optionGroup?.is_component_default) !== 1)
         * Number(option.qty ?? option.quantity ?? 1);
     }
-    return ui.roundPrice(Math.max(0, cost));
+    return Math.max(0, cost);
   }
 
   function getTargetMarginPrice(id, configuration, includePackaging = true) {
@@ -611,7 +614,33 @@
     const group = (passport.variants || []).find(row => Number(row.id || row.variant_group_id) === Number(chosen.variant_group_id));
     const index = Number(chosen.variant_value_index ?? group?.default_value_index ?? 0);
     const factor = getRuntime().getVariantPriceFactor(product, group, index);
-    return getSelectionCost(id, configuration, new Set(), includePackaging, true) / (1 - margin / 100) * factor;
+    const totalCost = getSelectionCost(id, configuration, new Set(), includePackaging, true);
+    const ui = getRuntime();
+    const extras = ui.usesProductPriceSource(product, "options") ? getConfiguredSelectionOptions(id, chosen)
+      .filter(option => !(passport.optionGroups || passport.options || []).some(group => Number(group.is_packaging) === 1
+        && group.items?.some(item => Number(item.id) === Number(option.id)))) : [];
+    const extraCost = extras.reduce((sum, option) => sum + getSelectionCost(option.target_product_id || option.product_id,
+      { ...(typeof option.configuration_json === 'string' ? JSON.parse(option.configuration_json) : option.configuration_json), ...option },
+      new Set([Number(id)]), !option.is_component) * Number(option.qty ?? option.quantity ?? 1), 0);
+    const ownPrice = Math.max(0, totalCost - extraCost) / (1 - margin / 100) * factor;
+    return ownPrice + ui.getSelectedOptionItemsPricingTotals(extras, product).currentTotal;
+  }
+
+  function getConfiguredSelectionOptions(id, chosen) {
+    const passport = getPassport(Number(id));
+    const details = resolveSelectionPassportDetails(passport, getRuntime());
+    const ui = getRuntime();
+    return (chosen.option_items || []).map(choice => {
+      const item = (details.optionGroups || []).flatMap(group => group.items || []).find(row => Number(row.id) === Number(choice.id));
+      if (!item) throw new Error('OPTION_CONFIGURATION_UNAVAILABLE');
+      const group = item.variants?.find(row => Number(row.id || row.variant_group_id) === Number(choice.variant_group_id)) || item.variants?.[0];
+      const selectedIndex = Number(choice.variant_value_index ?? group?.default_value_index ?? 0);
+      const optionGroup = (details.optionGroups || []).find(row => row.items?.some(value => Number(value.id) === Number(choice.id)));
+      const option = { ...item, ...choice, variants: item.variants, configuration_json: item.configuration_json,
+        is_component: !optionGroup?.is_packaging && Number(optionGroup?.is_component ?? optionGroup?.is_component_default) === 1 };
+      if (group) Object.assign(option, ui.buildOptionItemVariantState(item, group, selectedIndex));
+      return option;
+    });
   }
 
   function getSelectionPresentation(id, configuration, includePackaging = true) {
@@ -623,17 +652,7 @@
     const variant = (details.variants || []).find(row => Number(row.id || row.variant_group_id) === Number(chosen.variant_group_id)) || details.variants?.[0];
     const index = Number(chosen.variant_value_index ?? variant?.default_value_index ?? 0);
     const variantPrice = ui.getVariantUnitPrice(product, variant ? [variant] : [], { selectedIndex: index });
-    const options = (chosen.option_items || []).map(choice => {
-      const item = (details.optionGroups || []).flatMap(group => group.items || []).find(row => Number(row.id) === Number(choice.id));
-      if (!item) throw new Error('OPTION_CONFIGURATION_UNAVAILABLE');
-      const group = item.variants?.find(row => Number(row.id || row.variant_group_id) === Number(choice.variant_group_id)) || item.variants?.[0];
-      const selectedIndex = Number(choice.variant_value_index ?? group?.default_value_index ?? 0);
-      const optionGroup = (details.optionGroups || []).find(row => row.items?.some(value => Number(value.id) === Number(choice.id)));
-      const option = { ...item, ...choice, variants: item.variants, configuration_json: item.configuration_json,
-        is_component: !optionGroup?.is_packaging && Number(optionGroup?.is_component ?? optionGroup?.is_component_default) === 1 };
-      if (group) Object.assign(option, ui.buildOptionItemVariantState(item, group, selectedIndex));
-      return option;
-    });
+    const options = getConfiguredSelectionOptions(id, chosen);
     const optionPricing = ui.getSelectedOptionItemsPricingTotals(options, product);
     const ingredientState = new Map((chosen.ingredients || []).map(row => [Number(row.ingredient_id), { quantity: row.quantity ?? row.qty }]));
     const ingredientPricing = ui.calculateIngredientPricing(ui.usesProductPriceSource(product, "composition") ? details.ingredients || [] : [], ingredientState);
