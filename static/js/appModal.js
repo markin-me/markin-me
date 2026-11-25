@@ -394,7 +394,7 @@
         activeEl?.focus?.({preventScroll:true});
         resolve(accepted);
       };
-      cancel.onclick=event=>{event.stopPropagation();if(choiceBusy)return;options.onCancel?.();dismissConfirmation(false);};
+      cancel.onclick=event=>{event.stopPropagation();if(choiceBusy)return;options.onCancel?.();dismissConfirmation(options.cancelValue ?? false);};
       accept.onclick=event=>{event.stopPropagation();void handleConfirmationSave();};
       overlay.onclick=event=>{event.stopPropagation();if(event.target===overlay)dismissConfirmation(false);};
     });

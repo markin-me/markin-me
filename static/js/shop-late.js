@@ -24038,10 +24038,55 @@ function renderSheetAddressList() {
     message.setAttribute('role','status');
     message.textContent='Загружаем данные заказа…';
     content.append(message);
-    let order=null,methods=[],selected=null,changeFrom=null,busy=false,transition=false,stage=warning?'warning':'methods';
+    let order=null,methods=[],selected=null,changeFrom=null,busy=false,transition=false,stage='methods';
     const headers={},token=localStorage.getItem(`shop-payment:${buildDeliveryCacheScope().tenant_id}:${publicId}`);
     if(token)headers['x-order-payment-token']=token;
     if(window.AppModal.isOpen())window.AppModal.close('payment-choice-transition');
+    if (warning) {
+      let details;
+      try {
+        details = await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?details=1`, { headers });
+      } catch (error) {
+        if (scope === shopOrderRequestScopeKey()) await window.AppModal.alert('Не удалось загрузить способы оплаты: ' + error.message);
+        return;
+      }
+      if (scope !== shopOrderRequestScopeKey()) return;
+      if (details.data.paymentSummary.paymentSatisfied) {
+        void showShopPaymentReturn(publicId, false, null, false);
+        return;
+      }
+      let waiting = true, refreshTimer = null;
+      const refresh = async () => {
+        if (!waiting || scope !== shopOrderRequestScopeKey()) return;
+        try {
+          const result = await apiJson(`/api/public/orders/${encodeURIComponent(publicId)}/payment?refresh=0`, { headers });
+          if (!waiting || scope !== shopOrderRequestScopeKey()) return;
+          if (result.data.paymentSummary.paymentSatisfied) {
+            window.AppModal.close('payment-completed');
+            return;
+          }
+        } catch (error) {
+          if (waiting && scope === shopOrderRequestScopeKey()) showToast('Не удалось обновить статус оплаты: ' + error.message);
+        }
+        if (waiting) refreshTimer = setTimeout(refresh, 15000);
+      };
+      refreshTimer = setTimeout(refresh, 15000);
+      let choice;
+      try {
+        choice = await window.AppModal.confirm({
+          title: 'Заказ принят',
+          message: 'Заказ принят. Онлайн-оплата не завершена. Вы можете повторить оплату или сменить способ оплаты.',
+          saveText: 'Повторить онлайн-оплату',
+          cancelText: 'Сменить способ оплаты',
+          cancelValue: 'change-payment',
+          showCancel: details.data.paymentSummary.canChangeMethod !== false,
+        });
+      } finally { waiting = false; clearTimeout(refreshTimer); }
+      if (scope !== shopOrderRequestScopeKey()) return;
+      if (choice === 'change-payment') await showShopOrderChangePayment(publicId);
+      else void showShopPaymentReturn(publicId, choice === true);
+      return;
+    }
     resetOrderDetailsTransientUi();resetShopModalHeaderUi();setAppModalMode('shop');
     const modal=document.getElementById('appModal');
     modal.classList.add('shop-payment-choice-modal');
@@ -24055,17 +24100,12 @@ function renderSheetAddressList() {
       transition=true;clearStyle();window.AppModal.close('payment-choice');
       void showShopPaymentReturn(publicId,false,null,false,initialOrder?.id?initialOrder:null);
     };
-    window.AppModal.open({title:warning?'Заказ принят':'Способ оплаты',content,hideFooter:true,onClose:()=>{
+    window.AppModal.open({title:'Способ оплаты',content,hideFooter:true,onClose:()=>{
       clearStyle();
       if(!transition && scope===shopOrderRequestScopeKey())void showShopPaymentReturn(publicId,false,null,false);
     }});
     const button=(label,action,tone='secondary')=>{
       const node=document.createElement('button');node.type='button';node.className='control shop-payment-button shop-payment-button--'+tone;node.textContent=label;node.onclick=action;return node;
-    };
-    const repeat=()=>{
-      if(busy)return;
-      transition=true;clearStyle();window.AppModal.close('repeat-payment');
-      void showShopPaymentReturn(publicId,true);
     };
     const renderCash=()=>{
       stage='cash';modal.classList.add('shop-payment-cash-modal');
@@ -24084,13 +24124,6 @@ function renderSheetAddressList() {
       if(!current() || !order)return;
       modal.classList.remove('shop-payment-cash-modal');
       content.replaceChildren(message);
-      if(stage==='warning') {
-        window.AppModal.setTitle('Заказ принят');
-        message.textContent='Заказ принят. Онлайн-оплата не завершена. Вы можете повторить оплату или сменить способ оплаты.';
-        content.append(button('Повторить онлайн-оплату',repeat,'primary'));
-        if(order.paymentSummary?.canChangeMethod!==false)content.append(button('Сменить способ оплаты',()=>{stage='methods';render();}));
-        return;
-      }
       window.AppModal.setTitle('Способ оплаты');
       const expired=order.paymentSummary?.canChangeMethod===false;
       const locked=Boolean(expired || order.paymentSummary?.attentionRequired || order.paymentSummary?.paidAmount);
@@ -30047,6 +30080,7 @@ function renderSheetAddressList() {
     try { await apiJson("/api/public/auth/logout", { method: "POST", body: {} }); } catch {}
     clearCustomer({ fullReset: true });
     syncHeaderProfilePhoto(null);
+    if (closeModal && window.AppModal?.isOpen?.()) window.AppModal.close('logout');
     await refreshAddressState();
     return true;
   }
