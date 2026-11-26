@@ -466,7 +466,7 @@
   const CHECKOUT_DRAFT_KEY = `shop_checkout_draft_t${tenantId}`;
   const ADDRESS_DRAFT_KEY = `shop_address_draft_t${tenantId}`;
   const AUTO_ADD_DISMISSED_KEY = `shop_auto_add_dismissed_t${tenantId}_s${getActiveStoreId()}`;
-  const CATALOG_SNAPSHOT_VERSION = document.body.classList.contains('page-kso') ? 2 : 4;
+  const CATALOG_SNAPSHOT_VERSION = document.body.classList.contains('page-kso') ? 2 : 5;
   const isKsoCatalogCache = document.body.classList.contains('page-kso');
   const CATALOG_SNAPSHOT_MAX_AGE_MS = (isKsoCatalogCache ? 7 * 24 : 6) * 60 * 60 * 1000;
   const CATALOG_SNAPSHOT_KEY = `shop_catalog_snapshot_v${CATALOG_SNAPSHOT_VERSION}_t${tenantId}_s${getActiveStoreId()}`;
@@ -7092,14 +7092,14 @@
       timezone: state.autoAdd.timezone, scheduledAt: state.autoAdd.scheduledAt,
     });
     state.autoAdd.byProductId = new Map(rules.map(rule => [Number(rule.product_id), rule]));
-    const beforeAutoCleanup = state.cart.length;
-    state.cart = state.cart.filter(item => {
-      if (Number(item.auto_add) !== 1 || !(Number(item.auto_add_group_id) > 0)) return true;
+    const beforeAutoCleanup = state.cart;
+    state.cart = state.cart.map(item => {
+      if (Number(item.auto_add) !== 1 || !(Number(item.auto_add_group_id) > 0)) return item;
       return rules.some(rule => Number(rule.product_id) === Number(item.product_id)
-        && Number(rule.group_id) === Number(item.auto_add_group_id));
-    });
+        && Number(rule.group_id) === Number(item.auto_add_group_id)) ? item : getSharedShopProductRuntime().retainPaidAutoAddItem(item);
+    }).filter(Boolean);
 
-    let changed = beforeAutoCleanup !== state.cart.length;
+    let changed = beforeAutoCleanup.length !== state.cart.length || state.cart.some((item, index) => item !== beforeAutoCleanup[index]);
 
     const hasBaseItems = state.cart.some((item) => {
       const qty = Number(item.qty || 0);
@@ -7112,13 +7112,10 @@
     });
 
     if (!hasBaseItems) {
-      const before = state.cart.length;
-      state.cart = state.cart.filter((item) => {
-        const qty = Number(item.qty || 0);
-        if (qty <= 0) return false;
-        return Number(item.auto_add || 0) !== 1;
-      });
-      if (state.cart.length !== before) {
+      const before = state.cart;
+      state.cart = state.cart.map(item => getSharedShopProductRuntime().retainPaidAutoAddItem(item))
+        .filter(item => item && Number(item.qty || 0) > 0);
+      if (state.cart.length !== before.length || state.cart.some((item, index) => item !== before[index])) {
         changed = true;
       }
       if (state.cart.length === 0) {
@@ -7167,7 +7164,7 @@
           if (!Number.isFinite(pid)) return;
           const key = makeCartKey(pid, []) + (Number(group.rule_version) === 1 ? ':auto-add' : '');
           if (getCartItemByKey(key)) {
-            state.cart = state.cart.filter((x) => x.key !== key);
+            state.cart = state.cart.map(x => x.key === key ? getSharedShopProductRuntime().retainPaidAutoAddItem(x) : x).filter(Boolean);
             changed = true;
           }
         });
@@ -7284,24 +7281,24 @@
             item.option_items = (configuration.option_items || []).map(row => ({ ...row }));
             item.option_item_ids = item.option_items.map(row => Number(row.id));
           }
-          if (item.key !== key) {
-            const extraQty = Math.max(0, Number(item.qty || 0) - desired);
-            if (extraQty) {
-              const regularKey = makeCartKey(pid, []);
-              const regular = state.cart.find(row => row !== item && row.key === regularKey && Number(row.auto_add) !== 1);
-              if (regular) regular.qty += extraQty;
-              else state.cart.push({ ...item, key: regularKey, qty: extraQty, auto_add: 0, auto_add_group_id: null, auto_add_rule_version: 0 });
-            }
-            item.key = key;
-            changed = true;
-          }
+          if (item.key !== key) { item.key = key; changed = true; }
         }
 
+        if (isNewRule && allowQty && group.pricing_mode !== 'product') {
+          const signature = getSharedShopProductRuntime().getAutoAddConfigurationKey(item);
+          state.cart = state.cart.filter(candidate => {
+            if (candidate === item || Number(candidate.auto_add) === 1 || Number(candidate.is_gift_reward) === 1
+              || candidate.type === 'combo' || getSharedShopProductRuntime().getAutoAddConfigurationKey(candidate) !== signature) return true;
+            item.qty = Number(item.qty || 0) + Number(candidate.qty || 0);
+            changed = true;
+            return false;
+          });
+        }
         let nextQty = Math.max(0, Number(item.qty || 0));
         if (keepDormantZeroQty) {
           nextQty = 0;
         } else if (isNewRule || !allowQty) {
-          nextQty = desired;
+          nextQty = isNewRule && allowQty ? Math.max(nextQty, desired) : desired;
         } else {
           if (isNewRule) {
             nextQty = Math.max(nextQty, desired);
@@ -7311,6 +7308,7 @@
         }
         if (maxQty != null && nextQty > maxQty) nextQty = maxQty;
 
+        if (isNewRule) item.auto_add_free_qty = Math.min(nextQty, Math.max(0, Number(rule.current_free_limit || 0)));
         if (nextQty !== item.qty) {
           item.qty = nextQty;
           changed = true;
@@ -7883,6 +7881,7 @@
         auto_add: Number(item.auto_add || 0),
         auto_add_group_id: toFiniteNumberOrNull(item.auto_add_group_id),
         auto_add_rule_version: Number(item.auto_add_rule_version || 0),
+        auto_add_free_qty: item.auto_add_free_qty,
       };
       const autoRule = Number(item.auto_add) === 1 ? getAutoRuleByProductId(pid) : null;
       resolvedItem.auto_add_pricing_mode = autoRule?.group?.pricing_mode || item.auto_add_pricing_mode || "free";
@@ -14817,7 +14816,7 @@ async function initAddresses() {
     const showOld = originalTotal > currentTotal;
     let discountPercent = lineState ? Math.round(Number(lineState.discountPercent || 0)) : 0;
     if ((!Number.isFinite(discountPercent) || discountPercent <= 0) && showOld && originalTotal > 0) {
-      discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+      discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 10000) / 100;
     }
     if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
     if (discountPercent > 100) discountPercent = 100;
@@ -15445,6 +15444,7 @@ async function initAddresses() {
       const isUnavailable = item?.is_unavailable === true;
       const pricing = computeItemPricing(
         {
+          ...item,
           product,
           qty,
           option_items: optionItems,
@@ -17580,7 +17580,7 @@ function updateCartBadge() {
         cartKey = gift.key;
       } else if (regular) cartKey = regular.key;
     }
-    const targetKey = copiedGift ? makeCartKey(pid, copiedGift.option_items || [], copiedGift.ingredients || [], copiedVariant)
+    const targetKey = copiedGift ? copiedGift.key
       : separateAutoGift && !cartKey && qtyDelta > 0 ? makeCartKey(pid, []) : resolveCartKeyForQtyChange(pid, qtyDelta, cartKey, state.cart);
     if (!targetKey) return Number(cartQty(pid) || 0);
 

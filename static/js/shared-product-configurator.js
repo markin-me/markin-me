@@ -70,7 +70,10 @@ async function renderProductDetailsInto(container, product, { onBack, cartKey, p
     .filter(id => id > 0 && id !== Number(product.id)))];
   const componentTargets = document.body?.matches(".page-shop:not(.page-kso)") ? [...new Set(optionGroups
     .filter(group => !group.is_packaging && Number(group.is_component ?? group.is_component_default) === 1)
-    .flatMap(group => group.items.map(item => Number(item.target_product_id || item.product_id)))
+    .flatMap(group => group.items.filter(item => {
+      const config = typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json;
+      return (config?.option_items || []).length > 0;
+    }).map(item => Number(item.target_product_id || item.product_id)))
     .filter(id => id > 0 && id !== Number(product.id)))] : [];
   if (typeof window.preloadProductPassportsBatch === "function") {
     const targets = [...new Set([...separateTargets, ...componentTargets])];
@@ -542,7 +545,7 @@ optionGroups.forEach((group) => {
     const totalBeforeDiscount = runtime.roundPrice(totalPrice + discountAmount);
     
     // Зачёркнутая цена: либо скидка, либо product.old_price из БД
-    const totalOldFromDb = runtime.roundPrice(Math.max(pricing.parts.baseUnit, baseOriginalComparable + optionOriginalComparableTotal) * Number(qty || 1));
+    const totalOldFromDb = runtime.roundPrice(Math.max(pricing.parts.baseUnit + Math.max(0, optionOriginalComparableTotal - optionTotal), baseOriginalComparable + optionOriginalComparableTotal) * Number(qty || 1));
     
     // Приоритет: если есть скидка — показываем цену до скидки, иначе old_price
     const hasApiDiscount = discountAmount > 0;

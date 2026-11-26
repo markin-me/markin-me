@@ -450,7 +450,11 @@
         return [...(pricingOnly ? [] : passport.ingredients || []).map(row => row.ingredient_id),
           ...(details.optionGroups || []).filter(group => !pricingOnly || costing || (!group.is_packaging
             && Number(group.is_component ?? group.is_component_default) === 1))
-            .flatMap(group => (group.items || []).filter(item => !pricingOnly || selected.has(Number(item.id)))
+            .flatMap(group => (group.items || []).filter(item => {
+              if (!pricingOnly || costing) return true;
+              const config = typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json;
+              return selected.has(Number(item.id)) && (config?.option_items || []).length > 0;
+            })
               .map(row => row.target_product_id || row.product_id))];
       }));
       if (!pricingOnly) {
@@ -550,10 +554,12 @@
     const passport = getPassport(id);
     const chosen = { ...(passport?.defaultConfig || {}), ...(configuration || {}) };
     if (includePackaging) return chosen;
-    const groups = passport?.optionGroups || passport?.options || [];
-    const packagingIds = new Set(groups.filter(group => Number(group.is_packaging) === 1)
-      .flatMap(group => (group.items || []).map(item => Number(item.id))));
-    return { ...chosen, option_items: (chosen.option_items || []).filter(item => !packagingIds.has(Number(item.id))) };
+    const groups = passport ? resolveSelectionPassportDetails(passport, getRuntime()).optionGroups : [];
+    const packagingGroups = groups.filter(group => Number(group.is_packaging ?? group.group?.is_packaging) === 1);
+    const packagingIds = new Set(packagingGroups.flatMap(group => (group.items || []).map(item => Number(item.id))));
+    const packagingGroupIds = new Set(packagingGroups.map(group => Number(group.id || group.group?.id || group.group_id)));
+    return { ...chosen, option_items: (chosen.option_items || []).filter(item => Number(item.is_packaging) !== 1
+      && !packagingIds.has(Number(item.id || item.option_item_id)) && !packagingGroupIds.has(Number(item.group_id))) };
   }
 
   function getSelectionCost(id, configuration, parents = new Set(), includePackaging = true, respectSources = false) {
@@ -588,10 +594,18 @@
       if (current == null || base == null) throw new Error('INGREDIENT_UNIT_CONVERSION_UNAVAILABLE');
       cost += (current - base) * unitCost;
     }
+    const rawCostConfig = product.pricing_config_json;
+    const savedCostConfig = typeof rawCostConfig === 'string' ? JSON.parse(rawCostConfig) : rawCostConfig;
+    let savedPackagingApplied = false;
     const nextParents = new Set(parents).add(id);
     for (const option of respectSources && !ui.usesProductPriceSource(product, "options") ? [] : chosen.option_items || []) {
       const optionGroup = (passport.optionGroups || passport.options || []).find(group => group.items?.some(item => Number(item.id) === Number(option.id)));
       const definition = optionGroup?.items?.find(item => Number(item.id) === Number(option.id));
+      if (Number(optionGroup?.is_packaging) === 1 && savedCostConfig?.saved_packaging) {
+        if (!savedPackagingApplied) cost += savedCostConfig.saved_packaging.cost;
+        savedPackagingApplied = true;
+        continue;
+      }
       const optionProductId = Number(option.target_product_id || option.product_id || definition?.target_product_id);
       if (!(optionProductId > 0)) continue;
       const raw = definition?.configuration_json;
@@ -601,6 +615,21 @@
         * Number(option.qty ?? option.quantity ?? 1);
     }
     return Math.max(0, cost);
+  }
+
+  function getSelectionPackagingTotals(id, configuration) {
+    const passport = getPassport(Number(id));
+    if (!passport?.product) throw new Error('PRODUCT_PASSPORT_UNAVAILABLE:' + id);
+    const chosen = { ...(passport.defaultConfig || {}), ...(configuration || {}) };
+    const totals = { price: 0, cost: 0 };
+    for (const option of getConfiguredSelectionOptions(id, chosen).filter(option => isPackagingOption(id, option))) {
+      const targetId = Number(option.target_product_id || option.product_id);
+      const qty = Number(option.qty ?? option.quantity ?? 1);
+      const pricing = getRuntime().getOptionItemDisplayPricing(option, option);
+      totals.price += Number(pricing.currentPrice) * qty;
+      totals.cost += getSelectionCost(targetId, option, new Set(), false) * qty;
+    }
+    return totals;
   }
 
   function getTargetMarginPrice(id, configuration, includePackaging = true) {
@@ -614,16 +643,22 @@
     const group = (passport.variants || []).find(row => Number(row.id || row.variant_group_id) === Number(chosen.variant_group_id));
     const index = Number(chosen.variant_value_index ?? group?.default_value_index ?? 0);
     const factor = getRuntime().getVariantPriceFactor(product, group, index);
-    const totalCost = getSelectionCost(id, configuration, new Set(), includePackaging, true);
     const ui = getRuntime();
-    const extras = ui.usesProductPriceSource(product, "options") ? getConfiguredSelectionOptions(id, chosen)
-      .filter(option => !(passport.optionGroups || passport.options || []).some(group => Number(group.is_packaging) === 1
-        && group.items?.some(item => Number(item.id) === Number(option.id)))) : [];
-    const extraCost = extras.reduce((sum, option) => sum + getSelectionCost(option.target_product_id || option.product_id,
-      { ...(typeof option.configuration_json === 'string' ? JSON.parse(option.configuration_json) : option.configuration_json), ...option },
-      new Set([Number(id)]), !option.is_component) * Number(option.qty ?? option.quantity ?? 1), 0);
-    const ownPrice = Math.max(0, totalCost - extraCost) / (1 - margin / 100) * factor;
-    return ownPrice + ui.getSelectedOptionItemsPricingTotals(extras, product).currentTotal;
+    const selectedOptions = ui.usesProductPriceSource(product, "options") ? getConfiguredSelectionOptions(id, chosen) : [];
+    const isPackaging = option => (passport.optionGroups || passport.options || []).some(group => Number(group.is_packaging) === 1
+      && group.items?.some(item => Number(item.id) === Number(option.id)));
+    const packaging = selectedOptions.filter(isPackaging);
+    const extras = selectedOptions.filter(option => !isPackaging(option));
+    const ownPrice = ui.getVariantUnitPrice(product, group ? [group] : [], { selectedIndex: index });
+    const packagingCost = config.saved_packaging?.cost ?? packaging.reduce((sum, option) => {
+      const target = getProduct(option.target_product_id || option.product_id);
+      if (!target) throw new Error('PRODUCT_PASSPORT_UNAVAILABLE:' + option.target_product_id);
+      return sum + Number(target.cost_price || 0) * Number(option.qty ?? option.quantity ?? 1);
+    }, 0);
+    const packagingPrice = packaging.length ? config.saved_packaging?.price ?? packagingCost / (1 - margin / 100) : 0;
+    const ingredientState = new Map((chosen.ingredients || []).map(row => [Number(row.ingredient_id), { quantity: row.quantity ?? row.qty }]));
+    const ingredientPricing = ui.calculateIngredientPricing(ui.usesProductPriceSource(product, "composition") ? passport.ingredients || [] : [], ingredientState);
+    return ownPrice + packagingPrice * factor + ui.getSelectedOptionItemsPricingTotals(extras, product).currentTotal + ingredientPricing.currentDiff;
   }
 
   function getConfiguredSelectionOptions(id, chosen) {
@@ -632,7 +667,7 @@
     const ui = getRuntime();
     return (chosen.option_items || []).map(choice => {
       const item = (details.optionGroups || []).flatMap(group => group.items || []).find(row => Number(row.id) === Number(choice.id));
-      if (!item) throw new Error('OPTION_CONFIGURATION_UNAVAILABLE');
+      if (!item) throw new Error(`OPTION_CONFIGURATION_UNAVAILABLE:product=${id},option=${choice.id},group=${choice.group_id ?? ''}`);
       const group = item.variants?.find(row => Number(row.id || row.variant_group_id) === Number(choice.variant_group_id)) || item.variants?.[0];
       const selectedIndex = Number(choice.variant_value_index ?? group?.default_value_index ?? 0);
       const optionGroup = (details.optionGroups || []).find(row => row.items?.some(value => Number(value.id) === Number(choice.id)));
@@ -656,6 +691,16 @@
     const optionPricing = ui.getSelectedOptionItemsPricingTotals(options, product);
     const ingredientState = new Map((chosen.ingredients || []).map(row => [Number(row.ingredient_id), { quantity: row.quantity ?? row.qty }]));
     const ingredientPricing = ui.calculateIngredientPricing(ui.usesProductPriceSource(product, "composition") ? details.ingredients || [] : [], ingredientState);
+    const rawConfig = product.pricing_config_json;
+    const config = typeof rawConfig === 'string' ? JSON.parse(rawConfig) : rawConfig;
+    if (config?.saved_packaging && config.target_margin == null && ui.usesProductPriceSource(product, "options")) {
+      const packaging = options.filter(option => isPackagingOption(id, option));
+      if (packaging.length) {
+        const current = ui.getSelectedOptionItemsPricingTotals(packaging, product);
+        optionPricing.currentTotal += config.saved_packaging.price - current.currentTotal;
+        optionPricing.originalComparableTotal += config.saved_packaging.price - current.originalComparableTotal;
+      }
+    }
     const ordinaryPrice = Math.max(variantPrice, ui.scaleProductBasePriceForCurrentUnit(product, variantPrice, Number(product.old_price || 0)))
       + optionPricing.originalComparableTotal + ingredientPricing.originalDiff;
     const marginPrice = getTargetMarginPrice(id, chosen, includePackaging);
@@ -663,10 +708,10 @@
       marginPrice ?? variantPrice + optionPricing.currentTotal + ingredientPricing.currentDiff, marginPrice ?? ordinaryPrice);
     const discount = ui.calculateProductDiscountAmount(unitPrice, product.discount);
     const price = ui.roundPrice(Math.max(0, unitPrice - discount));
-    const oldBase = ui.scaleProductBasePriceForCurrentUnit(product, variantPrice || Number(product.price || 0), Number(product.old_price || 0));
-    const oldPrice = marginPrice != null ? (discount > 0 ? ui.roundPrice(marginPrice) : 0) : discount > 0
-      ? ui.roundPrice(unitPrice + Math.max(0, optionPricing.originalComparableTotal - optionPricing.currentTotal))
-      : ui.roundPrice(Math.max(oldBase, variantPrice) + ingredientPricing.originalDiff + optionPricing.originalComparableTotal);
+    const originalComparable = marginPrice != null
+      ? marginPrice + Math.max(0, optionPricing.originalComparableTotal - optionPricing.currentTotal)
+      : ordinaryPrice;
+    const oldPrice = ui.roundPrice(Math.max(originalComparable, unitPrice));
     const label = selection.rows.find(row => row.rowKind === 'product')?.unitLabel || '';
     const title = ui.getCatalogProductTitle({ ...product, default_variant: { ...product.default_variant, variant_label: label } });
     return { title, price, priceText: ui.money(price), oldPrice: oldPrice > price ? oldPrice : 0,
@@ -744,7 +789,9 @@
 
   window.SharedProductDetails = Object.freeze({
     configure(options) { source = options || {}; },
-    normalizePriceRoundingSettings, mount, open, prepare, ensureOverlay, renderCompositionRow, prepareSelections, getSelection, getSelectionPresentation, ensureDetails, preload: ensureDetails,
+    retainPaidAutoAddItem: item => getRuntime().retainPaidAutoAddItem(item),
+    getAutoAddConfigurationKey: item => getRuntime().getAutoAddConfigurationKey(item),
+    getSelectionPackagingTotals, normalizePriceRoundingSettings, mount, open, prepare, ensureOverlay, renderCompositionRow, prepareSelections, getSelection, getSelectionPresentation, ensureDetails, preload: ensureDetails,
     prefetch: fetchPassports, getSummaries,
     getOptionItemDisplayPricing: (item, variant, includePackaging = true) => {
       const ui = getRuntime();
@@ -755,6 +802,21 @@
       const chosen = { ...configuration };
       if (variant?.variant_group_id != null) chosen.variant_group_id = variant.variant_group_id;
       if (variant?.variant_value_index != null) chosen.variant_value_index = variant.variant_value_index;
+      const target = getProduct(id);
+      if (target && !(configuration?.option_items || []).length) {
+        const group = (item.variants || []).find(group => Number(group.id || group.variant_group_id) === Number(chosen.variant_group_id)) || item.variants?.[0];
+        const index = Number(chosen.variant_value_index ?? group?.default_value_index ?? 0);
+        const base = ui.getVariantUnitPrice(target, group ? [group] : [], { selectedIndex: index }) + Number(configuration?.ingredient_price_diff || 0);
+        const oldBase = ui.getVariantUnitPrice({ ...target, price: Math.max(Number(target.old_price || 0), Number(target.price || 0)) }, group ? [group] : [], { selectedIndex: index });
+        const beforeDiscount = ui.applyProductPromoPricing(target, base, Math.max(base, oldBase));
+        const discount = ui.calculateProductDiscountAmount(beforeDiscount, target.discount);
+        const delta = item.price_mode === "delta" ? Number(item.price_value || 0) : 0;
+        const currentPrice = ui.roundPrice(Math.max(0, beforeDiscount - discount + delta));
+        const originalPrice = ui.roundPrice(Math.max(base, oldBase) + delta);
+        const showOld = originalPrice > currentPrice;
+        return { currentPrice, originalPrice: showOld ? originalPrice : 0, showOld,
+          badgeText: showOld ? ui.getDiscountBadgeTextForPricePair(currentPrice, originalPrice) : "" };
+      }
       const presentation = getSelectionPresentation(id, chosen, false);
       if (!presentation) throw new Error(`PRODUCT_PASSPORT_UNAVAILABLE:${id}`);
       const delta = item.price_mode === "delta" ? Number(item.price_value || 0) : 0;

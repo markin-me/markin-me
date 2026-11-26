@@ -2499,7 +2499,7 @@
     const context = editorPriceSnapshotContext(id, options);
     const key = `${context.namespace}:${id}`;
     const saved = editorPriceSnapshots.get(key) || await scope.get(`editor-price:${id}`);
-    if (saved?.version !== 4 || !editorPriceSnapshotMatches(saved.context, context)
+    if (saved?.version !== 5 || !editorPriceSnapshotMatches(saved.context, context)
         || !editorPriceSnapshotMatches(context, editorPriceSnapshotContext(id, options))) return null;
     editorPriceSnapshots.set(key, saved);
     return saved.values;
@@ -2509,7 +2509,7 @@
     const id = normalizeId(productId);
     if (!id || !scope?.complete) return false;
     const context = editorPriceSnapshotContext(id, options);
-    const saved = { version: 4, context, values };
+    const saved = { version: 5, context, values };
     const key = `${context.namespace}:${id}`;
     editorPriceSnapshots.set(key, saved);
     if (editorPriceSnapshots.size > 100) editorPriceSnapshots.delete(editorPriceSnapshots.keys().next().value);

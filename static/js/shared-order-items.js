@@ -71,6 +71,32 @@
     return Number(item && item.auto_add || 0) === 1 && item.auto_add_pricing_mode === "product";
   }
 
+  function mergeAutoAddDisplayItems(items) {
+    var source = Array.isArray(items) ? items : [];
+    var keyOf = function (item) {
+      return JSON.stringify([Number(item.product_id), item.variants || [], item.options || [], item.ingredients || []]);
+    };
+    var autoByKey = new Map();
+    source.forEach(function (item) {
+      if (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1 && item.auto_add_pricing_mode !== 'product') autoByKey.set(keyOf(item), item);
+    });
+    var grouped = new Map(), output = [];
+    source.forEach(function (item) {
+      var key = keyOf(item), auto = autoByKey.get(key);
+      if (!auto || isGiftRewardItem(item) || isComboItem(item)) { output.push(item); return; }
+      var group = grouped.get(key);
+      if (!group) { group = { ...auto, qty: 0, line_total: 0, old_line_total: 0, auto_add_free_qty: 0 }; grouped.set(key, group); output.push(group); }
+      var pricing = getOrderItemDisplayPricing(item), qty = getItemQty(item);
+      group.qty += qty;
+      group.line_total = roundMoney(group.line_total + pricing.currentTotal);
+      group.old_line_total = roundMoney(group.old_line_total + Math.max(pricing.originalTotal, Number(item.price || 0) * qty, pricing.currentTotal));
+      group.auto_add_free_qty += Number(item.auto_add_free_qty || 0);
+      group.discount_percent = group.old_line_total > 0 ? (1 - group.line_total / group.old_line_total) * 100 : 0;
+      group.discount = { ...(group.discount || {}), percent: group.discount_percent, original_line_total: group.old_line_total };
+    });
+    return output;
+  }
+
   function sortAutoAddToEnd(items) {
     return (Array.isArray(items) ? items : [])
       .map(function (item, index) {
@@ -237,7 +263,7 @@
         : (item && (item.discount_percent != null ? item.discount_percent : item.discountPercent))
     );
     if (!(discountPercent > 0) && originalTotal > currentTotal && originalTotal > 0) {
-      discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+      discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 10000) / 100;
     }
     if (!Number.isFinite(discountPercent) || discountPercent <= 0 || !(originalTotal > currentTotal)) {
       discountPercent = 0;
@@ -347,7 +373,7 @@
       var originalTotal = roundMoney(Math.max(Number(entry.originalTotal || 0), Number(entry.baseTotal || 0), currentTotal));
       var discountPercent = 0;
       if (originalTotal > currentTotal && originalTotal > 0) {
-        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 10000) / 100;
       }
       if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
       if (discountPercent > 100) discountPercent = 100;
@@ -561,7 +587,7 @@
       if (line) detailLines.push(line);
     });
 
-    if (Number(item && item.auto_add_rule_version) === 1 && !isPaidAutoAddItem(item)) {
+    if (Number(item && item.auto_add_rule_version) === 1 && !isPaidAutoAddItem(item) && Number(item.auto_add_free_qty) > 0) {
       var freeQty = Math.min(getItemQty(item), Math.max(0, Number(item.auto_add_free_qty || 0)));
       var paidQty = getItemQty(item) - freeQty;
       detailLines.unshift(String(freeQty) + " бесплатно" + (paidQty > 0 ? " · " + String(paidQty) + " по каталогу" : ""));
@@ -627,7 +653,7 @@
         "</div>" +
         '<div class="cart-footer">' +
           '<div class="cart-footer-left">' + quickPrintHtml +
-            (isGiftRewardItem(item) || (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1 && item.auto_add_pricing_mode !== 'product')
+            (isGiftRewardItem(item) || (Number(item.auto_add) === 1 && Number(item.auto_add_rule_version) === 1 && item.auto_add_pricing_mode !== 'product' && Number(item.auto_add_free_qty) > 0)
               ? '<span class="sp-card-bogo-badge cart-bogo-badge" aria-label="Подарок" title="Подарок"><i class="fas fa-gift" aria-hidden="true"></i></span>' : '') + "</div>" +
           '<div class="cart-footer-right">' + priceHtml + "</div>" +
         "</div>" +
@@ -636,7 +662,8 @@
   }
 
   function renderReadonlyOrderItems(items, opts) {
-    var normalized = opts && opts.sortAutoAdd ? sortAutoAddToEnd(items) : (Array.isArray(items) ? items : []);
+    var displayItems = mergeAutoAddDisplayItems(items);
+    var normalized = opts && opts.sortAutoAdd ? sortAutoAddToEnd(displayItems) : displayItems;
     var pricingList = buildReadonlyOrderDisplayPricingList(normalized, opts || {});
     return normalized.map(function (item, index) {
       var itemOpts = Object.assign({}, opts || {}, {
@@ -657,6 +684,7 @@
   }, true);
 
   window.SharedOrderItems = Object.assign({}, window.SharedOrderItems, {
+    mergeAutoAddDisplayItems: mergeAutoAddDisplayItems,
     isPaidAutoAddItem: isPaidAutoAddItem,
     getOrderItemDisplayPricing: getOrderItemDisplayPricing,
     buildReadonlyOrderDisplayPricingList: buildReadonlyOrderDisplayPricingList,

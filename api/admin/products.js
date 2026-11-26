@@ -675,7 +675,8 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     if (config.composition_cost != null && (typeof config.composition_cost !== "number" || !Number.isFinite(config.composition_cost) || config.composition_cost < 0)) return null;
     if (config.composition_price != null && (typeof config.composition_price !== "number" || !Number.isFinite(config.composition_price) || config.composition_price < 0)) return null;
     if (config.target_margin != null && (typeof config.target_margin !== "number" || !Number.isFinite(config.target_margin) || config.target_margin >= 100)) return null;
-    return { mode: "auto", sources, ...(config.composition_cost != null ? { composition_cost: config.composition_cost } : {}), ...(config.composition_price != null ? { composition_price: config.composition_price } : {}),
+    if (config.saved_packaging != null && (!Number.isFinite(config.saved_packaging.price) || config.saved_packaging.price < 0 || !Number.isFinite(config.saved_packaging.cost) || config.saved_packaging.cost < 0)) return null;
+    return { mode: "auto", sources, ...(config.saved_packaging != null ? { saved_packaging: { price: config.saved_packaging.price, cost: config.saved_packaging.cost } } : {}), ...(config.composition_cost != null ? { composition_cost: config.composition_cost } : {}), ...(config.composition_price != null ? { composition_price: config.composition_price } : {}),
       ...(config.target_margin != null ? { target_margin: config.target_margin } : {}) };
   }
 
@@ -2448,6 +2449,14 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
             updates.push("old_price=?");
             params.push(totals.old_price != null && totals.old_price > totals.price ? totals.old_price : null);
           }
+          if (!item.price_source_edited && provided.saved_packaging != null) {
+            const [[saved]] = await db.query('SELECT pricing_config_json FROM prod_products WHERE tenant_id=? AND id=?', [tenantId, item.product_id]);
+            const raw = typeof saved?.pricing_config_json === 'string' ? JSON.parse(saved.pricing_config_json) : saved?.pricing_config_json;
+            const config = normalizeProductPricingConfig({ ...raw, saved_packaging: provided.saved_packaging });
+            if (!config) throw Object.assign(new Error('BAD_PRICING_CONFIG'), { status: 400 });
+            updates.push('pricing_config_json=?');
+            params.push(JSON.stringify(config));
+          }
           if (totals?.margin_percent != null) {
             updates.push("margin_percent=?");
             params.push(totals.margin_percent);
@@ -2905,7 +2914,28 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
     }
   });
 
+  async function saveEditorIngredients(conn, tenantId, productId, rows) {
+    if (!Array.isArray(rows)) throw Object.assign(new Error('BAD_INGREDIENTS'), { status: 400 });
+    const seen = new Set();
+    const [existing] = await conn.query('SELECT ingredient_id FROM prod_product_ingredients WHERE tenant_id=? AND product_id=?', [tenantId, productId]);
+    const previous = new Set(existing.map(row => Number(row.ingredient_id)));
+    for (const row of rows) {
+      const id = Number(row.ingredient_id), qty = Number(row.quantity), unitId = Number(row.unit_id);
+      if (!Number.isSafeInteger(id) || id <= 0 || seen.has(id) || !Number.isFinite(qty) || qty < 0 || !Number.isSafeInteger(unitId) || unitId <= 0)
+        throw Object.assign(new Error('BAD_INGREDIENTS'), { status: 400 });
+      seen.add(id);
+      const loss = Number(row.loss_percent || 0);
+      if (!Number.isFinite(loss) || loss < 0 || loss > 100) throw Object.assign(new Error('BAD_INGREDIENT_LOSS_PERCENT'), { status: 400 });
+      const values = [qty, unitId, row.quantity_min ?? null, row.quantity_max ?? null, row.quantity_step ?? null,
+        row.price_override ?? null, Number(row.is_variable) === 1 ? 1 : 0, Number(row.sort_order || 0), loss];
+      if (previous.has(id)) await conn.query(`UPDATE prod_product_ingredients SET quantity=?,unit_id=?,quantity_min=?,quantity_max=?,quantity_step=?,price_override=?,is_variable=?,sort_order=?,loss_percent=? WHERE tenant_id=? AND product_id=? AND ingredient_id=?`, [...values, tenantId, productId, id]);
+      else await conn.query(`INSERT INTO prod_product_ingredients (quantity,unit_id,quantity_min,quantity_max,quantity_step,price_override,is_variable,sort_order,loss_percent,tenant_id,product_id,ingredient_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [...values, tenantId, productId, id]);
+    }
+    for (const id of previous) if (!seen.has(id)) await conn.query('DELETE FROM prod_product_ingredients WHERE tenant_id=? AND product_id=? AND ingredient_id=?', [tenantId, productId, id]);
+  }
+
   router.post('/prod_products', async (req, res) => {
+    let saveConnection = null;
     try {
       await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
@@ -2966,7 +2996,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       const preorder = validateProductPreorder(req.body);
       if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
-      const [result] = await db.query(
+      if (Object.prototype.hasOwnProperty.call(req.body, 'ingredients')) {
+        saveConnection = await db.getConnection();
+        await saveConnection.beginTransaction();
+      }
+      const writeDb = saveConnection || db;
+      const [result] = await writeDb.query(
         `INSERT INTO prod_products
           (tenant_id, name, sku, description_short, description, price, old_price, promo_enabled, promo_title, promo_discount_percent, cost_price, price_source, margin_percent, cost_price_source, unit_id, base_unit_id, base_qty, base_qty_source, fulfillment_mode, production_zone_id, photos_json, blocks_config_json, pricing_config_json, is_active, site_visibility,
            nutrition_protein_100g, nutrition_fat_100g, nutrition_carbs_100g, client_composition, tech_process,
@@ -2983,23 +3018,31 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
 
       const productId = result.insertId;
       const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
-      await helpers.setProductCategories(db, tenantId, productId, categoryIds);
+      await helpers.setProductCategories(writeDb, tenantId, productId, categoryIds);
 
-      await db.query(
+      await writeDb.query(
         `INSERT INTO prod_product_stocks (tenant_id, store_id, product_id, qty)
          VALUES (?,?,?,?)
          ON DUPLICATE KEY UPDATE qty=VALUES(qty)`,
         [tenantId, storeId, productId, stock_qty]
       );
 
+      if (saveConnection) {
+        await saveEditorIngredients(saveConnection, tenantId, productId, req.body.ingredients);
+        await saveConnection.commit();
+      }
       res.json({ ok: true, id: productId });
     } catch (e) {
+      if (saveConnection) await saveConnection.rollback();
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      res.status(e.status === 400 ? 400 : 500).json({ ok: false, error: e.status === 400 ? e.message : 'DB_ERROR' });
+    } finally {
+      saveConnection?.release();
     }
   });
 
   router.put('/prod_products/:id', async (req, res) => {
+    let saveConnection = null;
     try {
       await ensureProductPromoColumns();
       const tenantId = helpers.getTenantId(req);
@@ -3086,7 +3129,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       const preorder = validateProductPreorder(req.body, oldRows[0]);
       if (preorder.error) return res.status(400).json({ ok: false, ...preorder });
 
-      await db.query(
+      if (Object.prototype.hasOwnProperty.call(req.body, 'ingredients')) {
+        saveConnection = await db.getConnection();
+        await saveConnection.beginTransaction();
+      }
+      const writeDb = saveConnection || db;
+      await writeDb.query(
         `UPDATE prod_products
          SET name=?, sku=?, description_short=?, description=?, price=?, old_price=?, promo_enabled=?, promo_title=?, promo_discount_percent=?, cost_price=?, price_source=?, margin_percent=?, cost_price_source=?, unit_id=?, base_unit_id=?, base_qty=?, base_qty_source=?, fulfillment_mode=?, production_zone_id=?, photos_json=?, blocks_config_json=COALESCE(?, blocks_config_json), pricing_config_json=COALESCE(?, pricing_config_json), is_active=?, site_visibility=?,
              nutrition_protein_100g=?, nutrition_fat_100g=?, nutrition_carbs_100g=?, client_composition=?, tech_process=?,
@@ -3103,8 +3151,12 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       );
 
       const categoryIds = Array.isArray(req.body.category_ids) ? req.body.category_ids : [];
-      await helpers.setProductCategories(db, tenantId, id, categoryIds);
+      await helpers.setProductCategories(writeDb, tenantId, id, categoryIds);
 
+      if (saveConnection) {
+        await saveEditorIngredients(saveConnection, tenantId, id, req.body.ingredients);
+        await saveConnection.commit();
+      }
       const stockAdjustment = await applyInlineStockAdjustment(req, {
         tenantId, storeId, productId: id, stockQty: stock_qty,
       });
@@ -3134,8 +3186,11 @@ module.exports = function makeAdminProductsRouter({ db, helpers, ordersEvents, b
       }
       res.json({ ok: true, dependent_recalc });
     } catch (e) {
+      if (saveConnection) await saveConnection.rollback();
       console.error(e);
-      res.status(500).json({ ok: false, error: 'DB_ERROR' });
+      res.status(e.status === 400 ? 400 : 500).json({ ok: false, error: e.status === 400 ? e.message : 'DB_ERROR' });
+    } finally {
+      saveConnection?.release();
     }
   });
 

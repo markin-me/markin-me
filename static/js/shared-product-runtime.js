@@ -7,7 +7,7 @@
       && (item.type === 'combo' || !rules.some(rule => Number(rule.group?.rule_version) === 1 && Number(rule.product_id) === Number(item.product_id || item.id))));
     const budget = new Map(groups.map(group => {
       const reserved = cart.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_group_id) === Number(group.id))
-        .reduce((sum, item) => sum + Math.max(0, Number(item.qty || 0)), 0);
+        .reduce((sum, item) => sum + Math.max(0, Number(item.auto_add_free_qty ?? item.qty ?? 0)), 0);
       return [Number(group.id), group.remaining_qty == null ? Infinity : Math.max(0, Number(group.remaining_qty) + Number(issuedByGroup[Number(group.id)] || 0) - reserved)];
     }));
     return rules.filter(rule => Number(rule.group?.rule_version) === 1 && rule.group?.pricing_mode !== 'product').map(rule => {
@@ -20,7 +20,7 @@
       if (base > maxAmount) return null;
       const uncapped = { ...rule, current_free_limit: null };
       const inCart = cart.filter(item => Number(item.auto_add) === 1 && Number(item.auto_add_group_id) === gid && Number(item.product_id) === pid)
-        .reduce((sum, item) => sum + Math.max(0, Number(item.qty || 0)), 0);
+        .reduce((sum, item) => sum + Math.max(0, Number(item.auto_add_free_qty ?? item.qty ?? 0)), 0);
       const entitled = hasBase ? Math.min(window.SharedProductRuntime.autoAddFreeQty(uncapped, base), inCart + budget.get(gid)) : 0;
       const authRequired = Number(group.available_to_guests ?? 1) === 0 && !authenticated;
       const available = authRequired ? 0 : Math.max(0, entitled - inCart);
@@ -519,6 +519,35 @@ function makeCartKey(productId, optionItemsOrIds, ingredients = [], variantSelec
 
     const keyParts = [Number(productId), optionPart || "", ingPart || "", variantPart || ""].filter(Boolean).join(":");
     return keyParts;
+  }
+
+function getAutoAddConfigurationKey(item) {
+    const ingredients = rows => (rows || []).map(row => [Number(row.ingredient_id || row.id), Number(row.quantity ?? row.qty), Number(row.unit_id || 0)])
+      .sort((a, b) => a[0] - b[0]);
+    const options = rows => (rows || []).map(row => [Number(row.id || row.option_item_id), Number(row.qty ?? row.quantity ?? 1),
+      Number(row.variant_group_id || 0), Number(row.variant_value_index ?? row.variantIndex ?? -1), ingredients(row.ingredients), options(row.option_items)])
+      .sort((a, b) => a[0] - b[0]);
+    const group = item.variant_group_id ?? item.pricing?.variant_group?.id ?? item.pricing?.variant_group?.variant_group_id;
+    return JSON.stringify([Number(item.product_id), Number(group || 0),
+      Number(item.variant_value_index ?? item.variant?.selected_index ?? -1),
+      options(item.option_items || item.options), ingredients(item.ingredients), item.variants || []]);
+  }
+
+function retainPaidAutoAddItem(item) {
+    if (Number(item?.auto_add) !== 1) return item;
+    const qty = Math.max(0, Number(item.qty || 0) - Number(item.auto_add_pricing_mode === 'product' ? 0 : item.auto_add_free_qty ?? item.qty ?? 0));
+    if (!qty) return null;
+    const next = { ...item, qty, auto_add: 0 };
+    for (const key of Object.keys(next)) if (key.startsWith('auto_add_')) delete next[key];
+    if (next.pricing) {
+      next.pricing = { ...next.pricing };
+      delete next.pricing.auto_add_discount;
+    }
+    if (next.key != null) next.key = makeCartKey(next.product_id, next.option_items || next.option_item_ids,
+      next.ingredients, next.variant_group_id != null ? { group_id: next.variant_group_id, value_index: next.variant_value_index } : null);
+    if (next.sum != null) next.sum = runtime.roundPrice(Number(next.unit_price || 0) * qty);
+    if (next.old_line_total != null) next.old_line_total = runtime.roundPrice(Math.max(Number(next.old_price || 0), Number(next.unit_price || 0)) * qty);
+    return next;
   }
 
 function cloneCartState(cartItems = runtime.state.cart) {
@@ -1355,5 +1384,5 @@ function preloadImageOnce(url, opts = {}) {
     }
   }
 
-  return { collectPackagingItems, getConfigurableIngredients, createOptimizedImage, setOptimizedImageTemplate, getOptimizedImageTemplate, waitForComboGridImage, preloadComboGridImage, rememberComboGridImageReady, str, preloadComboGridImagesInBackground, normalizeComboGridPhotoUrls, normalizeComboVariantList, buildProductOptionGroupsFromBatch, normalizeOptionItemForDisplay, getOptionItemPhotos, safePhotos, makeCartKey, cloneCartState, buildFavoriteSnapshotFromResolvedItem, extractVariantValueForOrder, normalizeFavoriteIngredientsFromCart, toFiniteNumberOrNull, normalizeFavoriteOptionItemsFromCart, createProductBuyXGetYActionCard, renderOptionItemPrice, escapeHtml, money, moneyNoSign, decorateOptionItemThumb, createCatalogBuyXGetYBadge, getCatalogBuyXGetYBadgeText, getOptionGroupUiType, buildOptionItemVariantState, getStandaloneOptionPackaging, collectSelectedOptionItems, buildStockCheckItemsPayloadFromResolved, syncProductHeroBadges, createCatalogDiscountBadge, createQtyPill, normalizeProductOptionGroups, preloadImageOnce };
+  return { collectPackagingItems, getConfigurableIngredients, createOptimizedImage, setOptimizedImageTemplate, getOptimizedImageTemplate, waitForComboGridImage, preloadComboGridImage, rememberComboGridImageReady, str, preloadComboGridImagesInBackground, normalizeComboGridPhotoUrls, normalizeComboVariantList, buildProductOptionGroupsFromBatch, normalizeOptionItemForDisplay, getOptionItemPhotos, safePhotos, makeCartKey, getAutoAddConfigurationKey, retainPaidAutoAddItem, cloneCartState, buildFavoriteSnapshotFromResolvedItem, extractVariantValueForOrder, normalizeFavoriteIngredientsFromCart, toFiniteNumberOrNull, normalizeFavoriteOptionItemsFromCart, createProductBuyXGetYActionCard, renderOptionItemPrice, escapeHtml, money, moneyNoSign, decorateOptionItemThumb, createCatalogBuyXGetYBadge, getCatalogBuyXGetYBadgeText, getOptionGroupUiType, buildOptionItemVariantState, getStandaloneOptionPackaging, collectSelectedOptionItems, buildStockCheckItemsPayloadFromResolved, syncProductHeroBadges, createCatalogDiscountBadge, createQtyPill, normalizeProductOptionGroups, preloadImageOnce };
 });

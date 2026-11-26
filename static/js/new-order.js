@@ -1210,12 +1210,12 @@
                     ` : `
                     <div class="qty-pill qty-pill--muted new-order-right-cart-qty" data-qty-wrap>
                       <button
-                        class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable || (Number(item?.auto_add_rule_version) === 1 && item.auto_add_pricing_mode !== 'product')) ? " is-disabled" : ""}"
+                        class="qty-pill__btn qty-pill__btn--minus${(qty <= 0 || !qtyEditable) ? " is-disabled" : ""}"
                         type="button"
                         data-action="right-cart-qty-minus"
                         data-order-id="${Number(active?.id || 0)}"
                         data-cart-item-id="${Number(item?.id || 0)}"
-                        ${qtyEditable && (Number(item?.auto_add_rule_version) !== 1 || item.auto_add_pricing_mode === 'product') ? "" : "disabled aria-disabled=\"true\""}
+                        ${qtyEditable ? "" : "disabled aria-disabled=\"true\""}
                       >−</button>
                       <span class="qty-pill__center" data-qty-value>${qty}</span>
                       <button
@@ -3177,7 +3177,7 @@
         .map((item, index) => ({
           item,
           index,
-          autoRank: isRightOrderAutoAddItem(item) ? 1 : 0,
+          autoRank: isRightOrderAutoAddItem(item) ? (item.auto_add_pricing_mode === 'product' ? 2 : 1) : 0,
         }))
         .sort((a, b) => a.autoRank - b.autoRank || a.index - b.index)
         .map((entry) => entry.item);
@@ -3197,7 +3197,8 @@
       createdAt: order?.autoAddCreatedAt || null,
     });
     state.autoAdd.byProductId = new Map(rules.map(rule => [Number(rule.product_id), rule]));
-    cartItems = cartItems.filter(item => Number(item.auto_add_rule_version) !== 1 || state.autoAdd.byProductId.has(Number(item.product_id)));
+    cartItems = cartItems.map(item => Number(item.auto_add_rule_version) !== 1 || state.autoAdd.byProductId.has(Number(item.product_id))
+      ? item : window.SharedProductDetails.retainPaidAutoAddItem(item)).filter(Boolean);
     if (!groups.length || !rules.length) {
       clearRightAutoAddDismissedIfCartEmpty(orderNum, cartItems);
       return cartItems.map((item) => applyRightAutoPricingToCartItem(item, null));
@@ -3213,12 +3214,8 @@
     });
 
     if (!hasBaseItems) {
-      cartItems = cartItems.filter((item) => {
-        const qty = Math.max(0, Number(item?.qty || 0));
-        if (!qty) return false;
-        if (String(item?.type || "") === "combo") return true;
-        return Number(item?.auto_add || 0) !== 1;
-      });
+      cartItems = cartItems.map(item => window.SharedProductDetails.retainPaidAutoAddItem(item))
+        .filter(item => item && Number(item.qty || 0) > 0);
       clearRightAutoAddDismissed(orderNum);
       return cartItems.map((item) => applyRightAutoPricingToCartItem(item, null));
     }
@@ -3258,11 +3255,8 @@
         groupRules.forEach((rule) => {
           const pid = Number(rule?.product_id || 0);
           if (!(pid > 0)) return;
-          cartItems = cartItems.filter((entry) => {
-            const sameProduct = Number(entry?.product_id || 0) === pid;
-            const isAuto = Number(entry?.auto_add || 0) === 1;
-            return !(sameProduct && isAuto);
-          });
+          cartItems = cartItems.map(entry => Number(entry?.product_id || 0) === pid
+            ? window.SharedProductDetails.retainPaidAutoAddItem(entry) : entry).filter(Boolean);
         });
         return;
       }
@@ -3349,22 +3343,22 @@
             selected.option_items = (configuration.option_items || []).map(row => ({ ...row, label: row.title,
               variantIndex: row.variant_value_index, basePrice: 0, variantDiff: 0 }));
           }
-          if (!selected.auto_add_gift && group.pricing_mode !== 'product') {
-            const extraQty = Math.max(0, Number(selected.qty || 0) - desiredQty);
-            if (extraQty) {
-              const regular = { ...selected, id: Date.now() + Math.floor(Math.random() * 10000), qty: extraQty, auto_add: 0, auto_add_group_id: null, auto_add_rule_version: 0 };
-              delete regular.auto_add_free_qty;
-              delete regular.auto_add_paid_qty;
-              cartItems.push(recalculateCartItemTotals(regular));
-            }
-            selected.auto_add_gift = 1;
-          }
+          if (group.pricing_mode !== 'product') selected.auto_add_gift = 1;
         }
 
+        if (isNewRule && allowQty && group.pricing_mode !== 'product') {
+          const signature = window.SharedProductDetails.getAutoAddConfigurationKey(selected);
+          cartItems = cartItems.filter(candidate => {
+            if (candidate === selected || Number(candidate.auto_add) === 1 || isGiftRewardCartItem(candidate)
+              || candidate.type === 'combo' || window.SharedProductDetails.getAutoAddConfigurationKey(candidate) !== signature) return true;
+            selected.qty = Number(selected.qty || 0) + Number(candidate.qty || 0);
+            return false;
+          });
+        }
         let nextQty = Math.max(0, Number(selected?.qty || 0));
         if (isNewRule && allowQty) nextQty = Math.max(nextQty, desiredQty);
         if (isNewRule || !allowQty) {
-          nextQty = desiredQty;
+          nextQty = isNewRule && allowQty ? Math.max(nextQty, desiredQty) : desiredQty;
         } else {
           if (minQty > 0 && nextQty < minQty) nextQty = minQty;
           if (maxQty != null && nextQty > maxQty) nextQty = maxQty;
@@ -3427,7 +3421,7 @@
       .map((item, index) => ({
         item,
         index,
-        autoRank: isRightOrderAutoAddItem(item) ? 1 : 0,
+        autoRank: isRightOrderAutoAddItem(item) ? (item.auto_add_pricing_mode === 'product' ? 2 : 1) : 0,
       }))
       .sort((a, b) => a.autoRank - b.autoRank || a.index - b.index)
       .map((entry) => entry.item);
@@ -3444,22 +3438,6 @@
     const form = order.form && typeof order.form === "object" ? { ...order.form } : {};
     const previousItems = Array.isArray(form.cartItems) ? form.cartItems : [];
     cartItems = (Array.isArray(cartItems) ? cartItems : []).map(item => ({ ...item }));
-    for (const item of [...cartItems]) {
-      if (Number(item.auto_add) !== 1 || Number(item.auto_add_rule_version) !== 1) continue;
-      const previous = previousItems.find(row => Number(row.id) === Number(item.id));
-      const extra = previous ? Number(item.qty) - Number(previous.qty) : 0;
-      if (extra < 0) item.auto_add_customer_qty = Math.max(0, Number(item.qty));
-      if (!(extra > 0) || opts.claimAutoGift === true || getRightAutoRuleByProductId(item.product_id)?.group?.pricing_mode === 'product') continue;
-      const regular = buildPlainAutoAddCartItem(item.product_id, extra);
-      if (!regular) return false;
-      regular.auto_add = 0;
-      regular.auto_add_group_id = null;
-      regular.auto_add_rule_version = 0;
-      const existing = cartItems.find(row => Number(row.auto_add) !== 1 && Number(row.product_id) === Number(item.product_id) && isRightOrderPlainCartItem(row));
-      if (existing) existing.qty = Number(existing.qty) + extra;
-      else cartItems.push(recalculateCartItemTotals(regular));
-      item.qty = previous.qty;
-    }
     form.cartItems = normalizeRightOrderCartItemsWithAutoAdd(id, cartItems);
     const shouldMarkTouched = String(order?.mode || "").trim().toLowerCase() === "edit";
     const nextOrder = {

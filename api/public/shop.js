@@ -5265,7 +5265,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
     const revision = await catalogSync.getManifest({ db, tenantId, storeId });
     const rounding = [roundPrice(1.2345), roundPrice(1.7654)];
     const results = await Promise.all(items.map(async item => {
-      const key = makePublicCacheKey('configured-catalog-price-v1', { tenantId, storeId, revision, rounding, item });
+      const key = makePublicCacheKey('configured-catalog-price-v2', { tenantId, storeId, revision, rounding, item });
       const { payload } = await loadPublicCachedPayload(key, PUBLIC_CACHE_TTL_MS.productsBatchPassports, async () => {
         const prices = await buildOnlineItemPrices({ db: pricingDb, tenantId, storeId,
           items: [item], roundPrice, variantPrice: computeDisplayPriceForProduct,
@@ -5537,8 +5537,7 @@ module.exports = function makePublicShopRouter({ db, helpers, ordersEvents, pres
 
       const optionItemsByGroupId = new Map();
       for (const optionItemRow of optionItemRows) {
-        if (optionItemRow.configuration_json) optionItemRow.configuration_json = await normalizeProductConfiguration(db, tenantId, Number(optionItemRow.target_product_id),
-          typeof optionItemRow.configuration_json === 'string' ? JSON.parse(optionItemRow.configuration_json) : optionItemRow.configuration_json);
+        if (typeof optionItemRow.configuration_json === 'string') optionItemRow.configuration_json = JSON.parse(optionItemRow.configuration_json);
         const gid = Number(optionItemRow.group_id);
         if (!optionItemsByGroupId.has(gid)) optionItemsByGroupId.set(gid, []);
         const targetProductId = Number(optionItemRow.target_product_id || 0);
@@ -15767,8 +15766,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
       if (!packagingOnly) await attachPublicNutritionToOptionItemRows(items, tenantId);
       for (const item of items) {
-        if (item.configuration_json) item.configuration_json = await normalizeProductConfiguration(db, tenantId, Number(item.target_product_id),
-          typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json);
+        if (typeof item.configuration_json === 'string') item.configuration_json = JSON.parse(item.configuration_json);
       }
       const itemsByGroupId = new Map();
       items.forEach((item) => {
@@ -18227,8 +18225,7 @@ window.location.replace(${JSON.stringify(redirectUrl)});
 
         const groupItems = new Map();
         for (const item of itemRows) {
-          if (item.configuration_json) item.configuration_json = await normalizeProductConfiguration(db, tenantId, Number(item.target_product_id),
-            typeof item.configuration_json === 'string' ? JSON.parse(item.configuration_json) : item.configuration_json);
+          if (typeof item.configuration_json === 'string') item.configuration_json = JSON.parse(item.configuration_json);
           const gid = Number(item.group_id);
           if (!groupItems.has(gid)) groupItems.set(gid, []);
           const targetProductId = Number(item.target_product_id || 0);

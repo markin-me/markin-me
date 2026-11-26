@@ -48,6 +48,7 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
   }
   async function configuredPrice(id,selection,depth=0,includePackaging=true,allowHidden=false,costing=false,respectSources=false,storedConfiguration=false,marginBaseOnly=false) {
     if(depth>4)fail();const p=await product(id,allowHidden);
+    const config = typeof p.pricing_config_json === 'string' ? JSON.parse(p.pricing_config_json) : p.pricing_config_json;
     if (includePackaging) packagedIds.add(Number(id));
     let price=Number(costing ? (!respectSources || usesProductPriceSource(p, "composition") ? p.cost_price : 0) : p.price || 0);
     let originalPrice=costing ? price : Math.max(Number(p.price || 0), Number(p.old_price || 0));
@@ -73,12 +74,16 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       }
       if ((!costing || respectSources) ? usesProductPriceSource(p, "variants") : true) {
         const variantProduct = costing ? { ...p, price } : p;
-        price=await variantPrice(variantProduct,{...group,values,default_value_index:index,discount_tiers:costing?[]:tiers},conversion,costing ? value => Number(value) : roundPrice);
-        originalPrice=await variantPrice({...p,price:originalPrice},{...group,values,default_value_index:index,discount_tiers:[]},conversion,roundPrice);
+        price=await variantPrice(variantProduct,{...group,values,default_value_index:index,discount_tiers:costing?[]:tiers},conversion,value => Number(value));
+        originalPrice=await variantPrice({...p,price:originalPrice},{...group,values,default_value_index:index,discount_tiers:[]},conversion,value => Number(value));
       }
     }
     const requested=selection.ingredients_display || selection.ingredients;
-    if(Array.isArray(requested) && requested.length) {
+    if (storedConfiguration && !costing) {
+      const delta = Number(selection.ingredient_price_diff || 0);
+      if (!Number.isFinite(delta)) fail();
+      if (usesProductPriceSource(p, "composition")) { price += delta; originalPrice += delta; }
+    } else if(Array.isArray(requested) && requested.length) {
       const [rows]=await db.query(`SELECT i.*,p.price AS ingredient_price,p.cost_price AS ingredient_cost_price,p.old_price AS ingredient_old_price,p.base_qty AS ingredient_base_qty,p.base_unit_id AS ingredient_base_unit_id
         FROM prod_product_ingredients i JOIN prod_products p ON p.tenant_id=i.tenant_id AND p.id=i.ingredient_id
         WHERE i.tenant_id=? AND i.product_id=?`,[tenantId,id]);
@@ -87,7 +92,9 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         // Stored option configurations reference the current recipe; only variable quantities are overrides.
         const ingredient=rows.find(row=>Number(row.ingredient_id)===key);
         if(storedConfiguration && (!ingredient || Number(ingredient.is_variable)!==1))continue;
-        if(selected.has(key))fail();selected.set(key,Number(entry.qty ?? entry.quantity));
+        if(selected.has(key))fail();
+        const quantity = Number(entry.qty ?? entry.quantity);
+        selected.set(key, storedConfiguration ? normalizeStoredIngredientQuantity(ingredient, quantity) : quantity);
       }
       if([...selected.keys()].some(key=>!rows.some(row=>Number(row.ingredient_id)===key)))fail();
       for(const row of rows){
@@ -101,6 +108,8 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         if (usesProductPriceSource(p, "composition")) originalPrice+=originalPerUnit*(qty-base)*(factor ?? 1);
       }
     }
+    const savedBasePrice = price;
+    let packagingCost = 0, chargedPackagingCost = 0, chargedPackagingPrice = 0, originalPackagingPrice = 0, hasPackaging = false;
     let extraOptionPrice = 0, extraOptionOriginalPrice = 0;
     const optionSelections=Array.isArray(selection.option_items)?selection.option_items:[];
     const options=new Map();for(const value of optionSelections){const key=Number(value.id);if(options.has(key))fail();options.set(key,value);}
@@ -147,11 +156,16 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
       }
       if(targetId){
         const target=await product(targetId, Number(option.is_packaging) === 1);
+        if (Number(option.is_packaging) === 1) {
+          hasPackaging = true;
+          packagingCost += Number(target.cost_price || 0) * optionQty;
+        }
         const configuration = typeof option.configuration_json === 'string' ? JSON.parse(option.configuration_json) : option.configuration_json;
         const selectedPricing=await configuredPrice(target.id, configuration ? { ...value,
           variant_group_id: value.variant_group_id ?? configuration.variant_group_id,
           variant_value_index: value.variant_value_index ?? configuration.variant_value_index,
           ingredients: configuration.ingredients, ingredients_display: configuration.ingredients,
+          ingredient_price_diff: Number(configuration.ingredient_price_diff || 0),
           option_items: configuration.option_items || value.option_items,
           option_item_ids: configuration.option_item_ids || value.option_item_ids } : value, depth+1,
           Number(option.is_packaging) !== 1 && Number(option.is_component_default) !== 1, Number(option.is_packaging) === 1, costing, false, Boolean(configuration));
@@ -169,6 +183,11 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
           extraOptionPrice += optionPrice * optionQty;
           extraOptionOriginalPrice += Math.max(optionPrice, originalOptionPrice) * optionQty;
         }
+        if (costing && Number(option.is_packaging) === 1) chargedPackagingCost += optionPrice * optionQty;
+        if (!costing && Number(option.is_packaging) === 1) {
+          chargedPackagingPrice += optionPrice * optionQty;
+          originalPackagingPrice += Math.max(optionPrice, originalOptionPrice) * optionQty;
+        }
         price+=optionPrice*optionQty;
         originalPrice+=Math.max(optionPrice,originalOptionPrice)*optionQty;
       }
@@ -183,18 +202,23 @@ async function buildOnlineItemPrices({db,tenantId,storeId,customerId,items,round
         if(count<minimum || (group.selection_type==='single' && count>1) || (group.maximum!=null && count>Number(group.maximum)))fail();}
     }
     if(costing) {
+      if (hasPackaging && config?.saved_packaging && (!respectSources || usesProductPriceSource(p, "options"))) price += config.saved_packaging.cost - chargedPackagingCost;
       if(!Number.isFinite(price) || price < 0)fail();
       return {price,originalPrice:price};
     }
-    const config = typeof p.pricing_config_json === 'string' ? JSON.parse(p.pricing_config_json) : p.pricing_config_json;
+    if (hasPackaging && config?.saved_packaging && usesProductPriceSource(p, "options") && config.target_margin == null) {
+      price += config.saved_packaging.price - chargedPackagingPrice;
+      originalPrice += config.saved_packaging.price - originalPackagingPrice;
+    }
     if(config?.mode === 'auto' && config.target_margin != null) {
       const margin = Number(config.target_margin);
       if(!Number.isFinite(margin) || margin >= 100)fail();
-      const cost = await configuredPrice(id,selection,depth,includePackaging,allowHidden,true,true,storedConfiguration,true);
-      price = cost.price / (1 - margin / 100) * variantAdjustment + extraOptionPrice;
+      const packagingPrice = hasPackaging && usesProductPriceSource(p, "options")
+        ? (config.saved_packaging?.price ?? packagingCost / (1 - margin / 100)) * variantAdjustment : 0;
+      price = savedBasePrice + packagingPrice + extraOptionPrice;
       originalPrice = price - extraOptionPrice + extraOptionOriginalPrice;
     }
-    if(!Number.isFinite(price)||price<0||!Number.isFinite(originalPrice))fail();return {price:applyProductPromoPricing(p,price,originalPrice,roundPrice),originalPrice:roundPrice(Math.max(price,originalPrice))};
+    if(!Number.isFinite(price)||price<0||!Number.isFinite(originalPrice))fail();return {price:applyProductPromoPricing(p,price,config?.mode === 'auto' && config.target_margin != null ? price : originalPrice,roundPrice),originalPrice:roundPrice(Math.max(price,originalPrice))};
   }
   for(const item of items){
     const qty=quantity(item.qty ?? item.quantity);
@@ -346,7 +370,8 @@ async function validateAutoAddOrder(conn, { tenantId, storeId, orderId = null, i
     const gid = Number(item.auto_add_group_id), group = byGroup.get(gid);
     const rule = rulesByKey.get(`${gid}:${item.product_id}`);
     if (!group || Number(group.rule_version) !== 1 || !rule) throw Object.assign(new Error('AUTO_ADD_RULE_CHANGED'), { code: 'AUTO_ADD_RULE_CHANGED', status: 409 });
-    const configuration = typeof rule.configuration_json === 'string' ? JSON.parse(rule.configuration_json) : rule.configuration_json;
+    const storedConfiguration = typeof rule.configuration_json === 'string' ? JSON.parse(rule.configuration_json) : rule.configuration_json;
+    const configuration = storedConfiguration ? await normalizeProductConfiguration(conn, tenantId, Number(item.product_id), storedConfiguration, 0, true) : null;
     if (configuration) {
       const variant = item.variants?.[0];
       let actual;
@@ -376,7 +401,7 @@ async function validateAutoAddOrder(conn, { tenantId, storeId, orderId = null, i
     const key = `${gid}:${item.product_id}`, previous = used.get(key) || 0;
     const free = Number(item.auto_add_free_qty);
     if (!Number.isInteger(free) || free < 0 || free > qty || previous + free > allowed || free !== expectedFree.get(item)) throw Object.assign(new Error('AUTO_ADD_PRICING_CHANGED'), { code: 'AUTO_ADD_PRICING_CHANGED', status: 409 });
-    if (group.pricing_mode !== 'product' && qty !== free) throw Object.assign(new Error('AUTO_ADD_INVALID'), { code: 'AUTO_ADD_INVALID', status: 422 });
+    if (group.pricing_mode !== 'product' && qty !== free && Number(group.allow_customer_qty) !== 1) throw Object.assign(new Error('AUTO_ADD_INVALID'), { code: 'AUTO_ADD_INVALID', status: 422 });
     if (group.pricing_mode === 'product' && Number(group.allow_customer_qty) !== 1 && qty !== Math.max(1, Number(rule.default_qty || 1))) {
       throw Object.assign(new Error('AUTO_ADD_INVALID'), { code: 'AUTO_ADD_INVALID', status: 422 });
     }
@@ -390,7 +415,26 @@ async function validateAutoAddOrder(conn, { tenantId, storeId, orderId = null, i
   }
 }
 
-async function normalizeProductConfiguration(conn, tenantId, productId, configuration, depth = 0) {
+function normalizeStoredIngredientQuantity(row, quantity) {
+  const invalid = () => { throw Object.assign(new Error('INVALID_PRODUCT_CONFIGURATION'), { status: 400 }); };
+  const base = Number(row.quantity || 0);
+  const minimum = row.quantity_min == null ? 0 : Number(row.quantity_min);
+  const maximum = row.quantity_max == null ? Infinity : Number(row.quantity_max);
+  const step = Number(row.quantity_step || 1);
+  if (!Number.isFinite(quantity) || quantity < 0 || !Number.isFinite(base)
+      || !Number.isFinite(minimum) || Number.isNaN(maximum) || minimum > maximum || !Number.isFinite(step)) invalid();
+  let value = Math.min(maximum, Math.max(minimum, quantity));
+  if (step > 0) {
+    const first = Math.ceil((minimum - base) / step - 0.000001);
+    const last = Math.floor((maximum - base) / step + 0.000001);
+    if (first > last) invalid();
+    const index = Math.min(last, Math.max(first, Math.round((value - base) / step)));
+    value = Number((base + index * step).toFixed(9));
+  }
+  return value;
+}
+
+async function normalizeProductConfiguration(conn, tenantId, productId, configuration, depth = 0, storedConfiguration = false) {
   if (configuration == null) return null;
   const fail = () => { throw Object.assign(new Error('INVALID_PRODUCT_CONFIGURATION'), { status: 400 }); };
   if (depth > 4) fail();
@@ -422,9 +466,13 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
     LEFT JOIN prod_units u ON u.tenant_id=i.tenant_id AND u.id=i.unit_id WHERE i.tenant_id=? AND i.product_id=?`, [tenantId, productId]);
   const requested = new Map();
   for (const entry of configuration.ingredients) {
-    const id = Number(entry?.ingredient_id), qty = Number(entry?.quantity ?? entry?.qty);
+    const id = Number(entry?.ingredient_id);
+    let qty = Number(entry?.quantity ?? entry?.qty);
     const row = rows.find(value => Number(value.ingredient_id) === id);
+    // Fixed recipe rows in stored selections follow the current recipe, not an old snapshot.
+    if (storedConfiguration && (!row || (row.is_variable != null && Number(row.is_variable) !== 1))) continue;
     if (!row || requested.has(id) || !Number.isFinite(qty) || qty < 0) fail();
+    if (storedConfiguration) qty = normalizeStoredIngredientQuantity(row, qty);
     const base = Number(row.quantity || 0), step = Number(row.quantity_step || 1);
     if ((row.is_variable != null && Number(row.is_variable) !== 1 && qty !== base) || (row.quantity_min != null && qty < Number(row.quantity_min))
       || (row.quantity_max != null && qty > Number(row.quantity_max))
@@ -485,7 +533,7 @@ async function normalizeProductConfiguration(conn, tenantId, productId, configur
         variant_group_id: value.variant_group_id ?? fixed?.variant_group_id ?? option.default_variant_group_id ?? null,
         variant_value_index: value.variant_value_index ?? fixed?.variant_value_index ?? option.default_variant_value_index ?? null,
         ingredients: fixed?.ingredients || value.ingredients || [],
-      }, depth + 1);
+      }, depth + 1, Boolean(fixed));
       result.option_items.push({ id, group_id: Number(option.group_id), qty, quantity: qty,
         title: option.product_name, name: option.product_name, target_product_id: Number(option.target_product_id),
         product_id: Number(option.target_product_id), ...selected,

@@ -11401,7 +11401,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       const baseTotal = roundPrice(Number(pricing?.lineTotal || 0));
       const originalTotal = roundPrice(Math.max(
         storedOriginalLineTotal > 0 ? storedOriginalLineTotal : 0,
-        originalUnit * paidQty,
+        originalUnit * qty,
         baseTotal
       ));
       lineStates.push({
@@ -11803,7 +11803,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       ));
       let discountPercent = 0;
       if (originalTotal > currentTotal && originalTotal > 0) {
-        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 10000) / 100;
       }
       if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
       if (discountPercent > 100) discountPercent = 100;
@@ -12593,7 +12593,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
         : roundPrice(Number(pricing?.lineTotal || 0));
       const originalTotal = roundPrice(Math.max(
         storedOriginalLineTotal > 0 ? storedOriginalLineTotal : 0,
-        originalUnit * paidQty,
+        originalUnit * qty,
         baseTotal
       ));
       lineStates.push({
@@ -12618,7 +12618,7 @@ function openFavoritesSheet({ force = true, forceOpen = false, sourceScreen = ""
       const originalTotal = roundPrice(Math.max(entry.originalTotal, entry.baseTotal, currentTotal));
       let discountPercent = 0;
       if (originalTotal > currentTotal && originalTotal > 0) {
-        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 100);
+        discountPercent = Math.round(((originalTotal - currentTotal) / originalTotal) * 10000) / 100;
       }
       if (!Number.isFinite(discountPercent) || discountPercent <= 0) discountPercent = 0;
       if (discountPercent > 100) discountPercent = 100;

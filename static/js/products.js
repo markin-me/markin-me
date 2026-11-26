@@ -1081,18 +1081,8 @@
 
   function getCatalogProductsForCategory(categoryId) {
     if (!window.CatalogRepository) return [];
-    const id = Number(categoryId || 0);
-    const isAll = !(id > 0) || id === Number(state.allCategoryId || 0);
-    const included = isAll ? null : new Set(window.CatalogRepository.getDescendantCategoryIds(id));
-    return window.CatalogRepository.getAllProducts()
-      .filter((product) => !included || getCatalogProductCategoryIds(product).some((categoryId) => included.has(categoryId)))
-      .sort((left, right) => {
-        const leftSort = Number(left?.link_sort_order);
-        const rightSort = Number(right?.link_sort_order);
-        const safeLeft = Number.isFinite(leftSort) ? leftSort : Number.MAX_SAFE_INTEGER;
-        const safeRight = Number.isFinite(rightSort) ? rightSort : Number.MAX_SAFE_INTEGER;
-        return (safeLeft - safeRight) || (Number(left?.id || 0) - Number(right?.id || 0));
-      });
+    const cached = getCachedCategoryProducts(categoryId);
+    return cached ? cached.products : [];
   }
 
   function applyCatalogLocalWindow(categoryId = state.currentCategoryId, options = {}) {
@@ -1113,13 +1103,12 @@
       renderProductsCatalogStatus();
       return false;
     }
-    state.products = localRows.slice(0, PRODUCTS_PAGE_LIMIT);
-    state.productsOffset = 0;
-    const coverage = getProductsCatalogCoverage(id);
-    state.productsTotal = coverage.total != null && Number.isFinite(Number(coverage.total))
-      ? Number(coverage.total)
-      : localRows.length;
-    state.productsHasMore = true;
+    const cached = getCachedCategoryProducts(id);
+    state.products = localRows;
+    state.productsOffset = cached.productsOffset;
+    state.productsTotal = cached.productsTotal;
+    state.productsHasMore = cached.productsHasMore;
+    state.combosInCategory = cached.combosInCategory;
     state.productsLoading = false;
     state.catalogBootstrapVisible = true;
     renderProductsList();
@@ -1410,9 +1399,17 @@
     }
     const key = normalizeCategoryCacheKey(categoryId);
     const cached = state.productsByCategoryCache.get(key);
-    if (!cached || typeof cached !== "object") return null;
+    if (!cached || cached.orderVersion !== 1 || !Array.isArray(cached.productIds)) return null;
+    const rows = new Map((cached.products || []).map(product => [Number(product.id), product]));
+    const products = cached.productIds.map(id => {
+      const saved = rows.get(Number(id));
+      const current = window.CatalogRepository?.getProduct(id);
+      return saved ? { ...saved, ...current, link_sort_order: saved.link_sort_order } : current;
+    }).filter(Boolean);
     return {
-      products: Array.isArray(cached.products) ? cached.products : [],
+      orderVersion: cached.orderVersion,
+      combosReady: cached.combosReady === true,
+      products,
       productsOffset: Math.max(0, Number(cached.productsOffset || 0)),
       productsTotal: Math.max(0, Number(cached.productsTotal || 0)),
       productsHasMore: Boolean(cached.productsHasMore),
@@ -1425,8 +1422,13 @@
       state.productsByCategoryCache = new Map();
     }
     const key = normalizeCategoryCacheKey(categoryId);
+    const previous = state.productsByCategoryCache.get(key);
+    const products = Array.isArray(payload?.products) ? payload.products : [];
     state.productsByCategoryCache.set(key, {
-      products: Array.isArray(payload?.products) ? payload.products : [],
+      orderVersion: payload?.serverOrder === true ? 1 : previous?.orderVersion,
+      productIds: products.map(product => Number(product.id)),
+      combosReady: payload?.combosReady ?? previous?.combosReady ?? false,
+      products,
       productsOffset: Math.max(0, Number(payload?.productsOffset || 0)),
       productsTotal: Math.max(0, Number(payload?.productsTotal || 0)),
       productsHasMore: Boolean(payload?.productsHasMore),
@@ -3131,7 +3133,9 @@
         : state.currentCategoryId,
     });
     const total = Number(coverage.total);
-    if (!Number.isFinite(total) || total < 0 || coverage.knownProducts < total || localRows.length < total) return false;
+    const cached = getCachedCategoryProducts(state.currentCategoryId);
+    if (!cached || cached.productsHasMore || !Number.isFinite(total) || total < 0
+      || coverage.knownProducts < total || localRows.length < total) return false;
     const offset = Math.max(0, Number(state.productsOffset || 0));
     const page = localRows.slice(offset, offset + PRODUCTS_PAGE_LIMIT);
     if (!page.length) {
@@ -3158,11 +3162,13 @@
     syncProductsBulkFooter();
     const token = productsRequestToken;
     const prevOffset = state.productsOffset;
+    let serverOrderReceived = false;
     try {
       const qs = buildProductsListQuery(cid, state.productsOffset, PRODUCTS_PAGE_LIMIT);
       const loadCatalogPage = () => api(`/api/prod_products?${qs.toString()}`);
       const res = await loadCatalogPage();
       if (token !== productsRequestToken) return;
+      serverOrderReceived = true;
 
       const chunkRaw = Array.isArray(res.data) ? res.data : [];
       if (window.CatalogRepository) {
@@ -3228,7 +3234,8 @@
         state.productsLoading = false;
         syncProductsBulkFooter();
         syncProductRowsSortability();
-        setCachedCategoryProducts(cid, {
+        if (serverOrderReceived) setCachedCategoryProducts(cid, {
+          serverOrder: true,
           products: state.products,
           productsOffset: state.productsOffset,
           productsTotal: state.productsTotal,
@@ -3288,11 +3295,13 @@
         state.productsLoading = false;
         state.combosInCategory = Array.isArray(cached.combosInCategory) ? cached.combosInCategory : [];
         renderProductsList();
-        await loadCombosForCategory(cid);
-        if (token !== productsRequestToken) return;
-        renderProductsList();
-        setCachedCategoryProducts(cid, { ...cached, combosInCategory: state.combosInCategory });
-        schedulePersistProductsCache();
+        if (!cached.combosReady) {
+          await loadCombosForCategory(cid);
+          if (token !== productsRequestToken) return;
+          renderProductsList();
+          setCachedCategoryProducts(cid, { ...cached, combosReady: true, combosInCategory: state.combosInCategory });
+          schedulePersistProductsCache();
+        }
         return;
       }
     }
@@ -3307,9 +3316,10 @@
 
     await Promise.all([loadMoreProducts({ allowLocal: false }), loadCombosForCategory(cid)]);
     if (token !== productsRequestToken) return;
-    renderProductsList();
+    if (state.combosInCategory.length) renderProductsList();
     await ensureProductsScrollable();
     setCachedCategoryProducts(cid, {
+      serverOrder: true, combosReady: true,
       products: state.products,
       productsOffset: state.productsOffset,
       productsTotal: state.productsTotal,
@@ -8249,12 +8259,25 @@ function openAutoAddGroupModal({ mode, group } = {}) {
     });
   }
 
-  function persistProductOrderFromDom() {
+  async function persistProductOrderFromDom() {
+    const categoryId = state.currentCategoryId;
     const ordered = $$(".order-row.product-row[data-id]", productsList).map((el) => Number(el.dataset.id)).filter(Number.isFinite);
-    return api("/api/sort/prod_products", {
+    const cached = getCachedCategoryProducts(categoryId);
+    const products = state.products.slice();
+    const result = await api("/api/sort/prod_products", {
       method: "POST",
-      body: JSON.stringify({ category_id: state.currentCategoryId, orderedProductIds: ordered }),
+      body: JSON.stringify({ category_id: categoryId, orderedProductIds: ordered }),
     });
+    const positions = new Map(ordered.map((id, index) => [id, index]));
+    const sorted = products.slice().sort((a, b) => (positions.get(Number(a.id)) ?? Number.MAX_SAFE_INTEGER)
+      - (positions.get(Number(b.id)) ?? Number.MAX_SAFE_INTEGER));
+    setCachedCategoryProducts(categoryId, { ...cached, serverOrder: true, products: sorted,
+      productsOffset: cached?.productsOffset ?? sorted.length,
+      productsTotal: cached?.productsTotal ?? sorted.length,
+      productsHasMore: cached?.productsHasMore ?? false });
+    if (Number(state.currentCategoryId) === Number(categoryId)) state.products = sorted;
+    schedulePersistProductsCache(0);
+    return result;
   }
 
   function getProductRowsListInDomOrder() {
@@ -15680,7 +15703,20 @@ const isViewMode = state.comboPanel.mode === "view";
         }
         return next;
       });
-      return calcCachedProductCompositionTotals(productForCalc, patched, unitReferences) || item.recipeValues || {};
+      const totals = calcCachedProductCompositionTotals(productForCalc, patched, unitReferences) || item.recipeValues || {};
+      const rawConfig = productForCalc.pricing_config_json;
+      const config = typeof rawConfig === 'string' ? JSON.parse(rawConfig) : rawConfig;
+      if (config?.mode === 'auto' && config.target_margin != null && totals.cost_price != null) {
+        totals.price = calcPriceFromMargin(totals.cost_price, config.target_margin);
+        totals.old_price = null;
+      }
+      if (valuesReady && config?.mode === 'auto') {
+        const packaging = config.sources?.includes('options')
+          ? window.SharedProductDetails.getSelectionPackagingTotals(item.product_id) : { cost: 0, price: 0 };
+        totals.saved_packaging = { cost: packaging.cost, price: config.target_margin != null
+          ? calcPriceFromMargin(packaging.cost, config.target_margin) : packaging.price };
+      }
+      return totals;
     };
     const confirmBtn = card.querySelector('[data-role="confirm"]');
     const selectionCount = card.querySelector('[data-role="selection-count"]');
@@ -15919,6 +15955,8 @@ const isViewMode = state.comboPanel.mode === "view";
           item.recipeValues = values.calculated;
         }
       }
+      await window.SharedProductDetails.prepareSelections(ids, { pricingOnly: true, costing: true });
+      if (!overlay.isConnected) return;
       valuesReady = true;
       card.querySelectorAll('input[type="text"]').forEach(input => { input.disabled = false; });
       recalcModalCascade();
@@ -16577,6 +16615,7 @@ const isViewMode = state.comboPanel.mode === "view";
       if (config?.mode === "manual") return { mode: "manual", sources: [] };
       if (config?.mode !== "auto" || !Array.isArray(config.sources)) return null;
       return { mode: "auto", sources: Object.keys(priceSourceLabels).filter(source => config.sources.includes(source)),
+        ...(config.saved_packaging != null ? { saved_packaging: { ...config.saved_packaging } } : {}),
         ...(config.composition_cost != null ? { composition_cost: Number(config.composition_cost) } : {}),
         ...(config.composition_price != null ? { composition_price: Number(config.composition_price) } : {}),
         ...(config.target_margin != null ? { target_margin: Number(config.target_margin) } : {}) };
@@ -16845,6 +16884,13 @@ const isViewMode = state.comboPanel.mode === "view";
           if (effectiveMargin != null) {
             draft.pricingConfig = { ...draft.pricingConfig, mode: "auto", sources: pricingSources, target_margin: effectiveMargin };
           }
+          if (automaticPricing) {
+            const packaging = getCompositionPackagingTotals();
+            draft.pricingConfig = { ...draft.pricingConfig, saved_packaging: {
+              cost: packaging.cost,
+              price: effectiveMargin != null ? calcPriceFromMargin(packaging.cost, effectiveMargin) : packaging.price,
+            } };
+          }
           const marginPercentValue = parseNumberFromInput(form.margin_percent?.value);
           const priceValue = automaticPricing
             ? (useComposition ? (draft.pricingConfig?.target_margin != null
@@ -16921,9 +16967,18 @@ const isViewMode = state.comboPanel.mode === "view";
               itemSettings: deepClone([...getOptionSettingDraft(groupId, details).values()]),
             });
           }
-          let productId = product && product.id;
+          let productId = product?.id || draft.createdProductId || null;
           let saveResult = null;
           const ingredientsToSave = new Map(Array.from(draftIngredients, ([id, ingredient]) => [id, deepClone(ingredient)]));
+          payload.ingredients = Array.from(ingredientsToSave.values()).map(ing => ({
+            ingredient_id: Number(ing.ingredient_id), quantity: Number(ing.quantity),
+            unit_id: Number(ing.unit_id || ing.ingredient_unit_id), loss_percent: Number(ing.loss_percent || 0),
+            is_variable: ing.is_variable ? 1 : 0,
+            quantity_min: ing.is_variable ? ing.quantity_min ?? null : null,
+            quantity_max: ing.is_variable ? ing.quantity_max ?? null : null,
+            quantity_step: ing.is_variable ? ing.quantity_step ?? null : null,
+            price_override: ing.price_override ?? null, sort_order: Number(ing.sort_order || 0),
+          }));
           let catalogSavePatch = null;
           const dependentRecalcChanges = isEdit && product
             ? buildProductDependentRecalcChanges(product, payload, initialIngredientsSnapshot, draftIngredients)
@@ -16931,8 +16986,8 @@ const isViewMode = state.comboPanel.mode === "view";
           
           // Сохранение товара
           try {
-            if (isEdit && product) {
-              catalogSavePatch = window.CatalogRepository?.patchProductOptimistic(product.id, {
+            if (isEdit || draft.createdProductId) {
+              catalogSavePatch = window.CatalogRepository?.patchProductOptimistic(productId, {
                 name: payload.name,
                 price: payload.price,
                 old_price: payload.old_price,
@@ -16944,7 +16999,7 @@ const isViewMode = state.comboPanel.mode === "view";
                 preorder_settings_json: payload.preorder_settings_json,
                 stock_qty: payload.stock,
               }) || null;
-              saveResult = await api(`/api/prod_products/${product.id}`, { method: "PUT", body: JSON.stringify({
+              saveResult = await api(`/api/prod_products/${productId}`, { method: "PUT", body: JSON.stringify({
                 ...payload, defer_dependent_recalc: true, check_dependent_recalc: Boolean(dependentRecalcChanges?.hasChanges),
               }) });
               if (catalogSavePatch) window.CatalogRepository.commitProductPatch(catalogSavePatch);
@@ -16952,6 +17007,7 @@ const isViewMode = state.comboPanel.mode === "view";
               const created = await api("/api/prod_products", { method: "POST", body: JSON.stringify(payload) });
               saveResult = created;
               productId = created && created.id;
+              draft.createdProductId = productId;
             }
           } catch (e) {
             if (catalogSavePatch) window.CatalogRepository.rollbackProductPatch(catalogSavePatch);
@@ -17095,81 +17151,8 @@ const isViewMode = state.comboPanel.mode === "view";
             return false;
           }
 
-          // Save ingredients from draft
-          if (!isEdit && ingredientsToSave.size > 0) {
-            for (const ing of ingredientsToSave.values()) {
-              try {
-                await apiAddProductIngredient(productId, {
-                  ingredient_id: ing.ingredient_id,
-                  quantity: ing.quantity,
-                  loss_percent: Number(ing.loss_percent || 0),
-                  unit_id: Number(ing.unit_id || ing.ingredient_unit_id || 0),
-                  quantity_min: ing.is_variable ? ing.quantity_min : null,
-                  quantity_max: ing.is_variable ? ing.quantity_max : null,
-                  quantity_step: ing.is_variable ? ing.quantity_step : null,
-                  price_override: ing.price_override,
-                  is_variable: ing.is_variable ? 1 : 0,
-                });
-              } catch (e) {
-                console.error('Failed to save ingredient', e);
-                alert('Ошибка при сохранении состава: ' + (e.message || 'Неизвестная ошибка'));
-                return false;
-              }
-            }
-          }
-
-          if (isEdit) {
-            const normalizeIngredient = (ing) => ({
-              quantity: Number(ing.quantity || 0),
-              loss_percent: Number(ing.loss_percent || 0),
-              unit_id: Number(ing.unit_id || ing.ingredient_unit_id || 0),
-              is_variable: ing.is_variable ? 1 : 0,
-              quantity_min: ing.is_variable ? (ing.quantity_min != null ? Number(ing.quantity_min) : null) : null,
-              quantity_max: ing.is_variable ? (ing.quantity_max != null ? Number(ing.quantity_max) : null) : null,
-              quantity_step: ing.is_variable ? (ing.quantity_step != null ? Number(ing.quantity_step) : null) : null,
-              price_override: ing.price_override != null ? Number(ing.price_override) : null,
-              sort_order: Number(ing.sort_order || 0),
-            });
-
-            const currentIds = new Set(Array.from(ingredientsToSave.keys()));
-            const initialIds = new Set(Array.from(initialIngredientsSnapshot.keys()));
-            const toAdd = Array.from(currentIds).filter((id) => !initialIds.has(id));
-            const toRemove = Array.from(initialIds).filter((id) => !currentIds.has(id));
-            const toUpdate = Array.from(currentIds).filter((id) => initialIds.has(id));
-
-            try {
-              for (const ingredientId of toAdd) {
-                const ing = ingredientsToSave.get(ingredientId);
-                if (!ing) continue;
-                await apiAddProductIngredient(productId, {
-                  ingredient_id: ing.ingredient_id,
-                  ...normalizeIngredient(ing),
-                });
-              }
-
-              for (const ingredientId of toUpdate) {
-                const ing = ingredientsToSave.get(ingredientId);
-                const snapshot = initialIngredientsSnapshot.get(ingredientId);
-                if (!ing || !snapshot) continue;
-                const normalizedCurrent = normalizeIngredient(ing);
-                const normalizedSnapshot = normalizeIngredient(snapshot);
-                if (JSON.stringify(normalizedCurrent) === JSON.stringify(normalizedSnapshot)) {
-                  continue;
-                }
-                await apiUpdateProductIngredient(productId, ingredientId, normalizedCurrent);
-              }
-
-              for (const ingredientId of toRemove) {
-                await apiDeleteProductIngredient(productId, ingredientId);
-              }
-
-              snapshotIngredients();
-            } catch (e) {
-              console.error('Failed to save ingredients', e);
-              alert('Ошибка при сохранении состава: ' + (e.message || 'Неизвестная ошибка'));
-              return false;
-            }
-          }
+          initialIngredientsSnapshot.clear();
+          ingredientsToSave.forEach((ingredient, id) => initialIngredientsSnapshot.set(id, deepClone(ingredient)));
 
           const savedIngredientsForCache = Array.from(ingredientsToSave.values()).map((ing) => deepClone(ing));
           let savedProductForView = {
@@ -17217,23 +17200,31 @@ const isViewMode = state.comboPanel.mode === "view";
           const loadSavedEditorPassport = async () => {
             if (savedEditorPassport) return savedEditorPassport;
             if (!window.CatalogRepository) return null;
+            let confirmedPassport = null;
             await window.CatalogRepository.ensureProducts([productId], {
-              requiredCompleteness: "editor-ready", loader: loadProductsCatalogPassports,
+              requiredCompleteness: "editor-ready", loader: async ids => {
+                const response = await loadProductsCatalogPassports(ids);
+                confirmedPassport = response.data?.[productId] || null;
+                return response;
+              },
               force: true, priority: true,
             });
             savedEditorPassport = getEditorReadyProductPassport(productId);
             if (!savedEditorPassport) throw new Error('PRODUCT_EDITOR_DATA_UNAVAILABLE');
-            const storedIngredients = new Map((savedEditorPassport.ingredients || []).map(row => [Number(row.ingredient_id), row]));
+            const storedIngredients = new Map((confirmedPassport?.ingredients || []).map(row => [Number(row.ingredient_id), row]));
             if (storedIngredients.size !== ingredientsToSave.size || [...ingredientsToSave].some(([id, row]) => {
-              const stored = storedIngredients.get(id);
-              return !stored || Math.abs(Number(stored.quantity) - Number(row.quantity)) > 0.001
+              const stored = storedIngredients.get(Number(id));
+              return !stored || !Number.isFinite(Number(stored.quantity))
+                || Math.abs(Number(stored.quantity) - Math.round(Number(row.quantity) * 1000) / 1000) > 0.000001
                 || Number(stored.unit_id) !== Number(row.unit_id || row.ingredient_unit_id);
             })) throw new Error('Сохранённые веса состава не совпадают с введёнными');
-            const rawConfig = savedEditorPassport.product?.pricing_config_json;
+            const rawConfig = confirmedPassport?.product?.pricing_config_json;
             const storedConfig = typeof rawConfig === 'string' ? JSON.parse(rawConfig) : rawConfig;
             if (payload.pricing_config_json?.target_margin != null && Number(storedConfig?.target_margin) !== Number(payload.pricing_config_json.target_margin)) {
               throw new Error('Не подтвердилось сохранение маржи состава');
             }
+            initialIngredientsSnapshot.clear();
+            ingredientsToSave.forEach((ingredient, id) => initialIngredientsSnapshot.set(id, deepClone(ingredient)));
             return savedEditorPassport;
           };
           const existingCachedDetails = getCachedProductDetails(productId);
@@ -25372,6 +25363,10 @@ const isViewMode = state.comboPanel.mode === "view";
   // ---------------- Refresh ----------------
 
   async function refreshProductsOnly(forceReload = false) {
+    if (!forceReload && getCachedCategoryProducts(state.currentCategoryId)) {
+      await loadProducts(state.currentCategoryId);
+      return;
+    }
     const localApplied = !normalizeProductsToolbarQuery(state.productsToolbar?.products?.query || "")
       && applyCatalogLocalWindow(state.currentCategoryId, { applyCategories: false });
     if (!navigator.onLine) {
@@ -25380,7 +25375,7 @@ const isViewMode = state.comboPanel.mode === "view";
     }
     setProductsCatalogConnectionState("syncing");
     await loadProducts(state.currentCategoryId, {
-      forceReload: Boolean(forceReload) || localApplied,
+      forceReload: Boolean(forceReload),
       preserveVisible: localApplied,
     });
     if (state.selectedProductId && !state.productsHasMore && !state.products.some((p) => p.id === state.selectedProductId)) {
@@ -25388,7 +25383,7 @@ const isViewMode = state.comboPanel.mode === "view";
     }
   }
 
-  async function refreshAllTask() {
+  async function refreshAllTask({ forceReload = true } = {}) {
     await loadCategories();
     renderCategoriesNav();
 
@@ -25454,12 +25449,12 @@ const isViewMode = state.comboPanel.mode === "view";
       return;
     }
     if (state.mode === "products") {
-      await refreshProductsOnly(true);
+      await refreshProductsOnly(forceReload);
     }
   }
 
-  function refreshAll() {
-    const run = () => refreshAllTask();
+  function refreshAll(options = {}) {
+    const run = () => refreshAllTask(options);
     return window.CatalogRepository?.withForegroundWork
       ? window.CatalogRepository.withForegroundWork(run)
       : run();
@@ -28578,7 +28573,7 @@ const isViewMode = state.comboPanel.mode === "view";
     bindEvents();
 
     const onlineProductsStartupPromise = navigator.onLine
-      ? refreshAll().then(() => true).catch(() => false)
+      ? refreshAll({ forceReload: false }).then(() => true).catch(() => false)
       : Promise.resolve(false);
     if (window.CatalogRepository) {
       await window.CatalogRepository.init(getProductsCatalogRepositoryOptions());
@@ -28691,6 +28686,8 @@ const isViewMode = state.comboPanel.mode === "view";
     connectProductsStockSocket();
     closeProductsCatalogMenu();
     productsRequestToken += 1;
+    state.productsByCategoryCache.clear();
+    PRODUCT_CACHE_SCOPE.storeId = Number(localStorage.getItem("activeStoreId") || localStorage.getItem("store_id") || 0);
     state.products = [];
     state.categories = [];
     state.currentCategoryId = null;
